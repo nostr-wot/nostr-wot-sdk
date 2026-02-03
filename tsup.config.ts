@@ -7,7 +7,7 @@ export default defineConfig([
     format: ['cjs', 'esm'],
     dts: true,
     clean: true,
-    sourcemap: true,
+    sourcemap: false,
     target: 'es2018',
     outDir: 'dist',
     treeshake: true,
