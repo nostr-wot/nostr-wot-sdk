@@ -306,7 +306,7 @@ export interface GraphStats {
 
 /**
  * Extension WoT interface (window.nostr.wot)
- * Based on https://github.com/mappingbitcoin/nostr-wot-extension
+ * Based on https://github.com/nostr-wot/nostr-wot-extension
  */
 export interface NostrWoTExtension {
   // === Core Methods ===
@@ -319,6 +319,7 @@ export interface NostrWoTExtension {
 
   /**
    * Check if target is within your Web of Trust
+   * @param target - Target pubkey to check
    * @param maxHops - Optional max hops (uses extension config default if not specified)
    * @returns true if target is within maxHops
    */
@@ -364,6 +365,7 @@ export interface NostrWoTExtension {
 
   /**
    * Filter a list of pubkeys to only those within the Web of Trust
+   * @param pubkeys - Array of pubkeys to filter
    * @param maxHops - Optional max hops override
    * @returns Filtered array of pubkeys within WoT
    */

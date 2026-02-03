@@ -38,6 +38,35 @@ export function isValidPubkey(pubkey: string): boolean {
 }
 
 /**
+ * Validates an oracle URL (must be HTTPS)
+ */
+export function isValidOracleUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Validates a relay URL (must be WSS or WS)
+ */
+export function isValidRelayUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'wss:' || parsed.protocol === 'ws:';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Maximum allowed batch size for array inputs
+ */
+export const MAX_BATCH_SIZE = 10000;
+
+/**
  * Normalizes a pubkey to lowercase hex
  */
 export function normalizePubkey(pubkey: string): string {
@@ -122,11 +151,10 @@ export async function fetchWithTimeout(
   const timeoutId = setTimeout(() => controller.abort(), timeout);
 
   try {
-    const response = await fetch(url, {
+    return await fetch(url, {
       ...fetchOptions,
       signal: controller.signal,
     });
-    return response;
   } finally {
     clearTimeout(timeoutId);
   }

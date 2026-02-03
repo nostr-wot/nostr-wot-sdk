@@ -21,9 +21,11 @@ import {
   DEFAULT_ORACLE,
   DEFAULT_MAX_HOPS,
   DEFAULT_TIMEOUT,
+  MAX_BATCH_SIZE,
   mergeScoringConfig,
   calculateTrustScore,
   isValidPubkey,
+  isValidOracleUrl,
   normalizePubkey,
   fetchWithTimeout,
   chunk,
@@ -76,7 +78,11 @@ export class WoT {
       }
     }
 
-    this.oracle = options.oracle ?? this.fallbackOptions?.oracle ?? DEFAULT_ORACLE;
+    const oracleUrl = options.oracle ?? this.fallbackOptions?.oracle ?? DEFAULT_ORACLE;
+    if (!isValidOracleUrl(oracleUrl)) {
+      throw new ValidationError('oracle must be a valid HTTPS URL', 'oracle');
+    }
+    this.oracle = oracleUrl;
     this.maxHops = options.maxHops ?? this.fallbackOptions?.maxHops ?? DEFAULT_MAX_HOPS;
     this.timeout = options.timeout ?? this.fallbackOptions?.timeout ?? DEFAULT_TIMEOUT;
     this.scoring = mergeScoringConfig(options.scoring ?? this.fallbackOptions?.scoring);
@@ -148,40 +154,36 @@ export class WoT {
     const timeout = options.timeout ?? this.timeout;
     const url = `${this.oracle}/api${endpoint}`;
 
+    let response: Response;
     try {
-      const response = await fetchWithTimeout(url, {
+      response = await fetchWithTimeout(url, {
         timeout,
         headers: {
           'Content-Type': 'application/json',
         },
       });
-
-      if (!response.ok) {
-        if (response.status === 404) {
-          throw new NotFoundError('', `Resource not found: ${endpoint}`);
-        }
-        throw new NetworkError(
-          `HTTP ${response.status}: ${response.statusText}`,
-          response.status,
-          url
-        );
-      }
-
-      return (await response.json()) as T;
     } catch (error) {
-      if (error instanceof NotFoundError || error instanceof NetworkError) {
-        throw error;
-      }
-
       if (error instanceof Error) {
         if (error.name === 'AbortError') {
           throw new TimeoutError(timeout);
         }
         throw new NetworkError(error.message, undefined, url);
       }
-
       throw new NetworkError('Unknown network error', undefined, url);
     }
+
+    if (!response.ok) {
+      if (response.status === 404) {
+        throw new NotFoundError('', `Resource not found: ${endpoint}`);
+      }
+      throw new NetworkError(
+        `HTTP ${response.status}: ${response.statusText}`,
+        response.status,
+        url
+      );
+    }
+
+    return (await response.json()) as T;
   }
 
   /**
@@ -344,6 +346,12 @@ export class WoT {
     if (!Array.isArray(targets) || targets.length === 0) {
       throw new ValidationError('targets must be a non-empty array', 'targets');
     }
+    if (targets.length > MAX_BATCH_SIZE) {
+      throw new ValidationError(
+        `targets array exceeds maximum size of ${MAX_BATCH_SIZE}`,
+        'targets'
+      );
+    }
 
     const normalizedTargets = targets.map((t, i) =>
       this.validatePubkey(t, `targets[${i}]`)
@@ -461,9 +469,7 @@ export class WoT {
     // Check extension first - extension always takes priority
     const ext = await this.getExtension();
     if (ext) {
-      // Extension returns { hops, paths }
-      const result = await ext.getDetails(normalizedTarget);
-      return result;
+      return ext.getDetails(normalizedTarget);
     }
 
     // Fall back to oracle
@@ -478,11 +484,10 @@ export class WoT {
     }
 
     try {
-      const result = await this.apiRequest<DetailsResponse>(
+      return await this.apiRequest<DetailsResponse>(
         `/details/${myPubkey}/${normalizedTarget}?maxHops=${maxHops}`,
         options
       );
-      return result;
     } catch (error) {
       if (error instanceof NotFoundError) {
         return null;

@@ -10,9 +10,11 @@ import type {
 import { ValidationError } from '../errors';
 import {
   DEFAULT_MAX_HOPS,
+  MAX_BATCH_SIZE,
   mergeScoringConfig,
   calculateTrustScore,
   isValidPubkey,
+  isValidRelayUrl,
   normalizePubkey,
   chunk,
 } from '../utils';
@@ -52,6 +54,14 @@ export class LocalWoT {
     }
     if (!options.relays || options.relays.length === 0) {
       throw new ValidationError('At least one relay URL is required', 'relays');
+    }
+    for (const relay of options.relays) {
+      if (!isValidRelayUrl(relay)) {
+        throw new ValidationError(
+          `Invalid relay URL: ${relay}. Must be wss:// or ws://`,
+          'relays'
+        );
+      }
     }
 
     this.myPubkey = normalizePubkey(options.myPubkey);
@@ -314,6 +324,12 @@ export class LocalWoT {
   ): Promise<Map<string, BatchResult>> {
     if (!Array.isArray(targets) || targets.length === 0) {
       throw new ValidationError('targets must be a non-empty array', 'targets');
+    }
+    if (targets.length > MAX_BATCH_SIZE) {
+      throw new ValidationError(
+        `targets array exceeds maximum size of ${MAX_BATCH_SIZE}`,
+        'targets'
+      );
     }
 
     const results = new Map<string, BatchResult>();

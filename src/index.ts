@@ -37,9 +37,12 @@ export {
 export {
   calculateTrustScore,
   isValidPubkey,
+  isValidOracleUrl,
+  isValidRelayUrl,
   normalizePubkey,
   DEFAULT_SCORING,
   DEFAULT_ORACLE,
   DEFAULT_MAX_HOPS,
   DEFAULT_TIMEOUT,
+  MAX_BATCH_SIZE,
 } from './utils';

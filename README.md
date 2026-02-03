@@ -11,7 +11,7 @@ npm install nostr-wot-sdk
 
 ### With Browser Extension (Recommended)
 
-Install the [Nostr WoT Extension](https://github.com/mappingbitcoin/nostr-wot-extension) for the best experience. The extension downloads your follow graph locally and works across all websites.
+Install the [Nostr WoT Extension](https://github.com/nostr-wot/nostr-wot-extension) for the best experience. The extension downloads your follow graph locally and works across all websites.
 
 ```javascript
 import { WoT } from 'nostr-wot-sdk';
@@ -229,7 +229,7 @@ const status = await wot.isConfigured();
 
 ## Browser Extension
 
-Install the [Nostr WoT Extension](https://github.com/mappingbitcoin/nostr-wot-extension) for:
+Install the [Nostr WoT Extension](https://github.com/nostr-wot/nostr-wot-extension) for:
 
 - **Local Data** — Downloads and caches your follow graph locally
 - **Fast Queries** — No network requests needed after sync
@@ -347,8 +347,9 @@ Full type definitions included:
 ```typescript
 import { WoT, DistanceResult, WoTOptions } from 'nostr-wot-sdk';
 
-const wot = new WoT(options: WoTOptions);
-const result: DistanceResult = await wot.getDetails(pubkey);
+const options: WoTOptions = { useExtension: true };
+const wot = new WoT(options);
+const result: DistanceResult | null = await wot.getDetails(pubkey);
 const score: number = await wot.getTrustScore(pubkey);
 ```
 
@@ -369,8 +370,8 @@ try {
 
 ## Related
 
-- [Nostr WoT Extension](https://github.com/mappingbitcoin/nostr-wot-extension) — Browser extension (recommended)
-- [WoT Oracle](https://github.com/mappingbitcoin/wot-oracle) — Backend service
+- [Nostr WoT Extension](https://github.com/nostr-wot/nostr-wot-extension) — Browser extension (recommended)
+- [WoT Oracle](https://github.com/nostr-wot/nostr-wot-oracle) — Backend service
 - [nostr-wot.com](https://nostr-wot.com) — Public oracle & docs
 
 ## License
