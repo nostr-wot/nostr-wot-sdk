@@ -265,41 +265,152 @@ export interface ExtensionConfig {
 }
 
 /**
+ * Extension status returned by isConfigured()
+ */
+export interface ExtensionStatus {
+  /**
+   * Whether the extension is configured and ready
+   */
+  configured: boolean;
+  /**
+   * Operating mode
+   */
+  mode: 'remote' | 'local' | 'hybrid';
+  /**
+   * Whether local graph data is available
+   */
+  hasLocalGraph: boolean;
+}
+
+/**
+ * Graph statistics returned by getStats()
+ */
+export interface GraphStats {
+  /**
+   * Number of nodes (pubkeys) in the graph
+   */
+  nodes: number;
+  /**
+   * Number of edges (follow relationships) in the graph
+   */
+  edges: number;
+  /**
+   * Timestamp of last sync, or null if never synced
+   */
+  lastSync: number | null;
+  /**
+   * Human-readable size of the graph data
+   */
+  size: string;
+}
+
+/**
  * Extension WoT interface (window.nostr.wot)
  * Based on https://github.com/mappingbitcoin/nostr-wot-extension
  */
 export interface NostrWoTExtension {
+  // === Core Methods ===
+
   /**
    * Get shortest path length to target pubkey
    * @returns Number of hops, or null if not connected
    */
-  getDistance(targetPubkey: string): Promise<number | null>;
-  /**
-   * Get computed trust score based on distance and configured weights
-   * @returns Trust score between 0 and 1
-   */
-  getTrustScore(targetPubkey: string): Promise<number>;
+  getDistance(target: string): Promise<number | null>;
+
   /**
    * Check if target is within your Web of Trust
    * @param maxHops - Optional max hops (uses extension config default if not specified)
    * @returns true if target is within maxHops
    */
-  isInMyWoT(targetPubkey: string, maxHops?: number): Promise<boolean>;
+  isInMyWoT(target: string, maxHops?: number): Promise<boolean>;
+
   /**
    * Get distance between any two pubkeys
-   * @returns Number of hops between the pubkeys
+   * @returns Number of hops between the pubkeys, or null if not connected
    */
-  getDistanceBetween(fromPubkey: string, toPubkey: string): Promise<number | null>;
+  getDistanceBetween(from: string, to: string): Promise<number | null>;
+
+  /**
+   * Get computed trust score based on distance and path count
+   * @returns Trust score between 0 and 1, or null if not connected
+   */
+  getTrustScore(target: string): Promise<number | null>;
+
   /**
    * Get distance and path count details
-   * @returns Object with hops and paths count
+   * @returns Object with hops and paths count, or null if not connected
    */
-  getDetails(targetPubkey: string): Promise<ExtensionDistanceResult | null>;
+  getDetails(target: string): Promise<ExtensionDistanceResult | null>;
+
   /**
    * Get current extension configuration
    * @returns Configuration object with maxHops, timeout, and scoring
    */
   getConfig(): Promise<ExtensionConfig>;
+
+  // === Batch Operations ===
+
+  /**
+   * Get distances for multiple pubkeys in a single call
+   * @returns Map of pubkey to hop count (null if not connected)
+   */
+  getDistanceBatch(targets: string[]): Promise<Record<string, number | null>>;
+
+  /**
+   * Get trust scores for multiple pubkeys in a single call
+   * @returns Map of pubkey to trust score (null if not connected)
+   */
+  getTrustScoreBatch(targets: string[]): Promise<Record<string, number | null>>;
+
+  /**
+   * Filter a list of pubkeys to only those within the Web of Trust
+   * @param maxHops - Optional max hops override
+   * @returns Filtered array of pubkeys within WoT
+   */
+  filterByWoT(pubkeys: string[], maxHops?: number): Promise<string[]>;
+
+  // === User Info ===
+
+  /**
+   * Get the configured user's pubkey
+   * @returns User's pubkey or null if not configured
+   */
+  getMyPubkey(): Promise<string | null>;
+
+  /**
+   * Check if the extension is configured and ready
+   * @returns Status object with configuration state
+   */
+  isConfigured(): Promise<ExtensionStatus>;
+
+  // === Graph Queries ===
+
+  /**
+   * Get the follow list for a pubkey
+   * @param pubkey - Optional, defaults to user's pubkey
+   * @returns Array of followed pubkeys
+   */
+  getFollows(pubkey?: string): Promise<string[]>;
+
+  /**
+   * Get mutual follows between the user and a target
+   * @returns Array of common followed pubkeys
+   */
+  getCommonFollows(pubkey: string): Promise<string[]>;
+
+  /**
+   * Get graph statistics
+   * @returns Stats object with node/edge counts and sync info
+   */
+  getStats(): Promise<GraphStats>;
+
+  // === Path Info ===
+
+  /**
+   * Get an actual path from the user to the target
+   * @returns Array of pubkeys [user, ..., target], or null if not connected
+   */
+  getPath(target: string): Promise<string[] | null>;
 }
 
 /**
