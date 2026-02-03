@@ -8,6 +8,8 @@ import type {
   NostrWindow,
   NostrWoTExtension,
   ExtensionConfig,
+  ExtensionStatus,
+  GraphStats,
 } from './types';
 import {
   NetworkError,
@@ -95,12 +97,17 @@ export class WoT {
     const win = window as NostrWindow;
     if (win.nostr?.wot) {
       this.extension = win.nostr.wot;
-      // Get pubkey from NIP-07 window.nostr.getPublicKey()
-      if (win.nostr?.getPublicKey) {
-        try {
-          this.extensionPubkey = await win.nostr.getPublicKey();
-        } catch {
-          // Ignore - will use fallback pubkey
+      // Get pubkey from extension's getMyPubkey()
+      try {
+        this.extensionPubkey = await this.extension.getMyPubkey();
+      } catch {
+        // Fall back to NIP-07 window.nostr.getPublicKey()
+        if (win.nostr?.getPublicKey) {
+          try {
+            this.extensionPubkey = await win.nostr.getPublicKey();
+          } catch {
+            // Ignore - will use fallback pubkey
+          }
         }
       }
     }
@@ -260,17 +267,19 @@ export class WoT {
    * Get computed trust score based on distance and weights
    * @param target - Target pubkey (hex)
    * @param options - Query options
-   * @returns Trust score between 0 and 1
+   * @returns Trust score between 0 and 1, or 0 if not connected
    */
   async getTrustScore(target: string, options?: QueryOptions): Promise<number> {
     const normalizedTarget = this.validatePubkey(target, 'target');
 
-    // Check extension first
+    // Check extension first - extension always takes priority
     const ext = await this.getExtension();
     if (ext) {
-      return ext.getTrustScore(normalizedTarget);
+      const score = await ext.getTrustScore(normalizedTarget);
+      return score ?? 0;
     }
 
+    // Fall back to oracle
     const details = await this.getDetails(normalizedTarget, options);
 
     if (!details) {
@@ -327,9 +336,6 @@ export class WoT {
    * @param targets - Array of target pubkeys (hex)
    * @param options - Query options
    * @returns Map of pubkey to result
-   *
-   * Note: When using extension, this falls back to individual queries
-   * since the extension doesn't have a batch API.
    */
   async batchCheck(
     targets: string[],
@@ -346,36 +352,27 @@ export class WoT {
     const maxHops = options?.maxHops ?? this.maxHops;
 
     // Check extension first - extension always takes priority
-    // Extension doesn't have batch API, so we query individually
     const ext = await this.getExtension();
     if (ext) {
       const results = new Map<string, BatchResult>();
 
-      // Query each target individually using extension
-      await Promise.all(
-        normalizedTargets.map(async (pubkey) => {
-          try {
-            const [distance, score] = await Promise.all([
-              ext.getDistance(pubkey),
-              ext.getTrustScore(pubkey),
-            ]);
+      // Use extension's batch APIs for efficiency
+      const [distances, scores] = await Promise.all([
+        ext.getDistanceBatch(normalizedTargets),
+        ext.getTrustScoreBatch(normalizedTargets),
+      ]);
 
-            results.set(pubkey, {
-              pubkey,
-              distance,
-              score,
-              inWoT: distance !== null && distance <= maxHops,
-            });
-          } catch {
-            results.set(pubkey, {
-              pubkey,
-              distance: null,
-              score: 0,
-              inWoT: false,
-            });
-          }
-        })
-      );
+      for (const pubkey of normalizedTargets) {
+        const distance = distances[pubkey] ?? null;
+        const score = scores[pubkey] ?? 0;
+
+        results.set(pubkey, {
+          pubkey,
+          distance,
+          score,
+          inWoT: distance !== null && distance <= maxHops,
+        });
+      }
 
       return results;
     }
@@ -533,5 +530,180 @@ export class WoT {
     if (!ext) return null;
 
     return ext.getConfig();
+  }
+
+  // ============================================
+  // Extension-only methods (require extension)
+  // ============================================
+
+  /**
+   * Check if the extension is configured and ready
+   * @returns Status object with configuration state, or null if not using extension
+   */
+  async isConfigured(): Promise<ExtensionStatus | null> {
+    const ext = await this.getExtension();
+    if (!ext) return null;
+
+    return ext.isConfigured();
+  }
+
+  /**
+   * Filter a list of pubkeys to only those within the Web of Trust
+   * @param pubkeys - Array of pubkeys to filter
+   * @param options - Query options (maxHops)
+   * @returns Filtered array of pubkeys within WoT
+   *
+   * Note: Extension-only. Falls back to batchCheck when extension unavailable.
+   */
+  async filterByWoT(
+    pubkeys: string[],
+    options?: QueryOptions
+  ): Promise<string[]> {
+    if (!Array.isArray(pubkeys) || pubkeys.length === 0) {
+      return [];
+    }
+
+    const normalizedPubkeys = pubkeys
+      .filter((pk) => isValidPubkey(pk))
+      .map((pk) => normalizePubkey(pk));
+
+    const maxHops = options?.maxHops ?? this.maxHops;
+
+    // Check extension first - extension has native filterByWoT
+    const ext = await this.getExtension();
+    if (ext) {
+      return ext.filterByWoT(normalizedPubkeys, maxHops);
+    }
+
+    // Fall back to batchCheck
+    const results = await this.batchCheck(normalizedPubkeys, options);
+    return Array.from(results.entries())
+      .filter(([, result]) => result.inWoT)
+      .map(([pubkey]) => pubkey);
+  }
+
+  /**
+   * Get the follow list for a pubkey
+   * @param pubkey - Optional, defaults to user's pubkey
+   * @returns Array of followed pubkeys
+   *
+   * Note: Extension-only. Returns empty array if extension unavailable.
+   */
+  async getFollows(pubkey?: string): Promise<string[]> {
+    const ext = await this.getExtension();
+    if (!ext) return [];
+
+    const normalizedPubkey = pubkey ? this.validatePubkey(pubkey, 'pubkey') : undefined;
+    return ext.getFollows(normalizedPubkey);
+  }
+
+  /**
+   * Get mutual follows between the user and a target
+   * @param pubkey - Target pubkey
+   * @returns Array of common followed pubkeys
+   *
+   * Note: Extension-only. Returns empty array if extension unavailable.
+   */
+  async getCommonFollows(pubkey: string): Promise<string[]> {
+    const ext = await this.getExtension();
+    if (!ext) return [];
+
+    const normalizedPubkey = this.validatePubkey(pubkey, 'pubkey');
+    return ext.getCommonFollows(normalizedPubkey);
+  }
+
+  /**
+   * Get graph statistics
+   * @returns Stats object with node/edge counts and sync info
+   *
+   * Note: Extension-only. Returns null if extension unavailable.
+   */
+  async getStats(): Promise<GraphStats | null> {
+    const ext = await this.getExtension();
+    if (!ext) return null;
+
+    return ext.getStats();
+  }
+
+  /**
+   * Get an actual path from the user to the target
+   * @param target - Target pubkey
+   * @returns Array of pubkeys [user, ..., target], or null if not connected
+   *
+   * Note: Extension-only. Returns null if extension unavailable.
+   */
+  async getPath(target: string): Promise<string[] | null> {
+    const ext = await this.getExtension();
+    if (!ext) return null;
+
+    const normalizedTarget = this.validatePubkey(target, 'target');
+    return ext.getPath(normalizedTarget);
+  }
+
+  /**
+   * Get distances for multiple pubkeys in a single call
+   * @param targets - Array of target pubkeys
+   * @returns Record of pubkey to hop count (null if not connected)
+   */
+  async getDistanceBatch(
+    targets: string[]
+  ): Promise<Record<string, number | null>> {
+    if (!Array.isArray(targets) || targets.length === 0) {
+      return {};
+    }
+
+    const normalizedTargets = targets.map((t, i) =>
+      this.validatePubkey(t, `targets[${i}]`)
+    );
+
+    // Check extension first
+    const ext = await this.getExtension();
+    if (ext) {
+      return ext.getDistanceBatch(normalizedTargets);
+    }
+
+    // Fall back to individual queries
+    const results: Record<string, number | null> = {};
+    await Promise.all(
+      normalizedTargets.map(async (pubkey) => {
+        results[pubkey] = await this.getDistance(pubkey);
+      })
+    );
+
+    return results;
+  }
+
+  /**
+   * Get trust scores for multiple pubkeys in a single call
+   * @param targets - Array of target pubkeys
+   * @returns Record of pubkey to trust score (null if not connected)
+   */
+  async getTrustScoreBatch(
+    targets: string[]
+  ): Promise<Record<string, number | null>> {
+    if (!Array.isArray(targets) || targets.length === 0) {
+      return {};
+    }
+
+    const normalizedTargets = targets.map((t, i) =>
+      this.validatePubkey(t, `targets[${i}]`)
+    );
+
+    // Check extension first
+    const ext = await this.getExtension();
+    if (ext) {
+      return ext.getTrustScoreBatch(normalizedTargets);
+    }
+
+    // Fall back to individual queries
+    const results: Record<string, number | null> = {};
+    await Promise.all(
+      normalizedTargets.map(async (pubkey) => {
+        const score = await this.getTrustScore(pubkey);
+        results[pubkey] = score > 0 ? score : null;
+      })
+    );
+
+    return results;
   }
 }

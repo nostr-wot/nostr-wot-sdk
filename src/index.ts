@@ -10,6 +10,8 @@ export type {
   DistanceResult,
   ExtensionDistanceResult,
   ExtensionConfig,
+  ExtensionStatus,
+  GraphStats,
   BatchResult,
   LocalWoTOptions,
   SyncOptions,

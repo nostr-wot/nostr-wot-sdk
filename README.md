@@ -157,6 +157,76 @@ const config = await wot.getExtensionConfig();
 // Returns: { maxHops: 3, timeout: 5000, scoring: {...} } or null
 ```
 
+### Batch Operations
+
+#### `getDistanceBatch(targets)`
+
+Get distances for multiple pubkeys in a single call.
+```javascript
+const distances = await wot.getDistanceBatch(['pk1...', 'pk2...']);
+// Returns: { 'pk1...': 2, 'pk2...': null }
+```
+
+#### `getTrustScoreBatch(targets)`
+
+Get trust scores for multiple pubkeys in a single call.
+```javascript
+const scores = await wot.getTrustScoreBatch(['pk1...', 'pk2...']);
+// Returns: { 'pk1...': 0.72, 'pk2...': null }
+```
+
+#### `filterByWoT(pubkeys, options?)`
+
+Filter a list of pubkeys to only those within the Web of Trust.
+```javascript
+const trusted = await wot.filterByWoT(['pk1...', 'pk2...', 'pk3...']);
+// Returns: ['pk1...', 'pk3...'] (only those in WoT)
+```
+
+### Graph Queries (Extension-only)
+
+These methods require the browser extension and return `null`/empty when unavailable.
+
+#### `getFollows(pubkey?)`
+
+Get the follow list for a pubkey (defaults to your pubkey).
+```javascript
+const follows = await wot.getFollows();
+// Returns: ['pk1...', 'pk2...', ...]
+```
+
+#### `getCommonFollows(pubkey)`
+
+Get mutual follows between you and a target.
+```javascript
+const common = await wot.getCommonFollows('def456...');
+// Returns: ['pk1...', 'pk2...'] (people you both follow)
+```
+
+#### `getPath(target)`
+
+Get the actual path from you to a target.
+```javascript
+const path = await wot.getPath('def456...');
+// Returns: ['myPubkey', 'friend', 'friendOfFriend', 'def456...']
+```
+
+#### `getStats()`
+
+Get graph statistics.
+```javascript
+const stats = await wot.getStats();
+// Returns: { nodes: 50000, edges: 150000, lastSync: 1699999999, size: '12 MB' }
+```
+
+#### `isConfigured()`
+
+Check if the extension is configured and ready.
+```javascript
+const status = await wot.isConfigured();
+// Returns: { configured: true, mode: 'local', hasLocalGraph: true }
+```
+
 ## Browser Extension
 
 Install the [Nostr WoT Extension](https://github.com/mappingbitcoin/nostr-wot-extension) for:
