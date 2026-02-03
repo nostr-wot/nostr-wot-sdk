@@ -1,0 +1,313 @@
+/**
+ * Configuration for trust score calculation
+ */
+export interface ScoringConfig {
+  /**
+   * Score multiplier per hop distance
+   * Key is the number of hops, value is the multiplier
+   */
+  distanceWeights: Record<number, number>;
+  /**
+   * Bonus multiplier for mutual follows (e.g., 0.5 = +50%)
+   */
+  mutualBonus: number;
+  /**
+   * Bonus multiplier per additional path (e.g., 0.1 = +10% per path)
+   */
+  pathBonus: number;
+  /**
+   * Maximum total path bonus (e.g., 0.5 = cap at +50%)
+   */
+  maxPathBonus: number;
+}
+
+/**
+ * Fallback options when extension is not available
+ */
+export interface WoTFallbackOptions {
+  /**
+   * Oracle API URL
+   * @default 'https://nostr-wot.com'
+   */
+  oracle?: string;
+  /**
+   * Your pubkey in hex format (required for oracle mode)
+   */
+  myPubkey: string;
+  /**
+   * Default maximum search depth
+   * @default 3
+   */
+  maxHops?: number;
+  /**
+   * Request timeout in milliseconds
+   * @default 5000
+   */
+  timeout?: number;
+  /**
+   * Trust score calculation configuration
+   */
+  scoring?: Partial<ScoringConfig>;
+}
+
+/**
+ * Options for WoT constructor
+ */
+export interface WoTOptions {
+  /**
+   * Oracle API URL (used when extension is not available)
+   * @default 'https://nostr-wot.com'
+   */
+  oracle?: string;
+  /**
+   * Your pubkey in hex format
+   * Optional when useExtension is true (will be fetched from extension)
+   */
+  myPubkey?: string;
+  /**
+   * Default maximum search depth
+   * @default 3
+   */
+  maxHops?: number;
+  /**
+   * Request timeout in milliseconds
+   * @default 5000
+   */
+  timeout?: number;
+  /**
+   * Trust score calculation configuration
+   */
+  scoring?: Partial<ScoringConfig>;
+  /**
+   * Use browser extension if available.
+   * When true, the extension's pubkey and local data are used.
+   * @default false
+   */
+  useExtension?: boolean;
+  /**
+   * Fallback configuration when extension is not available.
+   * Required if useExtension is true and myPubkey is not provided.
+   */
+  fallback?: WoTFallbackOptions;
+}
+
+/**
+ * Options for local WoT computation
+ */
+export interface LocalWoTOptions {
+  /**
+   * Your pubkey in hex format
+   */
+  myPubkey: string;
+  /**
+   * Relay URLs to connect to
+   */
+  relays: string[];
+  /**
+   * Default maximum search depth
+   * @default 3
+   */
+  maxHops?: number;
+  /**
+   * Storage backend
+   * @default 'memory'
+   */
+  storage?: 'memory' | 'indexeddb' | StorageAdapter;
+  /**
+   * Trust score calculation configuration
+   */
+  scoring?: Partial<ScoringConfig>;
+}
+
+/**
+ * Custom storage adapter interface
+ */
+export interface StorageAdapter {
+  get(key: string): Promise<string | null>;
+  set(key: string, value: string): Promise<void>;
+  delete(key: string): Promise<void>;
+  clear(): Promise<void>;
+  keys(): Promise<string[]>;
+}
+
+/**
+ * Options for sync operation
+ */
+export interface SyncOptions {
+  /**
+   * Depth of follow graph to sync
+   * @default 2
+   */
+  depth?: number;
+  /**
+   * Callback for sync progress
+   */
+  onProgress?: (progress: SyncProgress) => void;
+}
+
+/**
+ * Sync progress information
+ */
+export interface SyncProgress {
+  /**
+   * Current depth being synced
+   */
+  currentDepth: number;
+  /**
+   * Total depth to sync
+   */
+  totalDepth: number;
+  /**
+   * Number of pubkeys processed
+   */
+  processed: number;
+  /**
+   * Total pubkeys to process at current depth
+   */
+  total: number;
+}
+
+/**
+ * Options for query methods
+ */
+export interface QueryOptions {
+  /**
+   * Maximum search depth for this query
+   */
+  maxHops?: number;
+  /**
+   * Request timeout in milliseconds for this query
+   */
+  timeout?: number;
+}
+
+/**
+ * Distance result from extension (simpler)
+ */
+export interface ExtensionDistanceResult {
+  /**
+   * Number of hops to target
+   */
+  hops: number;
+  /**
+   * Number of distinct paths to target
+   */
+  paths: number;
+}
+
+/**
+ * Full distance result with additional details (from oracle)
+ */
+export interface DistanceResult extends ExtensionDistanceResult {
+  /**
+   * Pubkeys that bridge to the target (first hop on paths)
+   * Note: Only available from oracle API, not from extension
+   */
+  bridges?: string[];
+  /**
+   * Whether target follows source back
+   * Note: Only available from oracle API, not from extension
+   */
+  mutual?: boolean;
+}
+
+/**
+ * Result for batch check operation
+ */
+export interface BatchResult {
+  /**
+   * Target pubkey
+   */
+  pubkey: string;
+  /**
+   * Distance in hops, null if not reachable
+   */
+  distance: number | null;
+  /**
+   * Trust score (0-1)
+   */
+  score: number;
+  /**
+   * Whether in WoT within maxHops
+   */
+  inWoT: boolean;
+}
+
+/**
+ * Nostr event structure (kind 3 - contact list)
+ */
+export interface NostrContactEvent {
+  id: string;
+  pubkey: string;
+  created_at: number;
+  kind: 3;
+  tags: string[][];
+  content: string;
+  sig: string;
+}
+
+/**
+ * Extension configuration returned by getConfig()
+ */
+export interface ExtensionConfig {
+  /**
+   * Default maximum search depth
+   */
+  maxHops: number;
+  /**
+   * Request timeout in milliseconds
+   */
+  timeout: number;
+  /**
+   * Trust score calculation configuration
+   */
+  scoring: Partial<ScoringConfig>;
+}
+
+/**
+ * Extension WoT interface (window.nostr.wot)
+ * Based on https://github.com/mappingbitcoin/nostr-wot-extension
+ */
+export interface NostrWoTExtension {
+  /**
+   * Get shortest path length to target pubkey
+   * @returns Number of hops, or null if not connected
+   */
+  getDistance(targetPubkey: string): Promise<number | null>;
+  /**
+   * Get computed trust score based on distance and configured weights
+   * @returns Trust score between 0 and 1
+   */
+  getTrustScore(targetPubkey: string): Promise<number>;
+  /**
+   * Check if target is within your Web of Trust
+   * @param maxHops - Optional max hops (uses extension config default if not specified)
+   * @returns true if target is within maxHops
+   */
+  isInMyWoT(targetPubkey: string, maxHops?: number): Promise<boolean>;
+  /**
+   * Get distance between any two pubkeys
+   * @returns Number of hops between the pubkeys
+   */
+  getDistanceBetween(fromPubkey: string, toPubkey: string): Promise<number | null>;
+  /**
+   * Get distance and path count details
+   * @returns Object with hops and paths count
+   */
+  getDetails(targetPubkey: string): Promise<ExtensionDistanceResult | null>;
+  /**
+   * Get current extension configuration
+   * @returns Configuration object with maxHops, timeout, and scoring
+   */
+  getConfig(): Promise<ExtensionConfig>;
+}
+
+/**
+ * Window with nostr extension
+ */
+export interface NostrWindow extends Window {
+  nostr?: {
+    wot?: NostrWoTExtension;
+    getPublicKey?: () => Promise<string>;
+  };
+}
