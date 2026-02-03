@@ -14,7 +14,15 @@
   ],
   "repository": {
     "type": "git",
-    "url": ""
+    "url": "git+https://github.com/mappingbitcoin/nostr-wot-sdk.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mappingbitcoin/nostr-wot-sdk/issues"
+  },
+  "homepage": "https://github.com/mappingbitcoin/nostr-wot-sdk#readme",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   },
   "type": "module",
   "main": "./dist/index.cjs",
