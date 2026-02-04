@@ -72,13 +72,15 @@ const wot = new WoT(options);
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `useExtension` | boolean | `false` | Use browser extension if available (recommended) |
+| `useExtension` | boolean | `false`* | Use browser extension if available (recommended) |
 | `oracle` | string | `'https://nostr-wot.com'` | Oracle API URL (fallback) |
 | `myPubkey` | string | — | Your pubkey (optional with extension, required otherwise) |
 | `maxHops` | number | `3` | Default max search depth |
 | `timeout` | number | `5000` | Request timeout (ms) |
 | `scoring` | object | See below | Trust score weights |
 | `fallback` | object | — | Fallback config when extension unavailable |
+
+*Note: When using the React `WoTProvider`, `useExtension` defaults to `true`.
 
 **Note:** When `useExtension: true` and the extension is installed, the extension's pubkey and data are always used, regardless of `myPubkey` or `oracle` settings.
 
@@ -237,7 +239,7 @@ Install the [Nostr WoT Extension](https://github.com/nostr-wot/nostr-wot-extensi
 - **Privacy** — Queries never leave your browser
 - **Offline** — Works without internet once synced
 
-The SDK automatically detects `window.nostr.wot` and uses it. When the extension is present, it **always takes priority** over oracle settings.
+The SDK automatically detects and connects to the extension using an event-based handshake. When the extension is present, it **always takes priority** over oracle settings.
 
 ```javascript
 const wot = new WoT({
@@ -255,6 +257,50 @@ if (await wot.isUsingExtension()) {
   console.log('Falling back to oracle');
 }
 ```
+
+### Extension Connection Utilities
+
+For advanced use cases, the SDK exports low-level extension connection functions:
+
+```javascript
+import {
+  checkExtension,     // Check if extension is installed
+  connectExtension,   // Connect to the extension
+  checkAndConnect,    // Check and connect in one call
+  ExtensionConnector  // Stateful connector class
+} from 'nostr-wot-sdk';
+
+// Check if extension is installed (100ms timeout)
+const isInstalled = await checkExtension();
+
+// Connect to extension (5s timeout)
+const extension = await connectExtension();
+
+// Or do both in one call
+const result = await checkAndConnect();
+if (result.state === 'connected') {
+  const distance = await result.extension.getDistance('target...');
+}
+
+// For stateful connection management
+const connector = new ExtensionConnector();
+connector.subscribe((result) => {
+  console.log('State changed:', result.state);
+});
+await connector.connect();
+```
+
+#### Extension Events
+
+The SDK uses a standard event-based protocol to communicate with the extension:
+
+| Event | Direction | Purpose |
+|-------|-----------|---------|
+| `nostr-wot-check` | Page → Extension | Check if extension installed |
+| `nostr-wot-present` | Extension → Page | Response confirming presence |
+| `nostr-wot-connect` | Page → Extension | Request API injection |
+| `nostr-wot-ready` | Extension → Page | API is ready at `window.nostr.wot` |
+| `nostr-wot-error` | Extension → Page | Injection failed with error |
 
 ## Custom Scoring
 
@@ -311,19 +357,33 @@ Storage options: `'memory'` (default), `'indexeddb'` (browser), or custom adapte
 ## Framework Integration
 
 ### React
-```javascript
-import { useWoT, WoTProvider } from 'nostr-wot-sdk/react';
 
-// Wrap your app with the provider
+The SDK provides first-class React support with automatic extension detection and connection. Just wrap your app with `WoTProvider` and you're ready to go — no additional configuration needed.
+
+```javascript
+import { WoTProvider, useWoT, useExtension } from 'nostr-wot-sdk/react';
+
+// Wrap your app - automatically connects to extension
 function App() {
   return (
-    <WoTProvider options={{ useExtension: true }}>
+    <WoTProvider>
       <YourApp />
     </WoTProvider>
   );
 }
 
-// Use hooks in components
+// Check extension status anywhere
+function ExtensionStatus() {
+  const { isConnected, isConnecting, isInstalled, error } = useExtension();
+
+  if (isConnecting) return <span>Connecting to extension...</span>;
+  if (!isInstalled) return <span>Install the WoT extension for best experience</span>;
+  if (error) return <span>Error: {error}</span>;
+  if (isConnected) return <span>Connected to extension!</span>;
+  return null;
+}
+
+// Use WoT data in components
 function Profile({ pubkey }) {
   const { distance, score, loading } = useWoT(pubkey);
 
@@ -339,6 +399,54 @@ function Profile({ pubkey }) {
     </div>
   );
 }
+```
+
+#### Provider Options
+
+```javascript
+// With fallback for when extension is not installed
+<WoTProvider options={{
+  fallback: { myPubkey: 'abc123...' }
+}}>
+
+// Oracle-only mode (no extension)
+<WoTProvider options={{
+  useExtension: false,
+  myPubkey: 'abc123...'
+}}>
+
+// Custom extension connection timeouts
+<WoTProvider extensionOptions={{
+  checkTimeout: 100,    // Extension detection timeout (ms)
+  connectTimeout: 5000  // Connection timeout (ms)
+}}>
+```
+
+#### Available Hooks
+
+| Hook | Description |
+|------|-------------|
+| `useWoT(pubkey)` | Get distance, score, and details for a pubkey |
+| `useIsInWoT(pubkey)` | Check if pubkey is in your WoT (boolean) |
+| `useTrustScore(pubkey)` | Get trust score only |
+| `useBatchWoT(pubkeys[])` | Check multiple pubkeys efficiently |
+| `useExtension()` | Get extension connection state |
+| `useWoTInstance()` | Get raw WoT instance for advanced usage |
+
+#### Extension State
+
+The `useExtension()` hook provides detailed extension status:
+
+```javascript
+const {
+  state,        // 'idle' | 'checking' | 'connecting' | 'connected' | 'not-installed' | 'error'
+  isConnected,  // Extension is connected and ready
+  isConnecting, // Currently checking/connecting
+  isInstalled,  // Extension is installed (may still be connecting)
+  isChecked,    // Initial check complete
+  error,        // Error message if connection failed
+  connect,      // Function to manually retry connection
+} = useExtension();
 ```
 
 ## TypeScript

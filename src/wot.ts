@@ -30,6 +30,7 @@ import {
   fetchWithTimeout,
   chunk,
 } from './utils';
+import { checkAndConnect } from './extension';
 
 /**
  * WoT (Web of Trust) SDK for querying Nostr trust relationships
@@ -90,6 +91,7 @@ export class WoT {
 
   /**
    * Checks if browser extension is available and returns it
+   * Uses event-based connection flow for reliable detection
    */
   private async getExtension(): Promise<NostrWoTExtension | null> {
     if (!this.useExtension) return null;
@@ -100,10 +102,25 @@ export class WoT {
     // Check if running in browser
     if (typeof window === 'undefined') return null;
 
+    // First check if already injected
     const win = window as NostrWindow;
     if (win.nostr?.wot) {
       this.extension = win.nostr.wot;
-      // Get pubkey from extension's getMyPubkey()
+    } else {
+      // Use event-based connection flow
+      const result = await checkAndConnect({
+        checkTimeout: 100,
+        connectTimeout: 5000,
+        autoConnect: true,
+      });
+
+      if (result.state === 'connected' && result.extension) {
+        this.extension = result.extension;
+      }
+    }
+
+    // Get pubkey from extension if connected
+    if (this.extension) {
       try {
         this.extensionPubkey = await this.extension.getMyPubkey();
       } catch {

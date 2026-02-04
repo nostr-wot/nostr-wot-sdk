@@ -3,7 +3,9 @@ export {
   WoTProvider,
   useWoTContext,
   useWoTInstance,
+  useExtension,
   type WoTProviderProps,
+  type ExtensionState,
 } from './context';
 
 // Hooks
@@ -26,6 +28,12 @@ export type {
   QueryOptions,
   DistanceResult,
 } from '../types';
+
+// Re-export extension types
+export type {
+  ExtensionConnectionState,
+  ExtensionConnectionOptions,
+} from '../extension';
 
 // Re-export WoT class for convenience
 export { WoT } from '../wot';
