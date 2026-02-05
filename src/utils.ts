@@ -96,11 +96,13 @@ export function mergeScoringConfig(
  * Calculates trust score based on distance result and scoring config
  *
  * Formula:
- * score = baseScore × distanceWeight × (1 + bonuses)
+ * score = (baseScore × distanceWeight) + bonuses
  *
  * where:
  *   baseScore = 1 / (hops + 1)
  *   bonuses = mutualBonus (if mutual) + min(pathBonus × (paths - 1), maxPathBonus)
+ *
+ * Example: 2 hops + 30% path bonus = 0.5 + 0.3 = 0.80
  *
  * Note: `mutual` is optional (only available from oracle, not extension)
  */
@@ -133,8 +135,8 @@ export function calculateTrustScore(
     bonuses += pathCountBonus;
   }
 
-  // Final score (clamped to 0-1)
-  const score = baseScore * distanceWeight * (1 + bonuses);
+  // Final score using additive formula (clamped to 0-1)
+  const score = (baseScore * distanceWeight) + bonuses;
   return Math.min(1, Math.max(0, score));
 }
 
