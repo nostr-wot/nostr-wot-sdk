@@ -72,34 +72,55 @@ export class WoT {
   /**
    * Checks if browser extension is available and returns it
    * Uses event-based connection flow for reliable detection
+   * Always returns fresh reference from window.nostr.wot to handle extension reloads
    */
   private async getExtension(): Promise<NostrWoTExtension | null> {
+    // Check if running in browser
+    if (typeof window === 'undefined') return null;
+
+    const win = window as NostrWindow;
+
+    // Always check for fresh reference (extension may have reloaded)
+    if (win.nostr?.wot) {
+      this.extension = win.nostr.wot;
+      this.extensionChecked = true;
+
+      // Get pubkey if not already fetched
+      if (!this.extensionPubkey) {
+        try {
+          this.extensionPubkey = await this.extension.getMyPubkey();
+        } catch {
+          // Fall back to NIP-07 window.nostr.getPublicKey()
+          if (win.nostr?.getPublicKey) {
+            try {
+              this.extensionPubkey = await win.nostr.getPublicKey();
+            } catch {
+              // Ignore - will use fallback pubkey
+            }
+          }
+        }
+      }
+
+      return this.extension;
+    }
+
+    // If we already checked and extension wasn't available, don't retry
+    // (avoids repeated connection attempts on every call)
     if (this.extensionChecked) return this.extension;
 
     this.extensionChecked = true;
 
-    // Check if running in browser
-    if (typeof window === 'undefined') return null;
+    // Use event-based connection flow for initial connection
+    const result = await checkAndConnect({
+      checkTimeout: 100,
+      connectTimeout: 5000,
+      autoConnect: true,
+    });
 
-    // First check if already injected
-    const win = window as NostrWindow;
-    if (win.nostr?.wot) {
-      this.extension = win.nostr.wot;
-    } else {
-      // Use event-based connection flow
-      const result = await checkAndConnect({
-        checkTimeout: 100,
-        connectTimeout: 5000,
-        autoConnect: true,
-      });
+    if (result.state === 'connected' && result.extension) {
+      this.extension = result.extension;
 
-      if (result.state === 'connected' && result.extension) {
-        this.extension = result.extension;
-      }
-    }
-
-    // Get pubkey from extension if connected
-    if (this.extension) {
+      // Get pubkey from extension
       try {
         this.extensionPubkey = await this.extension.getMyPubkey();
       } catch {
