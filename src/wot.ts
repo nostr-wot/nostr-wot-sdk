@@ -665,11 +665,25 @@ export class WoT {
   /**
    * Get distances for multiple pubkeys in a single call
    * @param targets - Array of target pubkeys
-   * @returns Record of pubkey to hop count (null if not connected)
+   * @param includePaths - When true, includes path count for each target
+   * @returns Record of pubkey to hop count (or { hops, paths } if includePaths is true)
    */
   async getDistanceBatch(
-    targets: string[]
-  ): Promise<Record<string, number | null>> {
+    targets: string[],
+    includePaths?: false
+  ): Promise<Record<string, number | null>>;
+  async getDistanceBatch(
+    targets: string[],
+    includePaths: true
+  ): Promise<Record<string, { hops: number; paths: number } | null>>;
+  async getDistanceBatch(
+    targets: string[],
+    includePaths?: boolean
+  ): Promise<Record<string, number | { hops: number; paths: number } | null>>;
+  async getDistanceBatch(
+    targets: string[],
+    includePaths = false
+  ): Promise<Record<string, number | { hops: number; paths: number } | null>> {
     if (!Array.isArray(targets) || targets.length === 0) {
       return {};
     }
@@ -681,17 +695,30 @@ export class WoT {
     // Check extension first
     const ext = await this.getExtension();
     if (ext) {
-      return ext.getDistanceBatch(normalizedTargets);
+      if (includePaths) {
+        return ext.getDistanceBatch(normalizedTargets, true);
+      }
+      return ext.getDistanceBatch(normalizedTargets, false);
     }
 
     // Fall back to individual queries
+    if (includePaths) {
+      const results: Record<string, { hops: number; paths: number } | null> = {};
+      await Promise.all(
+        normalizedTargets.map(async (pubkey) => {
+          const details = await this.getDetails(pubkey);
+          results[pubkey] = details ? { hops: details.hops, paths: details.paths } : null;
+        })
+      );
+      return results;
+    }
+
     const results: Record<string, number | null> = {};
     await Promise.all(
       normalizedTargets.map(async (pubkey) => {
         results[pubkey] = await this.getDistance(pubkey);
       })
     );
-
     return results;
   }
 

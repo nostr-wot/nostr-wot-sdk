@@ -161,17 +161,22 @@ const config = await wot.getExtensionConfig();
 
 ### Batch Operations
 
-#### `getDistanceBatch(targets)`
+#### `getDistanceBatch(targets, includePaths?)`
 
 Get distances for multiple pubkeys in a single call.
 ```javascript
+// Without paths (faster, default)
 const distances = await wot.getDistanceBatch(['pk1...', 'pk2...']);
 // Returns: { 'pk1...': 2, 'pk2...': null }
+
+// With paths (includes path count for scoring)
+const details = await wot.getDistanceBatch(['pk1...', 'pk2...'], true);
+// Returns: { 'pk1...': { hops: 2, paths: 5 }, 'pk2...': null }
 ```
 
 #### `getTrustScoreBatch(targets)`
 
-Get trust scores for multiple pubkeys in a single call.
+Get trust scores for multiple pubkeys in a single call. Uses path counts internally for accurate scoring.
 ```javascript
 const scores = await wot.getTrustScoreBatch(['pk1...', 'pk2...']);
 // Returns: { 'pk1...': 0.72, 'pk2...': null }

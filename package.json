@@ -1,6 +1,6 @@
 {
   "name": "nostr-wot-sdk",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "JavaScript/TypeScript SDK for querying Nostr Web of Trust",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "MIT",

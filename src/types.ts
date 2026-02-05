@@ -353,9 +353,22 @@ export interface NostrWoTExtension {
 
   /**
    * Get distances for multiple pubkeys in a single call
-   * @returns Map of pubkey to hop count (null if not connected)
+   * @param targets - Array of target pubkeys
+   * @param includePaths - When true, includes path count for each target
+   * @returns Map of pubkey to hop count (or { hops, paths } if includePaths is true)
    */
-  getDistanceBatch(targets: string[]): Promise<Record<string, number | null>>;
+  getDistanceBatch(
+    targets: string[],
+    includePaths?: false
+  ): Promise<Record<string, number | null>>;
+  getDistanceBatch(
+    targets: string[],
+    includePaths: true
+  ): Promise<Record<string, { hops: number; paths: number } | null>>;
+  getDistanceBatch(
+    targets: string[],
+    includePaths?: boolean
+  ): Promise<Record<string, number | { hops: number; paths: number } | null>>;
 
   /**
    * Get trust scores for multiple pubkeys in a single call
