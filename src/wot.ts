@@ -28,7 +28,6 @@ import {
   fetchWithTimeout,
   chunk,
 } from './utils';
-import { checkAndConnect } from './extension';
 
 /**
  * WoT (Web of Trust) SDK for querying Nostr trust relationships
@@ -45,7 +44,6 @@ export class WoT {
   private readonly timeout: number;
   private readonly fallbackOptions: WoTFallbackOptions | null;
   private extension: NostrWoTExtension | null = null;
-  private extensionChecked = false;
   private extensionPubkey: string | null = null;
 
   constructor(options: WoTOptions = {}) {
@@ -71,8 +69,8 @@ export class WoT {
 
   /**
    * Checks if browser extension is available and returns it
-   * Uses event-based connection flow for reliable detection
-   * Always returns fresh reference from window.nostr.wot to handle extension reloads
+   * Simply checks window.nostr.wot - extension auto-injects when enabled
+   * Always returns fresh reference to handle extension reloads
    */
   private async getExtension(): Promise<NostrWoTExtension | null> {
     // Check if running in browser
@@ -80,10 +78,9 @@ export class WoT {
 
     const win = window as NostrWindow;
 
-    // Always check for fresh reference (extension may have reloaded)
+    // Check if extension API is available (auto-injected by extension)
     if (win.nostr?.wot) {
       this.extension = win.nostr.wot;
-      this.extensionChecked = true;
 
       // Get pubkey if not already fetched
       if (!this.extensionPubkey) {
@@ -104,38 +101,9 @@ export class WoT {
       return this.extension;
     }
 
-    // If we already checked and extension wasn't available, don't retry
-    // (avoids repeated connection attempts on every call)
-    if (this.extensionChecked) return this.extension;
-
-    this.extensionChecked = true;
-
-    // Use event-based connection flow for initial connection
-    const result = await checkAndConnect({
-      checkTimeout: 100,
-      connectTimeout: 5000,
-      autoConnect: true,
-    });
-
-    if (result.state === 'connected' && result.extension) {
-      this.extension = result.extension;
-
-      // Get pubkey from extension
-      try {
-        this.extensionPubkey = await this.extension.getMyPubkey();
-      } catch {
-        // Fall back to NIP-07 window.nostr.getPublicKey()
-        if (win.nostr?.getPublicKey) {
-          try {
-            this.extensionPubkey = await win.nostr.getPublicKey();
-          } catch {
-            // Ignore - will use fallback pubkey
-          }
-        }
-      }
-    }
-
-    return this.extension;
+    // Extension not available - will fall back to oracle
+    this.extension = null;
+    return null;
   }
 
   /**

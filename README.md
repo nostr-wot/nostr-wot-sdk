@@ -251,7 +251,7 @@ Install the [Nostr WoT Extension](https://github.com/nostr-wot/nostr-wot-extensi
 - **Privacy** — Queries never leave your browser
 - **Offline** — Works without internet once synced
 
-The SDK automatically detects and connects to the extension using an event-based handshake. When the extension is present, it **always takes priority** over oracle settings.
+The SDK automatically detects the extension via `window.nostr.wot`. When the extension is present (with auto-inject enabled), it **always takes priority** over oracle settings.
 
 ```javascript
 const wot = new WoT({
@@ -269,60 +269,16 @@ if (await wot.isUsingExtension()) {
 }
 ```
 
-### Extension Connection Utilities
-
-For advanced use cases, the SDK exports low-level extension connection functions:
-
-```javascript
-import {
-  checkExtension,     // Check if extension is installed
-  connectExtension,   // Connect to the extension
-  checkAndConnect,    // Check and connect in one call
-  ExtensionConnector  // Stateful connector class
-} from 'nostr-wot-sdk';
-
-// Check if extension is installed (100ms timeout)
-const isInstalled = await checkExtension();
-
-// Connect to extension (5s timeout)
-const extension = await connectExtension();
-
-// Or do both in one call
-const result = await checkAndConnect();
-if (result.state === 'connected') {
-  const distance = await result.extension.getDistance('target...');
-}
-
-// For stateful connection management
-const connector = new ExtensionConnector();
-connector.subscribe((result) => {
-  console.log('State changed:', result.state);
-});
-await connector.connect();
-```
-
-#### Extension Events
-
-The SDK uses a standard event-based protocol to communicate with the extension:
-
-| Event | Direction | Purpose |
-|-------|-----------|---------|
-| `nostr-wot-check` | Page → Extension | Check if extension installed |
-| `nostr-wot-present` | Extension → Page | Response confirming presence |
-| `nostr-wot-connect` | Page → Extension | Request API injection |
-| `nostr-wot-ready` | Extension → Page | API is ready at `window.nostr.wot` |
-| `nostr-wot-error` | Extension → Page | Injection failed with error |
-
 ## Framework Integration
 
 ### React
 
-The SDK provides first-class React support with automatic extension detection and connection. Just wrap your app with `WoTProvider` and you're ready to go — no additional configuration needed.
+The SDK provides first-class React support with automatic extension detection. Just wrap your app with `WoTProvider` and you're ready to go — no additional configuration needed.
 
 ```javascript
 import { WoTProvider, useWoT, useExtension } from 'nostr-wot-sdk/react';
 
-// Wrap your app - automatically connects to extension
+// Wrap your app - automatically detects extension
 function App() {
   return (
     <WoTProvider>
@@ -333,13 +289,11 @@ function App() {
 
 // Check extension status anywhere
 function ExtensionStatus() {
-  const { isConnected, isConnecting, isInstalled, error } = useExtension();
+  const { isConnected, isChecking } = useExtension();
 
-  if (isConnecting) return <span>Connecting to extension...</span>;
-  if (!isInstalled) return <span>Install the WoT extension for best experience</span>;
-  if (error) return <span>Error: {error}</span>;
-  if (isConnected) return <span>Connected to extension!</span>;
-  return null;
+  if (isChecking) return <span>Checking for extension...</span>;
+  if (isConnected) return <span>Extension connected!</span>;
+  return <span>Extension not available</span>;
 }
 
 // Use WoT data in components
@@ -363,15 +317,9 @@ function Profile({ pubkey }) {
 #### Provider Options
 
 ```javascript
-// With fallback for when extension is not installed
+// With fallback for when extension is not available
 <WoTProvider options={{
   fallback: { myPubkey: 'abc123...' }
-}}>
-
-// Custom extension connection timeouts
-<WoTProvider extensionOptions={{
-  checkTimeout: 100,    // Extension detection timeout (ms)
-  connectTimeout: 5000  // Connection timeout (ms)
 }}>
 ```
 
@@ -388,17 +336,15 @@ function Profile({ pubkey }) {
 
 #### Extension State
 
-The `useExtension()` hook provides detailed extension status:
+The `useExtension()` hook provides extension status:
 
 ```javascript
 const {
-  state,        // 'idle' | 'checking' | 'connecting' | 'connected' | 'not-installed' | 'error'
+  state,        // 'checking' | 'connected' | 'not-available'
   isConnected,  // Extension is connected and ready
-  isConnecting, // Currently checking/connecting
-  isInstalled,  // Extension is installed (may still be connecting)
-  isChecked,    // Initial check complete
-  error,        // Error message if connection failed
-  connect,      // Function to manually retry connection
+  isChecking,   // Currently checking
+  isChecked,    // Check complete
+  refresh,      // Function to re-check extension availability
 } = useExtension();
 ```
 

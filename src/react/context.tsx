@@ -8,12 +8,15 @@ import {
   type ReactNode,
 } from 'react';
 import { WoT } from '../wot';
-import type { WoTOptions } from '../types';
-import {
-  ExtensionConnector,
-  type ExtensionConnectionState,
-  type ExtensionConnectionOptions,
-} from '../extension';
+import type { WoTOptions, NostrWindow } from '../types';
+
+/**
+ * Extension connection state
+ */
+export type ExtensionConnectionState =
+  | 'checking'
+  | 'connected'
+  | 'not-available';
 
 /**
  * Extension status exposed to consumers
@@ -28,25 +31,17 @@ export interface ExtensionState {
    */
   isConnected: boolean;
   /**
-   * Whether extension is currently connecting
+   * Whether extension is currently checking
    */
-  isConnecting: boolean;
+  isChecking: boolean;
   /**
-   * Whether extension check is complete (installed or not)
+   * Whether check is complete
    */
   isChecked: boolean;
   /**
-   * Whether extension is installed (may still be connecting)
+   * Manually trigger a check
    */
-  isInstalled: boolean;
-  /**
-   * Error message if connection failed
-   */
-  error?: string;
-  /**
-   * Manually trigger a connection attempt
-   */
-  connect: () => Promise<void>;
+  refresh: () => void;
 }
 
 /**
@@ -69,13 +64,8 @@ const WoTContext = createContext<WoTContextValue | null>(null);
 export interface WoTProviderProps {
   /**
    * WoT configuration options
-   * The provider will automatically detect and connect to the browser extension.
    */
   options?: Partial<WoTOptions>;
-  /**
-   * Extension connection options
-   */
-  extensionOptions?: ExtensionConnectionOptions;
   /**
    * Children to render
    */
@@ -83,16 +73,24 @@ export interface WoTProviderProps {
 }
 
 /**
+ * Check if extension is available
+ */
+function checkExtensionAvailable(): boolean {
+  if (typeof window === 'undefined') return false;
+  return !!(window as NostrWindow).nostr?.wot;
+}
+
+/**
  * WoT provider component
  *
  * Provides WoT instance to all children components.
- * Automatically handles extension detection and connection.
+ * Automatically detects extension availability.
  *
  * @example
  * ```tsx
  * import { WoTProvider } from 'nostr-wot-sdk/react';
  *
- * // Basic usage - automatically connects to extension
+ * // Basic usage - automatically detects extension
  * function App() {
  *   return (
  *     <WoTProvider>
@@ -101,7 +99,7 @@ export interface WoTProviderProps {
  *   );
  * }
  *
- * // With fallback for when extension is not installed
+ * // With fallback for when extension is not available
  * function App() {
  *   return (
  *     <WoTProvider options={{
@@ -115,47 +113,25 @@ export interface WoTProviderProps {
  */
 export function WoTProvider({
   options = {},
-  extensionOptions = {},
   children,
 }: WoTProviderProps) {
-  const [extensionState, setExtensionState] = useState<ExtensionConnectionState>('idle');
-  const [extensionError, setExtensionError] = useState<string | undefined>();
+  const [extensionState, setExtensionState] = useState<ExtensionConnectionState>('checking');
   const [isReady, setIsReady] = useState(false);
 
-  // Create connector instance
-  const connector = useMemo(
-    () => new ExtensionConnector(extensionOptions),
-    [extensionOptions.checkTimeout, extensionOptions.connectTimeout]
-  );
+  // Check extension availability
+  const checkExtension = useCallback(() => {
+    const available = checkExtensionAvailable();
+    setExtensionState(available ? 'connected' : 'not-available');
+    setIsReady(true);
+  }, []);
 
-  // Connect function for manual reconnection
-  const connect = useCallback(async () => {
-    const result = await connector.connect();
-    setExtensionState(result.state);
-    setExtensionError(result.error);
-  }, [connector]);
-
-  // Auto-connect on mount
+  // Check on mount
   useEffect(() => {
-    // Subscribe to state changes
-    const unsubscribe = connector.subscribe((result) => {
-      setExtensionState(result.state);
-      setExtensionError(result.error);
-    });
-
-    // Start connection
-    connector.connect().then(() => {
-      setIsReady(true);
-    });
-
-    return () => {
-      unsubscribe();
-    };
-  }, [connector]);
+    checkExtension();
+  }, [checkExtension]);
 
   // Create WoT instance
   const wot = useMemo(() => {
-    // Wait for connection check to complete
     if (!isReady) {
       return null;
     }
@@ -179,20 +155,17 @@ export function WoTProvider({
   // Extension state for consumers
   const extension = useMemo<ExtensionState>(() => {
     const isConnected = extensionState === 'connected';
-    const isConnecting = extensionState === 'checking' || extensionState === 'connecting';
-    const isChecked = extensionState !== 'idle' && extensionState !== 'checking';
-    const isInstalled = extensionState !== 'not-installed' && extensionState !== 'idle';
+    const isChecking = extensionState === 'checking';
+    const isChecked = extensionState !== 'checking';
 
     return {
       state: extensionState,
       isConnected,
-      isConnecting,
+      isChecking,
       isChecked,
-      isInstalled,
-      error: extensionError,
-      connect,
+      refresh: checkExtension,
     };
-  }, [extensionState, extensionError, connect]);
+  }, [extensionState, checkExtension]);
 
   const value = useMemo<WoTContextValue>(
     () => ({
@@ -240,14 +213,11 @@ export function useWoTInstance(): WoT | null {
  * @example
  * ```tsx
  * function ExtensionStatus() {
- *   const { isConnected, isConnecting, isInstalled, error } = useExtension();
+ *   const { isConnected, isChecking } = useExtension();
  *
- *   if (isConnecting) return <span>Connecting...</span>;
- *   if (!isInstalled) return <span>Extension not installed</span>;
- *   if (error) return <span>Error: {error}</span>;
- *   if (isConnected) return <span>Connected!</span>;
- *
- *   return null;
+ *   if (isChecking) return <span>Checking...</span>;
+ *   if (isConnected) return <span>Extension connected!</span>;
+ *   return <span>Extension not available</span>;
  * }
  * ```
  */
