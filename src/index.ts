@@ -1,19 +1,6 @@
 // Main WoT class
 export { WoT } from './wot';
 
-// Extension connection utilities
-export {
-  checkExtension,
-  connectExtension,
-  checkAndConnect,
-  ExtensionConnector,
-  getDefaultConnector,
-  resetDefaultConnector,
-  type ExtensionConnectionState,
-  type ExtensionConnectionResult,
-  type ExtensionConnectionOptions,
-} from './extension';
-
 // Types
 export type {
   WoTOptions,
