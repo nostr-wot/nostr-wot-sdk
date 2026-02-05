@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.2] - 2025-02-05
+
+### Added
+
+- **`getExtensionStatus()` method** - Detailed extension connection status
+  - `'connected'` - Extension enabled and working on this domain
+  - `'not-enabled'` - Extension installed but not enabled for this domain
+  - `'unavailable'` - Not installed (or local dev build)
+  - `'not-browser'` - SSR/Node.js environment
+
+- **`extensionId` option** - Chrome Web Store extension ID for install detection
+  - Enables detecting "installed but not enabled" state via `chrome-extension://` URL check
+  - Pass your extension's ID: `new WoT({ extensionId: 'abcdef...' })`
+
+- New `ExtensionConnectionStatus` type export
+
 ## [0.5.1] - 2025-02-05
 
 ### Removed
@@ -210,6 +226,7 @@ function Profile({ pubkey }) {
 - TypeScript support with full type definitions
 - Error classes: `WoTError`, `NetworkError`, `NotFoundError`, `TimeoutError`, `ValidationError`
 
+[0.5.2]: https://github.com/nostr-wot/nostr-wot-sdk/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/nostr-wot/nostr-wot-sdk/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/nostr-wot/nostr-wot-sdk/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/nostr-wot/nostr-wot-sdk/compare/v0.4.1...v0.4.2

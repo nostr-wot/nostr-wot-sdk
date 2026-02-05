@@ -9,8 +9,15 @@ import type {
   NostrWoTExtension,
   ExtensionConfig,
   ExtensionStatus,
+  ExtensionConnectionStatus,
   GraphStats,
 } from './types';
+
+/**
+ * Default Chrome Web Store extension ID
+ * Update after publishing to Chrome Web Store
+ */
+const DEFAULT_EXTENSION_ID = '';
 import {
   NetworkError,
   NotFoundError,
@@ -43,11 +50,13 @@ export class WoT {
   private readonly maxHops: number;
   private readonly timeout: number;
   private readonly fallbackOptions: WoTFallbackOptions | null;
+  private readonly extensionId: string;
   private extension: NostrWoTExtension | null = null;
   private extensionPubkey: string | null = null;
 
   constructor(options: WoTOptions = {}) {
     this.fallbackOptions = options.fallback ?? null;
+    this.extensionId = options.extensionId ?? DEFAULT_EXTENSION_ID;
 
     // Use provided pubkey or fallback pubkey for oracle fallback
     if (options.myPubkey && isValidPubkey(options.myPubkey)) {
@@ -487,6 +496,40 @@ export class WoT {
   async isUsingExtension(): Promise<boolean> {
     const ext = await this.getExtension();
     return ext !== null;
+  }
+
+  /**
+   * Get detailed extension connection status
+   * Can detect if extension is installed but not enabled for this domain
+   * @returns Connection status: 'connected' | 'not-enabled' | 'unavailable' | 'not-browser'
+   */
+  async getExtensionStatus(): Promise<ExtensionConnectionStatus> {
+    // Not in browser
+    if (typeof window === 'undefined') {
+      return 'not-browser';
+    }
+
+    // Already connected
+    if ((window as NostrWindow).nostr?.wot) {
+      return 'connected';
+    }
+
+    // Try to detect if extension is installed via web_accessible_resources
+    if (this.extensionId) {
+      try {
+        const response = await fetch(
+          `chrome-extension://${this.extensionId}/detect.json`,
+          { method: 'HEAD' }
+        );
+        if (response.ok) {
+          return 'not-enabled'; // Installed but not enabled for this domain
+        }
+      } catch {
+        // Fetch failed - not installed or not accessible
+      }
+    }
+
+    return 'unavailable';
   }
 
   /**

@@ -75,6 +75,7 @@ const wot = new WoT(options);
 | `maxHops` | number | `3` | Default max search depth |
 | `timeout` | number | `5000` | Request timeout (ms) |
 | `fallback` | object | — | Fallback config when extension unavailable |
+| `extensionId` | string | — | Chrome Web Store extension ID (for detecting "installed but not enabled" state) |
 
 Trust scores are calculated by the extension and not configurable via the SDK.
 
@@ -146,6 +147,23 @@ Check if extension is available and being used.
 const usingExt = await wot.isUsingExtension();
 // Returns: boolean
 ```
+
+#### `getExtensionStatus()`
+
+Get detailed extension connection status. Useful for showing appropriate UI based on why the extension isn't working.
+```javascript
+const status = await wot.getExtensionStatus();
+// Returns: 'connected' | 'not-enabled' | 'unavailable' | 'not-browser'
+```
+
+| Status | Description |
+|--------|-------------|
+| `'connected'` | Extension is enabled and working on this domain |
+| `'not-enabled'` | Extension is installed but not enabled for this domain |
+| `'unavailable'` | Extension is not installed (or using local dev build) |
+| `'not-browser'` | Running in SSR/Node.js environment |
+
+**Note:** Detecting `'not-enabled'` requires providing the `extensionId` option.
 
 #### `getExtensionConfig()`
 
