@@ -13,17 +13,6 @@ export default defineConfig([
     treeshake: true,
     splitting: false,
   },
-  // Local mode entry point
-  {
-    entry: ['src/local/index.ts'],
-    format: ['cjs', 'esm'],
-    dts: true,
-    sourcemap: true,
-    target: 'es2018',
-    outDir: 'dist/local',
-    treeshake: true,
-    splitting: false,
-  },
   // React integration entry point
   {
     entry: ['src/react/index.ts'],

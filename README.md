@@ -16,9 +16,8 @@ Install the [Nostr WoT Extension](https://github.com/nostr-wot/nostr-wot-extensi
 ```javascript
 import { WoT } from 'nostr-wot-sdk';
 
-// Extension mode - no pubkey needed, uses extension's data
+// The SDK automatically uses the extension when available
 const wot = new WoT({
-  useExtension: true,
   fallback: {
     oracle: 'https://nostr-wot.com',
     myPubkey: 'abc123...'  // Used only if extension unavailable
@@ -33,21 +32,21 @@ console.log(hops); // 2
 const trusted = await wot.isInMyWoT('def456...', { maxHops: 3 });
 console.log(trusted); // true
 
-// Trust score
+// Trust score (from extension)
 const score = await wot.getTrustScore('def456...');
 console.log(score); // 0.72
 ```
 
 When the extension is installed, **it always takes priority** — the SDK uses the extension's pubkey and locally-cached follow graph automatically.
 
-### Without Extension (Oracle Mode)
+### Without Extension (Oracle Fallback)
 
 ```javascript
 import { WoT } from 'nostr-wot-sdk';
 
 const wot = new WoT({
   oracle: 'https://nostr-wot.com',
-  myPubkey: 'abc123...'  // Required in oracle-only mode
+  myPubkey: 'abc123...'  // Required for oracle fallback
 });
 
 const hops = await wot.getDistance('def456...');
@@ -59,7 +58,6 @@ const hops = await wot.getDistance('def456...');
 - **Simple API** — Three methods cover most use cases
 - **Cross-Site Trust** — Extension provides same WoT data on all websites
 - **Offline Support** — Extension caches data locally for offline queries
-- **Custom Scoring** — Define your own trust weights
 - **Batch Queries** — Check multiple pubkeys efficiently
 - **TypeScript** — Full type definitions included
 
@@ -72,17 +70,15 @@ const wot = new WoT(options);
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `useExtension` | boolean | `false`* | Use browser extension if available (recommended) |
-| `oracle` | string | `'https://nostr-wot.com'` | Oracle API URL (fallback) |
-| `myPubkey` | string | — | Your pubkey (optional with extension, required otherwise) |
+| `oracle` | string | `'https://nostr-wot.com'` | Oracle API URL (fallback when extension unavailable) |
+| `myPubkey` | string | — | Your pubkey (optional - fetched from extension when available) |
 | `maxHops` | number | `3` | Default max search depth |
 | `timeout` | number | `5000` | Request timeout (ms) |
-| `scoring` | object | See below | Trust score weights |
 | `fallback` | object | — | Fallback config when extension unavailable |
 
-*Note: When using the React `WoTProvider`, `useExtension` defaults to `true`.
+Trust scores are calculated by the extension and not configurable via the SDK.
 
-**Note:** When `useExtension: true` and the extension is installed, the extension's pubkey and data are always used, regardless of `myPubkey` or `oracle` settings.
+**Note:** When the extension is installed, it always takes priority over `myPubkey` or `oracle` settings.
 
 ### Methods
 
@@ -102,12 +98,12 @@ const trusted = await wot.isInMyWoT('def456...', { maxHops: 2 });
 // Returns: boolean
 ```
 
-#### `getTrustScore(target, options?)`
+#### `getTrustScore(target)`
 
-Get computed trust score based on distance and weights.
+Get computed trust score from the extension.
 ```javascript
 const score = await wot.getTrustScore('def456...');
-// Returns: number (0-1)
+// Returns: number (0-1), or 0 if extension unavailable
 ```
 
 #### `getDistanceBetween(from, to, options?)`
@@ -153,7 +149,7 @@ const usingExt = await wot.isUsingExtension();
 
 #### `getExtensionConfig()`
 
-Get extension's configuration (only when using extension).
+Get extension's configuration.
 ```javascript
 const config = await wot.getExtensionConfig();
 // Returns: { maxHops: 3, timeout: 5000, scoring: {...} } or null
@@ -176,7 +172,7 @@ const details = await wot.getDistanceBatch(['pk1...', 'pk2...'], true);
 
 #### `getTrustScoreBatch(targets)`
 
-Get trust scores for multiple pubkeys in a single call. Uses path counts internally for accurate scoring.
+Get trust scores for multiple pubkeys in a single call.
 ```javascript
 const scores = await wot.getTrustScoreBatch(['pk1...', 'pk2...']);
 // Returns: { 'pk1...': 0.72, 'pk2...': null }
@@ -248,7 +244,6 @@ The SDK automatically detects and connects to the extension using an event-based
 
 ```javascript
 const wot = new WoT({
-  useExtension: true,
   fallback: {
     oracle: 'https://nostr-wot.com',
     myPubkey: 'abc123...'
@@ -307,60 +302,6 @@ The SDK uses a standard event-based protocol to communicate with the extension:
 | `nostr-wot-ready` | Extension → Page | API is ready at `window.nostr.wot` |
 | `nostr-wot-error` | Extension → Page | Injection failed with error |
 
-## Custom Scoring
-
-Define how trust scores are calculated:
-```javascript
-const wot = new WoT({
-  useExtension: true,
-  scoring: {
-    // Distance weights (score multiplier per hop)
-    distanceWeights: {
-      1: 1.0,    // Direct follows
-      2: 0.5,    // 2 hops
-      3: 0.25,   // 3 hops
-      4: 0.1,    // 4+ hops
-    },
-    // Bonus values (additive)
-    mutualBonus: 0.5,      // +0.5 for mutual follows
-    pathBonus: 0.1,        // +0.1 per additional path
-    maxPathBonus: 0.5,     // Cap path bonus at +0.5
-  }
-});
-```
-
-### Scoring Formula
-```
-score = (baseScore × distanceWeight) + bonuses
-
-where:
-  baseScore = 1 / (hops + 1)
-  bonuses = mutualBonus (if mutual) + min(pathBonus × (paths - 1), maxPathBonus)
-
-Example: 2 hops + 30% path bonus = 0.5 + 0.3 = 0.80
-```
-
-## Server-Side Local Mode
-
-For Node.js/server environments where the browser extension isn't available:
-
-```javascript
-import { LocalWoT } from 'nostr-wot-sdk/local';
-
-const wot = new LocalWoT({
-  myPubkey: 'abc123...',
-  relays: ['wss://relay.damus.io', 'wss://nos.lol']
-});
-
-// Sync follow graph (2 hops from your pubkey)
-await wot.sync({ depth: 2 });
-
-// Now queries run locally
-const hops = await wot.getDistance('def456...');
-```
-
-Storage options: `'memory'` (default), `'indexeddb'` (browser), or custom adapter.
-
 ## Framework Integration
 
 ### React
@@ -416,12 +357,6 @@ function Profile({ pubkey }) {
   fallback: { myPubkey: 'abc123...' }
 }}>
 
-// Oracle-only mode (no extension)
-<WoTProvider options={{
-  useExtension: false,
-  myPubkey: 'abc123...'
-}}>
-
 // Custom extension connection timeouts
 <WoTProvider extensionOptions={{
   checkTimeout: 100,    // Extension detection timeout (ms)
@@ -462,8 +397,7 @@ Full type definitions included:
 ```typescript
 import { WoT, DistanceResult, WoTOptions } from 'nostr-wot-sdk';
 
-const options: WoTOptions = { useExtension: true };
-const wot = new WoT(options);
+const wot = new WoT();
 const result: DistanceResult | null = await wot.getDetails(pubkey);
 const score: number = await wot.getTrustScore(pubkey);
 ```

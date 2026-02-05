@@ -26,10 +26,6 @@ export type {
   ExtensionStatus,
   GraphStats,
   BatchResult,
-  LocalWoTOptions,
-  SyncOptions,
-  SyncProgress,
-  StorageAdapter,
   NostrContactEvent,
   NostrWoTExtension,
   NostrWindow,
@@ -42,18 +38,13 @@ export {
   NotFoundError,
   TimeoutError,
   ValidationError,
-  StorageError,
-  RelayError,
 } from './errors';
 
 // Utilities (exported for advanced usage)
 export {
-  calculateTrustScore,
   isValidPubkey,
   isValidOracleUrl,
-  isValidRelayUrl,
   normalizePubkey,
-  DEFAULT_SCORING,
   DEFAULT_ORACLE,
   DEFAULT_MAX_HOPS,
   DEFAULT_TIMEOUT,

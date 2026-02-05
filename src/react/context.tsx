@@ -69,8 +69,7 @@ const WoTContext = createContext<WoTContextValue | null>(null);
 export interface WoTProviderProps {
   /**
    * WoT configuration options
-   * When useExtension is true (default), the provider will automatically
-   * detect and connect to the browser extension.
+   * The provider will automatically detect and connect to the browser extension.
    */
   options?: Partial<WoTOptions>;
   /**
@@ -93,7 +92,7 @@ export interface WoTProviderProps {
  * ```tsx
  * import { WoTProvider } from 'nostr-wot-sdk/react';
  *
- * // Extension mode (recommended) - automatically connects to extension
+ * // Basic usage - automatically connects to extension
  * function App() {
  *   return (
  *     <WoTProvider>
@@ -112,18 +111,6 @@ export interface WoTProviderProps {
  *     </WoTProvider>
  *   );
  * }
- *
- * // Oracle mode (no extension)
- * function App() {
- *   return (
- *     <WoTProvider options={{
- *       useExtension: false,
- *       myPubkey: 'abc123...'
- *     }}>
- *       <YourApp />
- *     </WoTProvider>
- *   );
- * }
  * ```
  */
 export function WoTProvider({
@@ -131,9 +118,6 @@ export function WoTProvider({
   extensionOptions = {},
   children,
 }: WoTProviderProps) {
-  // Default to extension mode
-  const useExtension = options.useExtension ?? true;
-
   const [extensionState, setExtensionState] = useState<ExtensionConnectionState>('idle');
   const [extensionError, setExtensionError] = useState<string | undefined>();
   const [isReady, setIsReady] = useState(false);
@@ -146,21 +130,13 @@ export function WoTProvider({
 
   // Connect function for manual reconnection
   const connect = useCallback(async () => {
-    if (!useExtension) return;
-
     const result = await connector.connect();
     setExtensionState(result.state);
     setExtensionError(result.error);
-  }, [connector, useExtension]);
+  }, [connector]);
 
-  // Auto-connect on mount when using extension
+  // Auto-connect on mount
   useEffect(() => {
-    if (!useExtension) {
-      setExtensionState('idle');
-      setIsReady(true);
-      return;
-    }
-
     // Subscribe to state changes
     const unsubscribe = connector.subscribe((result) => {
       setExtensionState(result.state);
@@ -175,35 +151,22 @@ export function WoTProvider({
     return () => {
       unsubscribe();
     };
-  }, [connector, useExtension]);
+  }, [connector]);
 
   // Create WoT instance
   const wot = useMemo(() => {
-    // In extension mode, wait for connection check to complete
-    if (useExtension && !isReady) {
-      return null;
-    }
-
-    // Build options based on extension state
-    const wotOptions: WoTOptions = {
-      ...options,
-      useExtension,
-    };
-
-    // If not using extension, myPubkey is required
-    if (!useExtension && !options.myPubkey) {
-      console.warn('WoTProvider: myPubkey is required when useExtension is false');
+    // Wait for connection check to complete
+    if (!isReady) {
       return null;
     }
 
     try {
-      return new WoT(wotOptions);
+      return new WoT(options);
     } catch (error) {
       console.error('WoTProvider: Failed to create WoT instance:', error);
       return null;
     }
   }, [
-    useExtension,
     isReady,
     options.oracle,
     options.myPubkey,

@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2025-02-05
+
+### Breaking Changes
+
+- **Removed `useExtension` option** - The SDK now always uses the extension when available
+  - Extension-first is now the only mode; no need to opt-in
+  - `WoTOptions.useExtension` has been removed from the type
+  - Simply create `new WoT()` or `new WoT({ fallback: { myPubkey: '...' } })`
+
+- **Removed local sync functionality** - Use the browser extension for local graph storage
+  - Removed `src/local/` directory entirely
+  - Removed `nostr-wot-sdk/local` export
+  - Extension handles all syncing and local storage
+
+- **Trust scores now come from extension only**
+  - Removed SDK-side trust score calculation
+  - `getTrustScore(target)` no longer accepts options parameter
+  - Returns 0 when extension is not available
+
+### Changed
+
+- `WoT` constructor now has all parameters optional
+- `WoTProvider` no longer has `useExtension` option
+- Simplified codebase with extension-first architecture
+
 ## [0.3.2] - 2025-02-05
 
 ### Changed
@@ -128,6 +153,7 @@ function Profile({ pubkey }) {
 - TypeScript support with full type definitions
 - Error classes: `WoTError`, `NetworkError`, `NotFoundError`, `TimeoutError`, `ValidationError`
 
+[0.4.0]: https://github.com/nostr-wot/nostr-wot-sdk/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/nostr-wot/nostr-wot-sdk/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/nostr-wot/nostr-wot-sdk/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/nostr-wot/nostr-wot-sdk/compare/v0.2.0...v0.3.0

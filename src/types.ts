@@ -1,5 +1,5 @@
 /**
- * Configuration for trust score calculation
+ * Configuration for trust score calculation (used by extension)
  */
 export interface ScoringConfig {
   /**
@@ -8,15 +8,15 @@ export interface ScoringConfig {
    */
   distanceWeights: Record<number, number>;
   /**
-   * Bonus multiplier for mutual follows (e.g., 0.5 = +50%)
+   * Bonus value for mutual follows
    */
   mutualBonus: number;
   /**
-   * Bonus multiplier per additional path (e.g., 0.1 = +10% per path)
+   * Bonus value per additional path
    */
   pathBonus: number;
   /**
-   * Maximum total path bonus (e.g., 0.5 = cap at +50%)
+   * Maximum total path bonus
    */
   maxPathBonus: number;
 }
@@ -44,10 +44,6 @@ export interface WoTFallbackOptions {
    * @default 5000
    */
   timeout?: number;
-  /**
-   * Trust score calculation configuration
-   */
-  scoring?: Partial<ScoringConfig>;
 }
 
 /**
@@ -61,7 +57,7 @@ export interface WoTOptions {
   oracle?: string;
   /**
    * Your pubkey in hex format
-   * Optional when useExtension is true (will be fetched from extension)
+   * Optional - will be fetched from extension when available
    */
   myPubkey?: string;
   /**
@@ -75,96 +71,10 @@ export interface WoTOptions {
    */
   timeout?: number;
   /**
-   * Trust score calculation configuration
-   */
-  scoring?: Partial<ScoringConfig>;
-  /**
-   * Use browser extension if available.
-   * When true, the extension's pubkey and local data are used.
-   * @default false
-   */
-  useExtension?: boolean;
-  /**
    * Fallback configuration when extension is not available.
-   * Required if useExtension is true and myPubkey is not provided.
+   * Recommended to provide myPubkey here for oracle fallback.
    */
   fallback?: WoTFallbackOptions;
-}
-
-/**
- * Options for local WoT computation
- */
-export interface LocalWoTOptions {
-  /**
-   * Your pubkey in hex format
-   */
-  myPubkey: string;
-  /**
-   * Relay URLs to connect to
-   */
-  relays: string[];
-  /**
-   * Default maximum search depth
-   * @default 3
-   */
-  maxHops?: number;
-  /**
-   * Storage backend
-   * @default 'memory'
-   */
-  storage?: 'memory' | 'indexeddb' | StorageAdapter;
-  /**
-   * Trust score calculation configuration
-   */
-  scoring?: Partial<ScoringConfig>;
-}
-
-/**
- * Custom storage adapter interface
- */
-export interface StorageAdapter {
-  get(key: string): Promise<string | null>;
-  set(key: string, value: string): Promise<void>;
-  delete(key: string): Promise<void>;
-  clear(): Promise<void>;
-  keys(): Promise<string[]>;
-}
-
-/**
- * Options for sync operation
- */
-export interface SyncOptions {
-  /**
-   * Depth of follow graph to sync
-   * @default 2
-   */
-  depth?: number;
-  /**
-   * Callback for sync progress
-   */
-  onProgress?: (progress: SyncProgress) => void;
-}
-
-/**
- * Sync progress information
- */
-export interface SyncProgress {
-  /**
-   * Current depth being synced
-   */
-  currentDepth: number;
-  /**
-   * Total depth to sync
-   */
-  totalDepth: number;
-  /**
-   * Number of pubkeys processed
-   */
-  processed: number;
-  /**
-   * Total pubkeys to process at current depth
-   */
-  total: number;
 }
 
 /**

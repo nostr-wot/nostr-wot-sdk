@@ -1,20 +1,3 @@
-import type { ScoringConfig, DistanceResult } from './types';
-
-/**
- * Default scoring configuration
- */
-export const DEFAULT_SCORING: ScoringConfig = {
-  distanceWeights: {
-    1: 1.0,
-    2: 0.5,
-    3: 0.25,
-    4: 0.1,
-  },
-  mutualBonus: 0.5,
-  pathBonus: 0.1,
-  maxPathBonus: 0.5,
-};
-
 /**
  * Default oracle URL
  */
@@ -50,18 +33,6 @@ export function isValidOracleUrl(url: string): boolean {
 }
 
 /**
- * Validates a relay URL (must be WSS or WS)
- */
-export function isValidRelayUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === 'wss:' || parsed.protocol === 'ws:';
-  } catch {
-    return false;
-  }
-}
-
-/**
  * Maximum allowed batch size for array inputs
  */
 export const MAX_BATCH_SIZE = 10000;
@@ -71,73 +42,6 @@ export const MAX_BATCH_SIZE = 10000;
  */
 export function normalizePubkey(pubkey: string): string {
   return pubkey.toLowerCase();
-}
-
-/**
- * Merges scoring configuration with defaults
- */
-export function mergeScoringConfig(
-  partial?: Partial<ScoringConfig>
-): ScoringConfig {
-  if (!partial) return { ...DEFAULT_SCORING };
-
-  return {
-    distanceWeights: {
-      ...DEFAULT_SCORING.distanceWeights,
-      ...partial.distanceWeights,
-    },
-    mutualBonus: partial.mutualBonus ?? DEFAULT_SCORING.mutualBonus,
-    pathBonus: partial.pathBonus ?? DEFAULT_SCORING.pathBonus,
-    maxPathBonus: partial.maxPathBonus ?? DEFAULT_SCORING.maxPathBonus,
-  };
-}
-
-/**
- * Calculates trust score based on distance result and scoring config
- *
- * Formula:
- * score = (baseScore × distanceWeight) + bonuses
- *
- * where:
- *   baseScore = 1 / (hops + 1)
- *   bonuses = mutualBonus (if mutual) + min(pathBonus × (paths - 1), maxPathBonus)
- *
- * Example: 2 hops + 30% path bonus = 0.5 + 0.3 = 0.80
- *
- * Note: `mutual` is optional (only available from oracle, not extension)
- */
-export function calculateTrustScore(
-  result: DistanceResult,
-  scoring: ScoringConfig
-): number {
-  const { hops, paths, mutual } = result;
-  const { distanceWeights, mutualBonus, pathBonus, maxPathBonus } = scoring;
-
-  // Base score decreases with distance
-  const baseScore = 1 / (hops + 1);
-
-  // Get distance weight (default to lowest defined weight for distant hops)
-  const maxDefinedHop = Math.max(...Object.keys(distanceWeights).map(Number));
-  const distanceWeight =
-    distanceWeights[hops] ?? distanceWeights[maxDefinedHop] ?? 0.1;
-
-  // Calculate bonuses
-  let bonuses = 0;
-
-  // Mutual follow bonus (only if mutual info is available)
-  if (mutual === true) {
-    bonuses += mutualBonus;
-  }
-
-  // Path count bonus (more paths = more trust)
-  if (paths > 1) {
-    const pathCountBonus = Math.min(pathBonus * (paths - 1), maxPathBonus);
-    bonuses += pathCountBonus;
-  }
-
-  // Final score using additive formula (clamped to 0-1)
-  const score = (baseScore * distanceWeight) + bonuses;
-  return Math.min(1, Math.max(0, score));
 }
 
 /**

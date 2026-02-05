@@ -1,7 +1,6 @@
 import type {
   WoTOptions,
   WoTFallbackOptions,
-  ScoringConfig,
   QueryOptions,
   DistanceResult,
   BatchResult,
@@ -22,8 +21,6 @@ import {
   DEFAULT_MAX_HOPS,
   DEFAULT_TIMEOUT,
   MAX_BATCH_SIZE,
-  mergeScoringConfig,
-  calculateTrustScore,
   isValidPubkey,
   isValidOracleUrl,
   normalizePubkey,
@@ -35,48 +32,31 @@ import { checkAndConnect } from './extension';
 /**
  * WoT (Web of Trust) SDK for querying Nostr trust relationships
  *
- * When useExtension is true, the SDK will always use the extension's
- * pubkey and local data when available. This provides the best experience
- * as the extension syncs and caches the follow graph locally.
+ * The SDK always tries to use the browser extension when available.
+ * The extension syncs and caches the follow graph locally, providing
+ * the best performance and privacy. When the extension is not available,
+ * it falls back to the oracle API.
  */
 export class WoT {
   private readonly oracle: string;
   private readonly fallbackPubkey: string | null;
   private readonly maxHops: number;
   private readonly timeout: number;
-  private readonly scoring: ScoringConfig;
-  private readonly useExtension: boolean;
   private readonly fallbackOptions: WoTFallbackOptions | null;
   private extension: NostrWoTExtension | null = null;
   private extensionChecked = false;
   private extensionPubkey: string | null = null;
 
-  constructor(options: WoTOptions) {
-    this.useExtension = options.useExtension ?? false;
+  constructor(options: WoTOptions = {}) {
     this.fallbackOptions = options.fallback ?? null;
 
-    // When using extension, myPubkey is optional (will be fetched from extension)
-    // When not using extension, myPubkey is required
-    if (!this.useExtension) {
-      if (!options.myPubkey) {
-        throw new ValidationError('myPubkey is required when not using extension', 'myPubkey');
-      }
-      if (!isValidPubkey(options.myPubkey)) {
-        throw new ValidationError(
-          'myPubkey must be a valid 64-character hex string',
-          'myPubkey'
-        );
-      }
+    // Use provided pubkey or fallback pubkey for oracle fallback
+    if (options.myPubkey && isValidPubkey(options.myPubkey)) {
       this.fallbackPubkey = normalizePubkey(options.myPubkey);
+    } else if (this.fallbackOptions?.myPubkey) {
+      this.fallbackPubkey = normalizePubkey(this.fallbackOptions.myPubkey);
     } else {
-      // Extension mode - use provided pubkey or fallback pubkey for oracle fallback
-      if (options.myPubkey && isValidPubkey(options.myPubkey)) {
-        this.fallbackPubkey = normalizePubkey(options.myPubkey);
-      } else if (this.fallbackOptions?.myPubkey) {
-        this.fallbackPubkey = normalizePubkey(this.fallbackOptions.myPubkey);
-      } else {
-        this.fallbackPubkey = null;
-      }
+      this.fallbackPubkey = null;
     }
 
     const oracleUrl = options.oracle ?? this.fallbackOptions?.oracle ?? DEFAULT_ORACLE;
@@ -86,7 +66,6 @@ export class WoT {
     this.oracle = oracleUrl;
     this.maxHops = options.maxHops ?? this.fallbackOptions?.maxHops ?? DEFAULT_MAX_HOPS;
     this.timeout = options.timeout ?? this.fallbackOptions?.timeout ?? DEFAULT_TIMEOUT;
-    this.scoring = mergeScoringConfig(options.scoring ?? this.fallbackOptions?.scoring);
   }
 
   /**
@@ -94,7 +73,6 @@ export class WoT {
    * Uses event-based connection flow for reliable detection
    */
   private async getExtension(): Promise<NostrWoTExtension | null> {
-    if (!this.useExtension) return null;
     if (this.extensionChecked) return this.extension;
 
     this.extensionChecked = true;
@@ -283,29 +261,22 @@ export class WoT {
   }
 
   /**
-   * Get computed trust score based on distance and weights
+   * Get computed trust score from extension
    * @param target - Target pubkey (hex)
-   * @param options - Query options
-   * @returns Trust score between 0 and 1, or 0 if not connected
+   * @returns Trust score between 0 and 1, or 0 if not connected or extension unavailable
    */
-  async getTrustScore(target: string, options?: QueryOptions): Promise<number> {
+  async getTrustScore(target: string): Promise<number> {
     const normalizedTarget = this.validatePubkey(target, 'target');
 
-    // Check extension first - extension always takes priority
+    // Trust scores come from extension only
     const ext = await this.getExtension();
     if (ext) {
       const score = await ext.getTrustScore(normalizedTarget);
       return score ?? 0;
     }
 
-    // Fall back to oracle
-    const details = await this.getDetails(normalizedTarget, options);
-
-    if (!details) {
-      return 0;
-    }
-
-    return calculateTrustScore(details, this.scoring);
+    // No extension - cannot calculate trust score
+    return 0;
   }
 
   /**
@@ -427,21 +398,11 @@ export class WoT {
 
         for (const item of response.results) {
           const inWoT = item.distance !== null && item.distance <= maxHops;
-          const score =
-            item.distance !== null
-              ? calculateTrustScore(
-                  {
-                    hops: item.distance,
-                    paths: item.paths ?? 1,
-                  },
-                  this.scoring
-                )
-              : 0;
 
           results.set(item.pubkey, {
             pubkey: item.pubkey,
             distance: item.distance,
-            score,
+            score: 0, // Trust scores only available via extension
             inWoT,
           });
         }
@@ -526,13 +487,6 @@ export class WoT {
    */
   getOracle(): string {
     return this.oracle;
-  }
-
-  /**
-   * Get the current scoring configuration
-   */
-  getScoringConfig(): ScoringConfig {
-    return { ...this.scoring };
   }
 
   /**

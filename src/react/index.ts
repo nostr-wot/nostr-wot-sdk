@@ -24,7 +24,6 @@ export {
 // Re-export common types
 export type {
   WoTOptions,
-  ScoringConfig,
   QueryOptions,
   DistanceResult,
 } from '../types';

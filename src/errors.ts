@@ -71,31 +71,3 @@ export class ValidationError extends WoTError {
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
-
-/**
- * Error thrown when local storage operations fail
- */
-export class StorageError extends WoTError {
-  public readonly operation: string;
-
-  constructor(operation: string, message?: string) {
-    super(message || `Storage operation failed: ${operation}`);
-    this.name = 'StorageError';
-    this.operation = operation;
-    Object.setPrototypeOf(this, new.target.prototype);
-  }
-}
-
-/**
- * Error thrown when relay connection fails
- */
-export class RelayError extends WoTError {
-  public readonly relay: string;
-
-  constructor(relay: string, message?: string) {
-    super(message || `Relay connection failed: ${relay}`);
-    this.name = 'RelayError';
-    this.relay = relay;
-    Object.setPrototypeOf(this, new.target.prototype);
-  }
-}

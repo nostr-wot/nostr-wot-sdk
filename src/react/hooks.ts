@@ -92,7 +92,7 @@ export function useWoT(pubkey: string, options?: UseWoTOptions): UseWoTResult {
     try {
       const [distResult, scoreResult, detailsResult] = await Promise.all([
         wot.getDistance(pubkey, options),
-        wot.getTrustScore(pubkey, options),
+        wot.getTrustScore(pubkey),
         wot.getDetails(pubkey, options),
       ]);
 
@@ -289,7 +289,7 @@ export function useTrustScore(
     setError(null);
 
     try {
-      const result = await wot.getTrustScore(pubkey, options);
+      const result = await wot.getTrustScore(pubkey);
 
       if (fetchId === fetchIdRef.current) {
         setScore(result);
@@ -301,7 +301,7 @@ export function useTrustScore(
         setLoading(false);
       }
     }
-  }, [wot, pubkey, skip, options?.maxHops, options?.timeout]);
+  }, [wot, pubkey, skip]);
 
   useEffect(() => {
     if (isReady && !skip) {
