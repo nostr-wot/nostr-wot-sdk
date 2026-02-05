@@ -12,6 +12,7 @@ export type {
   ExtensionDistanceResult,
   ExtensionConfig,
   ExtensionStatus,
+  ExtensionConnectionStatus,
   GraphStats,
   BatchResult,
   NostrContactEvent,

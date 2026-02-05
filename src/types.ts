@@ -1,4 +1,13 @@
 /**
+ * Extension connection status
+ */
+export type ExtensionConnectionStatus =
+  | 'connected'      // Extension enabled and working on this domain
+  | 'not-enabled'    // Extension installed but not enabled for this domain
+  | 'unavailable'    // Not installed (or local install, can't detect)
+  | 'not-browser';   // SSR/Node environment
+
+/**
  * Configuration for trust score calculation (used by extension)
  */
 export interface ScoringConfig {
@@ -75,6 +84,11 @@ export interface WoTOptions {
    * Recommended to provide myPubkey here for oracle fallback.
    */
   fallback?: WoTFallbackOptions;
+  /**
+   * Chrome Web Store extension ID (for install detection)
+   * Only needed if you want to detect "installed but not enabled" state
+   */
+  extensionId?: string;
 }
 
 /**
