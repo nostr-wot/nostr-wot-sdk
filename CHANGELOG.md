@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2025-02-05
+
+### Changed
+
+- **`getDetails` now returns `score`** in addition to `hops` and `paths`
+  - Extension: `{ hops: 2, paths: 5, score: 0.65 }`
+  - Oracle fallback: `{ hops: 2, paths: 5, score: 0 }` (score is 0 when using oracle)
+
+- **`getDistanceBatch` now accepts options object** instead of boolean
+  - `{ includePaths: true }` - Include path counts
+  - `{ includeScores: true }` - Include trust scores
+  - `{ includePaths: true, includeScores: true }` - Include both
+  - Legacy boolean `true` still works (backwards compatible, same as `{ includePaths: true }`)
+
+### Added
+
+- New `DistanceBatchOptions` type exported for TypeScript users
+
 ## [0.4.0] - 2025-02-05
 
 ### Breaking Changes
@@ -153,6 +171,7 @@ function Profile({ pubkey }) {
 - TypeScript support with full type definitions
 - Error classes: `WoTError`, `NetworkError`, `NotFoundError`, `TimeoutError`, `ValidationError`
 
+[0.4.1]: https://github.com/nostr-wot/nostr-wot-sdk/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/nostr-wot/nostr-wot-sdk/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/nostr-wot/nostr-wot-sdk/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/nostr-wot/nostr-wot-sdk/compare/v0.3.0...v0.3.1

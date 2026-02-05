@@ -21,6 +21,7 @@ export type {
   ScoringConfig,
   QueryOptions,
   DistanceResult,
+  DistanceBatchOptions,
   ExtensionDistanceResult,
   ExtensionConfig,
   ExtensionStatus,

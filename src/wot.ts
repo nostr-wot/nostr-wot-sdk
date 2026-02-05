@@ -3,6 +3,7 @@ import type {
   WoTFallbackOptions,
   QueryOptions,
   DistanceResult,
+  DistanceBatchOptions,
   BatchResult,
   NostrWindow,
   NostrWoTExtension,
@@ -462,10 +463,12 @@ export class WoT {
     }
 
     try {
-      return await this.apiRequest<DetailsResponse>(
+      const response = await this.apiRequest<DetailsResponse>(
         `/details/${myPubkey}/${normalizedTarget}?maxHops=${maxHops}`,
         options
       );
+      // Oracle doesn't return score, so default to 0
+      return { ...response, score: 0 };
     } catch (error) {
       if (error instanceof NotFoundError) {
         return null;
@@ -619,25 +622,37 @@ export class WoT {
   /**
    * Get distances for multiple pubkeys in a single call
    * @param targets - Array of target pubkeys
-   * @param includePaths - When true, includes path count for each target
-   * @returns Record of pubkey to hop count (or { hops, paths } if includePaths is true)
+   * @param options - Options object or boolean for backwards compatibility
+   *   - `{ includePaths: true }` - Include path counts
+   *   - `{ includeScores: true }` - Include trust scores
+   *   - `{ includePaths: true, includeScores: true }` - Include both
+   *   - `true` (legacy) - Same as `{ includePaths: true }`
+   * @returns Record of pubkey to result based on options
    */
   async getDistanceBatch(
     targets: string[],
-    includePaths?: false
+    options?: false | undefined
   ): Promise<Record<string, number | null>>;
   async getDistanceBatch(
     targets: string[],
-    includePaths: true
+    options: true | { includePaths: true; includeScores?: false }
   ): Promise<Record<string, { hops: number; paths: number } | null>>;
   async getDistanceBatch(
     targets: string[],
-    includePaths?: boolean
-  ): Promise<Record<string, number | { hops: number; paths: number } | null>>;
+    options: { includePaths?: false; includeScores: true }
+  ): Promise<Record<string, { hops: number; score: number } | null>>;
   async getDistanceBatch(
     targets: string[],
-    includePaths = false
-  ): Promise<Record<string, number | { hops: number; paths: number } | null>> {
+    options: { includePaths: true; includeScores: true }
+  ): Promise<Record<string, { hops: number; paths: number; score: number } | null>>;
+  async getDistanceBatch(
+    targets: string[],
+    options?: boolean | DistanceBatchOptions
+  ): Promise<Record<string, number | { hops: number; paths?: number; score?: number } | null>>;
+  async getDistanceBatch(
+    targets: string[],
+    options: boolean | DistanceBatchOptions = false
+  ): Promise<Record<string, number | { hops: number; paths?: number; score?: number } | null>> {
     if (!Array.isArray(targets) || targets.length === 0) {
       return {};
     }
@@ -646,22 +661,34 @@ export class WoT {
       this.validatePubkey(t, `targets[${i}]`)
     );
 
+    // Normalize options: boolean `true` means { includePaths: true }
+    const opts: DistanceBatchOptions =
+      typeof options === 'boolean'
+        ? { includePaths: options }
+        : options || {};
+
+    const { includePaths, includeScores } = opts;
+
     // Check extension first
     const ext = await this.getExtension();
     if (ext) {
-      if (includePaths) {
-        return ext.getDistanceBatch(normalizedTargets, true);
-      }
-      return ext.getDistanceBatch(normalizedTargets, false);
+      return ext.getDistanceBatch(normalizedTargets, opts);
     }
 
     // Fall back to individual queries
-    if (includePaths) {
-      const results: Record<string, { hops: number; paths: number } | null> = {};
+    if (includePaths || includeScores) {
+      const results: Record<string, { hops: number; paths?: number; score?: number } | null> = {};
       await Promise.all(
         normalizedTargets.map(async (pubkey) => {
           const details = await this.getDetails(pubkey);
-          results[pubkey] = details ? { hops: details.hops, paths: details.paths } : null;
+          if (!details) {
+            results[pubkey] = null;
+            return;
+          }
+          const result: { hops: number; paths?: number; score?: number } = { hops: details.hops };
+          if (includePaths) result.paths = details.paths;
+          if (includeScores) result.score = details.score;
+          results[pubkey] = result;
         })
       );
       return results;

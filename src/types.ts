@@ -92,7 +92,7 @@ export interface QueryOptions {
 }
 
 /**
- * Distance result from extension (simpler)
+ * Distance result from extension
  */
 export interface ExtensionDistanceResult {
   /**
@@ -103,6 +103,25 @@ export interface ExtensionDistanceResult {
    * Number of distinct paths to target
    */
   paths: number;
+  /**
+   * Trust score (0-1)
+   * Note: Only available from extension, oracle returns 0
+   */
+  score: number;
+}
+
+/**
+ * Options for getDistanceBatch
+ */
+export interface DistanceBatchOptions {
+  /**
+   * Include path count in results
+   */
+  includePaths?: boolean;
+  /**
+   * Include trust scores in results
+   */
+  includeScores?: boolean;
 }
 
 /**
@@ -248,8 +267,8 @@ export interface NostrWoTExtension {
   getTrustScore(target: string): Promise<number | null>;
 
   /**
-   * Get distance and path count details
-   * @returns Object with hops and paths count, or null if not connected
+   * Get distance, path count, and score details
+   * @returns Object with hops, paths, and score, or null if not connected
    */
   getDetails(target: string): Promise<ExtensionDistanceResult | null>;
 
@@ -264,21 +283,33 @@ export interface NostrWoTExtension {
   /**
    * Get distances for multiple pubkeys in a single call
    * @param targets - Array of target pubkeys
-   * @param includePaths - When true, includes path count for each target
-   * @returns Map of pubkey to hop count (or { hops, paths } if includePaths is true)
+   * @param options - Options object or boolean for backwards compatibility
+   *   - `{ includePaths: true }` - Include path counts
+   *   - `{ includeScores: true }` - Include trust scores
+   *   - `{ includePaths: true, includeScores: true }` - Include both
+   *   - `true` (legacy) - Same as `{ includePaths: true }`
+   * @returns Map of pubkey to result based on options
    */
   getDistanceBatch(
     targets: string[],
-    includePaths?: false
+    options?: false | undefined
   ): Promise<Record<string, number | null>>;
   getDistanceBatch(
     targets: string[],
-    includePaths: true
+    options: true | { includePaths: true; includeScores?: false }
   ): Promise<Record<string, { hops: number; paths: number } | null>>;
   getDistanceBatch(
     targets: string[],
-    includePaths?: boolean
-  ): Promise<Record<string, number | { hops: number; paths: number } | null>>;
+    options: { includePaths?: false; includeScores: true }
+  ): Promise<Record<string, { hops: number; score: number } | null>>;
+  getDistanceBatch(
+    targets: string[],
+    options: { includePaths: true; includeScores: true }
+  ): Promise<Record<string, { hops: number; paths: number; score: number } | null>>;
+  getDistanceBatch(
+    targets: string[],
+    options?: boolean | DistanceBatchOptions
+  ): Promise<Record<string, number | { hops: number; paths?: number; score?: number } | null>>;
 
   /**
    * Get trust scores for multiple pubkeys in a single call

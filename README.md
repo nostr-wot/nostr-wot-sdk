@@ -124,11 +124,11 @@ const results = await wot.batchCheck(['pk1...', 'pk2...', 'pk3...']);
 
 #### `getDetails(target, options?)`
 
-Get distance and path count details.
+Get distance, path count, and score details.
 ```javascript
 const details = await wot.getDetails('def456...');
-// Returns: { hops: 2, paths: 5 }
-// Oracle may also return: bridges, mutual
+// Returns: { hops: 2, paths: 5, score: 0.65 }
+// Oracle may also return: bridges, mutual (but score will be 0)
 ```
 
 #### `getMyPubkey()`
@@ -157,17 +157,28 @@ const config = await wot.getExtensionConfig();
 
 ### Batch Operations
 
-#### `getDistanceBatch(targets, includePaths?)`
+#### `getDistanceBatch(targets, options?)`
 
 Get distances for multiple pubkeys in a single call.
 ```javascript
-// Without paths (faster, default)
+// Default (just hops)
 const distances = await wot.getDistanceBatch(['pk1...', 'pk2...']);
 // Returns: { 'pk1...': 2, 'pk2...': null }
 
-// With paths (includes path count for scoring)
-const details = await wot.getDistanceBatch(['pk1...', 'pk2...'], true);
+// With paths
+const withPaths = await wot.getDistanceBatch(['pk1...', 'pk2...'], { includePaths: true });
 // Returns: { 'pk1...': { hops: 2, paths: 5 }, 'pk2...': null }
+
+// With scores
+const withScores = await wot.getDistanceBatch(['pk1...', 'pk2...'], { includeScores: true });
+// Returns: { 'pk1...': { hops: 2, score: 0.65 }, 'pk2...': null }
+
+// With both
+const full = await wot.getDistanceBatch(['pk1...', 'pk2...'], { includePaths: true, includeScores: true });
+// Returns: { 'pk1...': { hops: 2, paths: 5, score: 0.65 }, 'pk2...': null }
+
+// Legacy boolean still works (backwards compatible)
+const legacy = await wot.getDistanceBatch(['pk1...'], true);  // same as { includePaths: true }
 ```
 
 #### `getTrustScoreBatch(targets)`

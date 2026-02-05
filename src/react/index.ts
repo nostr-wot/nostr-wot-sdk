@@ -26,6 +26,7 @@ export type {
   WoTOptions,
   QueryOptions,
   DistanceResult,
+  DistanceBatchOptions,
 } from '../types';
 
 // Re-export extension types
