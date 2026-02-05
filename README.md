@@ -321,21 +321,23 @@ const wot = new WoT({
       3: 0.25,   // 3 hops
       4: 0.1,    // 4+ hops
     },
-    // Bonus multipliers
-    mutualBonus: 0.5,      // +50% for mutual follows
-    pathBonus: 0.1,        // +10% per additional path
-    maxPathBonus: 0.5,     // Cap path bonus at +50%
+    // Bonus values (additive)
+    mutualBonus: 0.5,      // +0.5 for mutual follows
+    pathBonus: 0.1,        // +0.1 per additional path
+    maxPathBonus: 0.5,     // Cap path bonus at +0.5
   }
 });
 ```
 
 ### Scoring Formula
 ```
-score = baseScore × distanceWeight × (1 + bonuses)
+score = (baseScore × distanceWeight) + bonuses
 
 where:
   baseScore = 1 / (hops + 1)
   bonuses = mutualBonus (if mutual) + min(pathBonus × (paths - 1), maxPathBonus)
+
+Example: 2 hops + 30% path bonus = 0.5 + 0.3 = 0.80
 ```
 
 ## Server-Side Local Mode
