@@ -15,9 +15,8 @@ import type {
 
 /**
  * Default Chrome Web Store extension ID
- * Update after publishing to Chrome Web Store
  */
-const DEFAULT_EXTENSION_ID = '';
+const DEFAULT_EXTENSION_ID = 'gfmefgdkmjpjinecjchlangpamhclhdo';
 import {
   NetworkError,
   NotFoundError,

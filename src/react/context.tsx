@@ -118,17 +118,48 @@ export function WoTProvider({
   const [extensionState, setExtensionState] = useState<ExtensionConnectionState>('checking');
   const [isReady, setIsReady] = useState(false);
 
-  // Check extension availability
+  // Check extension availability (manual refresh)
   const checkExtension = useCallback(() => {
     const available = checkExtensionAvailable();
     setExtensionState(available ? 'connected' : 'not-available');
     setIsReady(true);
   }, []);
 
-  // Check on mount
+  // Check on mount with retry mechanism
+  // Extensions inject their content scripts asynchronously after page load,
+  // so we need to poll for a short period to detect them reliably
   useEffect(() => {
-    checkExtension();
-  }, [checkExtension]);
+    // Check immediately
+    if (checkExtensionAvailable()) {
+      setExtensionState('connected');
+      setIsReady(true);
+      return;
+    }
+
+    // Retry several times - extensions may inject after page load
+    let attempts = 0;
+    const maxAttempts = 15;
+    const intervalMs = 100; // Check every 100ms for 1.5 seconds total
+
+    const intervalId = setInterval(() => {
+      attempts++;
+
+      if (checkExtensionAvailable()) {
+        setExtensionState('connected');
+        setIsReady(true);
+        clearInterval(intervalId);
+        return;
+      }
+
+      if (attempts >= maxAttempts) {
+        setExtensionState('not-available');
+        setIsReady(true);
+        clearInterval(intervalId);
+      }
+    }, intervalMs);
+
+    return () => clearInterval(intervalId);
+  }, []);
 
   // Create WoT instance
   const wot = useMemo(() => {
