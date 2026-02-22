@@ -118,7 +118,7 @@ export function createWoT(
       if (isReady() && !skip) {
         fetchData();
       }
-    })
+    }, { defer: false })
   );
 
   return {
@@ -218,7 +218,7 @@ export function createIsInWoT(
       if (isReady() && !skip) {
         fetchData();
       }
-    })
+    }, { defer: false })
   );
 
   return {
@@ -316,7 +316,7 @@ export function createTrustScore(
       if (isReady() && !skip) {
         fetchData();
       }
-    })
+    }, { defer: false })
   );
 
   return {
@@ -448,7 +448,7 @@ export function createBatchWoT(
       if (isReady() && !skip) {
         fetchData();
       }
-    })
+    }, { defer: false })
   );
 
   return {

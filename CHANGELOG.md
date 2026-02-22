@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-02-22
+
+### Changed
+
+- **Default oracle URL** changed from `nostr-wot.com` to `wot-oracle.mappingbitcoin.com`
+- **Oracle URL validation** now accepts both HTTP and HTTPS URLs
+
+### Fixed
+
+- **SolidJS primitives** - Added `{ defer: false }` to `createEffect` calls in `createWoT`, `createIsInWoT`, `createTrustScore`, and `createBatchWoT` to ensure effects run immediately on mount
+- **SolidJS build** - Added `esbuild-plugin-solid` to tsup config for proper JSX compilation
+
 ## [0.6.0] - 2026-02-22
 
 ### Added
@@ -252,6 +264,7 @@ function Profile({ pubkey }) {
 - TypeScript support with full type definitions
 - Error classes: `WoTError`, `NetworkError`, `NotFoundError`, `TimeoutError`, `ValidationError`
 
+[0.6.1]: https://github.com/nostr-wot/nostr-wot-sdk/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/nostr-wot/nostr-wot-sdk/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/nostr-wot/nostr-wot-sdk/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/nostr-wot/nostr-wot-sdk/compare/v0.5.1...v0.5.2

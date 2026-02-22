@@ -36,7 +36,7 @@ export interface ScoringConfig {
 export interface WoTFallbackOptions {
   /**
    * Oracle API URL
-   * @default 'https://nostr-wot.com'
+   * @default 'https://wot-oracle.mappingbitcoin.com'
    */
   oracle?: string;
   /**
@@ -61,7 +61,7 @@ export interface WoTFallbackOptions {
 export interface WoTOptions {
   /**
    * Oracle API URL (used when extension is not available)
-   * @default 'https://nostr-wot.com'
+   * @default 'https://wot-oracle.mappingbitcoin.com'
    */
   oracle?: string;
   /**

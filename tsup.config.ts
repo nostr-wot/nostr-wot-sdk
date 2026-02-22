@@ -1,4 +1,5 @@
 import { defineConfig } from 'tsup';
+import { solidPlugin } from 'esbuild-plugin-solid';
 
 export default defineConfig([
   // Main entry point
@@ -36,5 +37,6 @@ export default defineConfig([
     treeshake: true,
     splitting: false,
     external: ['solid-js'],
+    esbuildPlugins: [solidPlugin({ solid: { generate: 'dom' } })],
   },
 ]);

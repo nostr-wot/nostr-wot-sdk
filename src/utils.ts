@@ -1,7 +1,7 @@
 /**
  * Default oracle URL
  */
-export const DEFAULT_ORACLE = 'https://nostr-wot.com';
+export const DEFAULT_ORACLE = 'https://wot-oracle.mappingbitcoin.com';
 
 /**
  * Default max hops for WoT queries
@@ -21,12 +21,12 @@ export function isValidPubkey(pubkey: string): boolean {
 }
 
 /**
- * Validates an oracle URL (must be HTTPS)
+ * Validates an oracle URL (HTTP or HTTPS)
  */
 export function isValidOracleUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
-    return parsed.protocol === 'https:';
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:';
   } catch {
     return false;
   }
