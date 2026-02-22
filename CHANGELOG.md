@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-02-22
+
+### Added
+
+- **SolidJS integration** (`nostr-wot-sdk/solid`) - First-class SolidJS support with reactive primitives
+  - `WoTProvider` - Context provider with automatic extension detection
+  - `createWoT(pubkey)` - Get distance, score, and details for a pubkey
+  - `createIsInWoT(pubkey)` - Check if pubkey is in your WoT (boolean)
+  - `createTrustScore(pubkey)` - Get trust score only
+  - `createBatchWoT(pubkeys)` - Check multiple pubkeys efficiently
+  - `useExtension()` - Get extension connection state
+  - `useWoTInstance()` - Get raw WoT instance for advanced usage
+- `solid-js` as optional peer dependency (`>=1.0.0`)
+- SolidJS build target in tsup config
+
+### Changed
+
+- Updated package description to mention React and SolidJS support
+- Updated README with SolidJS documentation and examples
+
+## [0.5.3] - 2025-02-05
+
+### Fixed
+
+- **Improved extension detection with retry mechanism** - Extensions inject content scripts asynchronously after page load, so the SDK now polls for up to 1.5 seconds (15 attempts at 100ms intervals) to reliably detect the extension in both React and core contexts
+
 ## [0.5.2] - 2025-02-05
 
 ### Added
@@ -226,6 +252,8 @@ function Profile({ pubkey }) {
 - TypeScript support with full type definitions
 - Error classes: `WoTError`, `NetworkError`, `NotFoundError`, `TimeoutError`, `ValidationError`
 
+[0.6.0]: https://github.com/nostr-wot/nostr-wot-sdk/compare/v0.5.3...v0.6.0
+[0.5.3]: https://github.com/nostr-wot/nostr-wot-sdk/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/nostr-wot/nostr-wot-sdk/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/nostr-wot/nostr-wot-sdk/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/nostr-wot/nostr-wot-sdk/compare/v0.4.2...v0.5.0

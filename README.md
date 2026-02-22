@@ -1,6 +1,6 @@
 # nostr-wot-sdk
 
-JavaScript/TypeScript SDK for querying Nostr Web of Trust.
+JavaScript/TypeScript SDK for querying Nostr Web of Trust. Includes first-class React and SolidJS support.
 
 ## Install
 ```bash
@@ -364,6 +364,83 @@ const {
   isChecked,    // Check complete
   refresh,      // Function to re-check extension availability
 } = useExtension();
+```
+
+### SolidJS
+
+The SDK also provides SolidJS support with reactive primitives and automatic extension detection. Wrap your app with `WoTProvider` and use `create*` primitives for fine-grained reactivity.
+
+```javascript
+import { WoTProvider, useExtension, createWoT } from 'nostr-wot-sdk/solid';
+
+// Wrap your app - automatically detects extension
+function App() {
+  return (
+    <WoTProvider>
+      <YourApp />
+    </WoTProvider>
+  );
+}
+
+// Check extension status anywhere
+function ExtensionStatus() {
+  const ext = useExtension();
+
+  return (
+    <Show when={!ext.isChecking()} fallback={<span>Checking...</span>}>
+      <Show when={ext.isConnected()} fallback={<span>Extension not available</span>}>
+        <span>Extension connected!</span>
+      </Show>
+    </Show>
+  );
+}
+
+// Use WoT data in components
+function Profile(props: { pubkey: string }) {
+  const wot = createWoT(() => props.pubkey);
+
+  return (
+    <Show when={!wot.loading()} fallback={<Spinner />}>
+      <Show when={wot.distance() !== null} fallback={<span>Not in your network</span>}>
+        <span>{wot.distance()} hops away (score: {wot.score().toFixed(2)})</span>
+      </Show>
+    </Show>
+  );
+}
+```
+
+#### Provider Options
+
+```javascript
+// With fallback for when extension is not available
+<WoTProvider options={{
+  fallback: { myPubkey: 'abc123...' }
+}}>
+```
+
+#### Available Primitives
+
+| Primitive | Description |
+|-----------|-------------|
+| `createWoT(pubkey)` | Get distance, score, and details for a pubkey |
+| `createIsInWoT(pubkey)` | Check if pubkey is in your WoT (boolean) |
+| `createTrustScore(pubkey)` | Get trust score only |
+| `createBatchWoT(pubkeys[])` | Check multiple pubkeys efficiently |
+| `useExtension()` | Get extension connection state |
+| `useWoTInstance()` | Get raw WoT instance for advanced usage |
+
+#### Extension State
+
+The `useExtension()` function provides extension status:
+
+```javascript
+const ext = useExtension();
+
+ext.state()        // 'checking' | 'connected' | 'not-available'
+ext.isConnected()  // Extension is connected and ready
+ext.isChecking()   // Currently checking
+ext.isChecked()    // Check complete
+ext.refresh()      // Function to re-check extension availability
 ```
 
 ## TypeScript
