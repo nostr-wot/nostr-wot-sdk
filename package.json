@@ -1,6 +1,6 @@
 {
   "name": "nostr-wot-sdk",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "JavaScript/TypeScript SDK for querying Nostr Web of Trust",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "MIT",
@@ -78,6 +78,7 @@
   "devDependencies": {
     "@types/node": "^20.10.0",
     "@types/react": "^18.2.0",
+    "esbuild-plugin-solid": "^0.6.0",
     "eslint": "^9.39.2",
     "solid-js": "^1.9.0",
     "tsup": "^8.0.1",
