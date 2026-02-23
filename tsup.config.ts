@@ -39,4 +39,27 @@ export default defineConfig([
     external: ['solid-js'],
     esbuildPlugins: [solidPlugin({ solid: { generate: 'dom' } })],
   },
+  // Relay utilities entry point
+  {
+    entry: ['src/relay/index.ts'],
+    format: ['cjs', 'esm'],
+    dts: true,
+    sourcemap: true,
+    target: 'es2018',
+    outDir: 'dist/relay',
+    treeshake: true,
+    splitting: false,
+  },
+  // Relay React integration entry point
+  {
+    entry: ['src/relay/react/index.ts'],
+    format: ['cjs', 'esm'],
+    dts: true,
+    sourcemap: true,
+    target: 'es2018',
+    outDir: 'dist/relay/react',
+    treeshake: true,
+    splitting: false,
+    external: ['react'],
+  },
 ]);

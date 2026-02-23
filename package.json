@@ -1,6 +1,6 @@
 {
   "name": "nostr-wot-sdk",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "description": "JavaScript/TypeScript SDK for querying Nostr Web of Trust",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "MIT",
@@ -58,6 +58,26 @@
         "types": "./dist/solid/index.d.cts",
         "default": "./dist/solid/index.cjs"
       }
+    },
+    "./relay": {
+      "import": {
+        "types": "./dist/relay/index.d.ts",
+        "default": "./dist/relay/index.js"
+      },
+      "require": {
+        "types": "./dist/relay/index.d.cts",
+        "default": "./dist/relay/index.cjs"
+      }
+    },
+    "./relay/react": {
+      "import": {
+        "types": "./dist/relay/react/index.d.ts",
+        "default": "./dist/relay/react/index.js"
+      },
+      "require": {
+        "types": "./dist/relay/react/index.d.cts",
+        "default": "./dist/relay/react/index.cjs"
+      }
     }
   },
   "files": [
@@ -87,13 +107,17 @@
   },
   "peerDependencies": {
     "react": ">=16.8.0",
-    "solid-js": ">=1.0.0"
+    "solid-js": ">=1.0.0",
+    "nostr-tools": ">=2.0.0"
   },
   "peerDependenciesMeta": {
     "react": {
       "optional": true
     },
     "solid-js": {
+      "optional": true
+    },
+    "nostr-tools": {
       "optional": true
     }
   },

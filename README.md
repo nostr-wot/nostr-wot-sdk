@@ -59,6 +59,7 @@ const hops = await wot.getDistance('def456...');
 - **Cross-Site Trust** — Extension provides same WoT data on all websites
 - **Offline Support** — Extension caches data locally for offline queries
 - **Batch Queries** — Check multiple pubkeys efficiently
+- **Relay Utilities** — Reusable relay pool, query batching, and stats tracking
 - **TypeScript** — Full type definitions included
 
 ## API Reference
@@ -442,6 +443,202 @@ ext.isChecking()   // Currently checking
 ext.isChecked()    // Check complete
 ext.refresh()      // Function to re-check extension availability
 ```
+
+## Relay Utilities
+
+The SDK includes a standalone relay subpackage for managing Nostr relay connections, batching queries, and tracking relay performance. These utilities are pool-agnostic and work with any `PoolLike` implementation (e.g. `SimplePool` from nostr-tools).
+
+```bash
+npm install nostr-wot-sdk nostr-tools
+```
+
+### Basic Usage
+
+```javascript
+import { QueryBatcher, RelayPool, RelayStats } from 'nostr-wot-sdk/relay';
+import { SimplePool } from 'nostr-tools';
+
+// Optional: track relay performance
+const stats = new RelayStats();
+await stats.init(); // works in-memory, or pass a persistence adapter
+
+// Create a relay pool
+const pool = new RelayPool({
+  urls: ['wss://relay.damus.io', 'wss://nos.lol'],
+  prioritizeUrls: (urls) => stats.getPrioritizedUrls(urls),
+  onStatusChange: (statuses) => console.log('Relay statuses:', statuses),
+});
+
+// Initialize with SimplePool
+pool.ensurePool(() => new SimplePool());
+
+// Query with automatic batching + progressive results
+const events = await pool.query(
+  { kinds: [1], limit: 50 },
+  { onUpdate: (partial) => renderNotes(partial) }
+);
+
+// Subscribe to live events
+const sub = pool.subscribe({ kinds: [1], since: Math.floor(Date.now() / 1000) }, {
+  onEvent: (event) => console.log('New note:', event.content),
+  onEose: () => console.log('Caught up'),
+});
+
+// Clean up
+sub.close();
+pool.destroy();
+stats.destroy();
+```
+
+### QueryBatcher
+
+Debounces and merges concurrent relay queries for efficiency. Queries made within the debounce window are batched together, compatible filters are merged, and results stream progressively.
+
+```javascript
+import { QueryBatcher } from 'nostr-wot-sdk/relay';
+import { SimplePool } from 'nostr-tools';
+
+const batcher = new QueryBatcher(new SimplePool(), {
+  debounceMs: 100,       // batch window (default: 100)
+  collectionWindowMs: 200, // wait after first event (default: 200)
+  maxWaitMs: 5000,       // hard timeout (default: 5000)
+});
+
+// These concurrent queries get merged into fewer relay requests
+const [profiles, contacts] = await Promise.all([
+  batcher.query(['wss://relay.damus.io'], { kinds: [0], authors: pubkeys }),
+  batcher.query(['wss://relay.damus.io'], { kinds: [3], authors: pubkeys }),
+]);
+
+// For user-initiated actions, bypass the debounce
+const notes = await batcher.queryImmediate(urls, { kinds: [1], limit: 20 });
+
+batcher.destroy();
+```
+
+### RelayStats
+
+Tracks per-relay latency, success rate, and applies exponential backoff to failing relays.
+
+```javascript
+import { RelayStats } from 'nostr-wot-sdk/relay';
+
+const stats = new RelayStats({ maxBackoffMs: 30000 });
+
+// Optional: load persisted stats (e.g. from IndexedDB)
+await stats.init({
+  load: async () => db.getAll('relayStats'),
+  save: async (data) => db.putAll('relayStats', data),
+});
+
+// Record relay performance
+stats.recordSuccess('wss://relay.damus.io', 150); // 150ms latency
+stats.recordFailure('wss://slow.relay.com', 'timeout');
+
+// Get URLs sorted by reliability + speed
+const prioritized = stats.getPrioritizedUrls([
+  'wss://relay.damus.io',
+  'wss://slow.relay.com',
+  'wss://nos.lol',
+]);
+
+// Check backoff status
+stats.isBackedOff('wss://slow.relay.com'); // true
+
+stats.destroy();
+```
+
+### RelayPool
+
+Manages pool lifecycle, subscriptions, publishing, and NIP-65 relay list fetching.
+
+```javascript
+import { RelayPool } from 'nostr-wot-sdk/relay';
+import { SimplePool } from 'nostr-tools';
+
+const pool = new RelayPool({
+  urls: ['wss://relay.damus.io', 'wss://nos.lol'],
+  authorChunkSize: 150, // chunk large author lists
+  onRelaysChanged: (urls) => saveToSettings(urls),
+});
+
+pool.ensurePool(() => new SimplePool());
+
+// Subscribe to notes from followed authors (auto-chunks large lists)
+const sub = pool.subscribeAuthors(followedPubkeys, { kinds: [1], since, limit: 200 },
+  (event) => addToFeed(event),
+  () => console.log('Caught up')
+);
+
+// Publish events
+await pool.publish(signedEvent);
+
+// Fetch a user's NIP-65 relay list
+const userRelays = await pool.fetchUserRelays(pubkey);
+
+// Manage relays
+pool.addRelay('wss://new.relay.com');
+pool.removeRelay('wss://old.relay.com');
+
+pool.destroy();
+```
+
+### React Integration
+
+```javascript
+import { RelayProvider, useRelayPool, useRelayStatuses } from 'nostr-wot-sdk/relay/react';
+import { SimplePool } from 'nostr-tools';
+
+function App() {
+  return (
+    <RelayProvider
+      urls={['wss://relay.damus.io', 'wss://nos.lol']}
+      createPool={() => new SimplePool()}
+      enableStats={true}
+    >
+      <Feed />
+    </RelayProvider>
+  );
+}
+
+function Feed() {
+  const pool = useRelayPool();
+  const { statuses, connectedCount } = useRelayStatuses();
+
+  useEffect(() => {
+    pool.query({ kinds: [1], limit: 30 }).then(setNotes);
+  }, [pool]);
+
+  return (
+    <div>
+      <span>{connectedCount} relays connected</span>
+      {/* render notes */}
+    </div>
+  );
+}
+```
+
+#### Provider Props
+
+| Prop | Type | Default | Description |
+|------|------|---------|-------------|
+| `urls` | `string[]` | required | Relay WebSocket URLs |
+| `createPool` | `() => PoolLike` | required | Factory to create pool instance |
+| `poolOptions` | `Partial<RelayPoolOptions>` | — | Options for RelayPool |
+| `batcherOptions` | `QueryBatcherOptions` | — | Options for QueryBatcher |
+| `statsPersistence` | `RelayStatsPersistence` | — | Persistence adapter for stats |
+| `statsOptions` | `RelayStatsOptions` | — | Options for RelayStats |
+| `enableStats` | `boolean` | `true` | Enable relay performance tracking |
+
+#### Available Hooks
+
+| Hook | Returns | Description |
+|------|---------|-------------|
+| `useRelayPool()` | `RelayPool` | Access the RelayPool instance |
+| `useQueryBatcher()` | `QueryBatcher` | Access the QueryBatcher instance |
+| `useRelayStats()` | `RelayStats \| null` | Access RelayStats (null if disabled) |
+| `useRelayStatuses()` | `{ statuses, connectedCount }` | Reactive connection statuses |
+| `useRelayContext()` | `RelayContextValue` | Full context with all instances |
 
 ## TypeScript
 
