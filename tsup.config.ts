@@ -62,4 +62,26 @@ export default defineConfig([
     splitting: false,
     external: ['react'],
   },
+  // Data layer (pure fetchers + parsers + outbox; no cache, no React)
+  {
+    entry: ['src/data/index.ts'],
+    format: ['cjs', 'esm'],
+    dts: true,
+    sourcemap: true,
+    target: 'es2018',
+    outDir: 'dist/data',
+    treeshake: true,
+    splitting: false,
+  },
+  // Optional SWR cache layer wrapping the data fetchers
+  {
+    entry: ['src/data/cache/index.ts'],
+    format: ['cjs', 'esm'],
+    dts: true,
+    sourcemap: true,
+    target: 'es2018',
+    outDir: 'dist/data/cache',
+    treeshake: true,
+    splitting: false,
+  },
 ]);

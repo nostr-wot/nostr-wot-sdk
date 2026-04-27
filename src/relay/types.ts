@@ -27,33 +27,35 @@ export interface SubCloser {
 }
 
 // Duck-typed pool interface (matches SimplePool from nostr-tools)
+// Uses `any` for filter/event params so SimplePool is directly assignable
+// without casting — the SDK handles type safety at its own API boundary.
 export interface PoolLike {
   subscribeManyEose(
     relays: string[],
-    filter: NostrFilter[],
+    filter: any,
     params: {
-      onevent: (e: NostrEvent) => void;
+      onevent: (e: any) => void;
       onclose?: (reasons?: string[]) => void;
       maxWait?: number;
     }
   ): SubCloser;
   subscribe(
     relays: string[],
-    filter: NostrFilter[],
+    filter: any,
     params: {
-      onevent: (e: NostrEvent) => void;
+      onevent: (e: any) => void;
       oneose?: () => void;
       onclose?: (reasons?: string[]) => void;
     }
   ): SubCloser;
   subscribeMap(
-    requests: { url: string; filter: NostrFilter }[],
+    requests: { url: string; filter: any }[],
     params: {
-      onevent: (e: NostrEvent) => void;
+      onevent: (e: any) => void;
       oneose?: () => void;
     }
   ): SubCloser;
-  publish(relays: string[], event: NostrEvent): Promise<string>[];
+  publish(relays: string[], event: any): Promise<any>[];
   listConnectionStatus?(): Map<string, boolean>;
   close(relays: string[]): void;
 }

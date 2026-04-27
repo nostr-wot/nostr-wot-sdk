@@ -1,6 +1,7 @@
 export { QueryBatcher } from './QueryBatcher';
 export { RelayPool } from './RelayPool';
 export { RelayStats } from './RelayStats';
+export { RelayManager, type RelayManagerOptions } from './RelayManager';
 
 export type {
   PoolLike,
