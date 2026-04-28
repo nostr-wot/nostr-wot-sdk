@@ -1,4 +1,5 @@
-import type { Event as NostrEvent } from "nostr-tools";
+import type { Event as NostrEvent, EventTemplate } from "nostr-tools";
+import type { NostrSigner } from "@nostr-wot/signers";
 import { fetchRelayList, getPool, sharedCoalescer } from "@nostr-wot/data";
 import {
   KIND_GIFT_WRAP,
@@ -10,6 +11,33 @@ import { ingestMessage } from "./store";
 import type { DMMessage, DMSession } from "./types";
 
 const KIND_NIP17_INBOX_RELAYS = 10050;
+export { KIND_NIP17_INBOX_RELAYS };
+
+/**
+ * Publish a kind-10050 event listing the relays the user wants to
+ * receive NIP-17 DMs on. Other clients sending us gift-wrapped DMs look
+ * up this event to know where to publish; without it, our DMs only
+ * arrive from senders who happen to share a relay with us.
+ *
+ * Single-shot: typically called once on DM-session bootstrap, or on
+ * signer attach.
+ */
+export async function publishInboxRelays(
+  signer: NostrSigner,
+  publishRelays: string[],
+  inboxRelays: string[],
+): Promise<NostrEvent> {
+  const template: EventTemplate = {
+    kind: KIND_NIP17_INBOX_RELAYS,
+    created_at: Math.floor(Date.now() / 1000),
+    content: "",
+    tags: inboxRelays.map((url) => ["relay", url]),
+  };
+  const event = await signer.signEvent(template);
+  const pool = getPool();
+  await Promise.allSettled(pool.publish(publishRelays, event));
+  return event;
+}
 
 /**
  * Look up the user's NIP-17 inbox relays (kind 10050). Other clients

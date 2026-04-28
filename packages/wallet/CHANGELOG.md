@@ -1,5 +1,33 @@
 # @nostr-wot/wallet
 
+## 0.1.1
+
+### Patch Changes
+
+- @nostr-wot/dm: lift reusable primitives out of obelisk so other clients don't reinvent them.
+
+  New in `@nostr-wot/dm/cache`:
+
+  - `publishInboxRelays(signer, publishRelays, inboxRelays)` — kind-10050 publish, companion to existing `fetchInboxRelays`
+  - `backfillInbox(session, opts?)` — paginated kind-1059 + NIP-04 historical walker for first-login partner discovery
+  - `setReadCursor` / `markRead` / `getReadCursor` / `getUnreadCount` / `getUnreadCounts` / `subscribeReadCursors` — device-local read-state tracking (never synced to relays)
+  - `detectScheme(messages)` — NIP-04 vs NIP-17 prediction from recent message slice
+  - `getOrCreateCacheKey(myPubkey, signer)` — XSS-safe per-account KEK (NIP-44-self-encrypted, imported as non-extractable AES-GCM key)
+  - `encryptToCache(key, str)` / `decryptFromCache(key, blob)` — at-rest crypto primitives
+  - `wrapStorageWithEncryption(storage, key)` — adapter that encrypts any `DMStorage` at rest
+  - `KIND_NIP17_INBOX_RELAYS` constant (10050)
+
+  New in `@nostr-wot/dm/react`:
+
+  - `useUnreadCount(myPubkey, partner)` — re-renders on cursor or message changes
+  - `useUnreadCounts(myPubkey)` — all unread counts at once
+  - `useReadCursors(myPubkey)` — raw cursor map
+
+  Documentation: every package now has a comprehensive README with full API surface, per-entrypoint examples, and TypeScript types. Published to npm.
+
+- Updated dependencies []:
+  - @nostr-wot/signers@0.1.1
+
 ## 0.1.0
 
 ### Minor Changes

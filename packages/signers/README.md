@@ -1,6 +1,6 @@
 # @nostr-wot/signers
 
-Signer abstractions for Nostr — one interface (`NostrSigner`), four backends:
+Signer abstractions for Nostr — one interface, four backends. Used by every other `@nostr-wot/*` package that needs to sign or decrypt.
 
 | Class | Backend | When to use |
 |---|---|---|
@@ -15,43 +15,49 @@ Signer abstractions for Nostr — one interface (`NostrSigner`), four backends:
 npm i @nostr-wot/signers nostr-tools
 ```
 
-## Use
-
-```ts
-import { Nip07Signer, Nip46Signer, PrivateKeySigner, type NostrSigner } from "@nostr-wot/signers";
-
-// Browser extension
-const signer: NostrSigner = new Nip07Signer();
-
-// Bunker (NIP-46)
-const signer = await Nip46Signer.fromBunkerUri("bunker://abc...?relay=wss://relay.x&secret=xxx");
-
-// Private key (tests, CLIs)
-const signer = new PrivateKeySigner("hex-or-uint8array-32-bytes");
-```
-
-Every signer implements:
+## The interface
 
 ```ts
 interface NostrSigner {
   getPublicKey(): Promise<string>;
   signEvent(template: EventTemplate): Promise<Event>;
-  nip04Encrypt?(pk: string, plain: string): Promise<string>;
-  nip04Decrypt?(pk: string, ct: string): Promise<string>;
-  nip44Encrypt?(pk: string, plain: string): Promise<string>;
-  nip44Decrypt?(pk: string, ct: string): Promise<string>;
+  nip04Encrypt?(pubkey: string, plaintext: string): Promise<string>;
+  nip04Decrypt?(pubkey: string, ciphertext: string): Promise<string>;
+  nip44Encrypt?(pubkey: string, plaintext: string): Promise<string>;
+  nip44Decrypt?(pubkey: string, ciphertext: string): Promise<string>;
   close?(): Promise<void> | void;
 }
 ```
 
-Encryption methods are optional — not every signer supports both NIP-04 and NIP-44. Check `typeof signer.nip44Encrypt === "function"` before calling.
+Encryption methods are optional — not every backend supports both NIP-04 and NIP-44. Check `typeof signer.nip44Encrypt === "function"` before calling.
 
-## NIP-46 specifics
-
-`Nip46Signer.fromBunkerUri` accepts the standard `bunker://` URI from your remote signer (Amber's QR pairing, Nsec.app's connection screen, etc.). It auto-generates an ephemeral client key; export and persist it via `signer.exportClientNsec()` so future sessions reuse the same client identity (the bunker remembers paired clients).
+## NIP-07 (browser extension)
 
 ```ts
-const signer = await Nip46Signer.fromBunkerUri(uri);
+import { Nip07Signer } from "@nostr-wot/signers";
+
+const signer = new Nip07Signer();          // detects window.nostr
+const pubkey = await signer.getPublicKey();
+const event = await signer.signEvent({
+  kind: 1,
+  created_at: Math.floor(Date.now() / 1000),
+  tags: [],
+  content: "hello",
+});
+```
+
+`Nip07Signer` is a thin wrapper around `window.nostr.*`. It throws synchronously if no extension is detected — wrap construction in a try/catch or check `Nip07Signer.isAvailable()` first.
+
+## NIP-46 (bunker)
+
+```ts
+import { Nip46Signer } from "@nostr-wot/signers";
+
+const signer = await Nip46Signer.fromBunkerUri(
+  "bunker://abc...?relay=wss://relay.x&secret=xxx",
+);
+
+// Persist client identity so future sessions reuse it
 localStorage.setItem("bunker-client-nsec", signer.exportClientNsec());
 
 // Later:
@@ -61,9 +67,47 @@ const signer = await Nip46Signer.fromBunkerUri(uri, {
 });
 ```
 
-## NIP-55 specifics
+`fromBunkerUri` accepts the standard `bunker://` URI (Amber's QR pairing, Nsec.app's connection screen, etc.) and auto-generates an ephemeral client key. Export it with `exportClientNsec()` and re-supply on next session — the bunker remembers paired clients by pubkey, so reusing the same client identity avoids re-authorization prompts.
 
-NIP-55 requires a native bridge to dispatch `nostrsigner:` intents. The SDK ships a thin wrapper but expects the host app to provide the transport (`Nip55Bridge`). Pure web pages can't use NIP-55 — fall back to NIP-07 / NIP-46.
+## NIP-55 (Android Amber)
+
+```ts
+import { Nip55Signer } from "@nostr-wot/signers";
+
+const signer = new Nip55Signer({ bridge: myAndroidBridge });
+```
+
+NIP-55 requires a native bridge to dispatch `nostrsigner:` intents. The SDK ships the protocol layer; the host app provides transport (`Nip55Bridge`). Pure web pages can't use NIP-55 — fall back to NIP-07 / NIP-46.
+
+## Private key (tests, CLIs, servers)
+
+```ts
+import { PrivateKeySigner } from "@nostr-wot/signers";
+
+const signer = new PrivateKeySigner("hex-or-uint8array-32-bytes");
+// or
+const signer = PrivateKeySigner.generate();
+```
+
+Supports all four encryption operations (NIP-04 + NIP-44). Use only when the key is loaded into a process you control — never expose this signer to untrusted scripts in a browser.
+
+## Composition
+
+The `NostrSigner` interface is what every other SDK package consumes. To swap backends, just construct a different signer:
+
+```ts
+import { uploadToBlossom } from "@nostr-wot/blossom";
+import { sealAndGiftWrap } from "@nostr-wot/dm";
+import { requestZapInvoice } from "@nostr-wot/wallet";
+
+const signer = new Nip07Signer();
+// or
+const signer = await Nip46Signer.fromBunkerUri(uri);
+
+await uploadToBlossom(file, { signer });
+await sealAndGiftWrap(signer, recipientPubkey, message);
+await requestZapInvoice(signer, { recipientPubkey, amountMsats });
+```
 
 ## License
 

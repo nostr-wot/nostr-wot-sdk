@@ -3,8 +3,34 @@ import type { DMMessage, DMSession, DMStorage } from "./types";
 
 export type { DMMessage, DMConversation, DMSession, DMStorage, SendDMOptions } from "./types";
 export { ingestMessage, getThread, getConversations, _sessionState, _resetSession } from "./store";
-export { subscribeInbox, fetchInboxRelays, relaysForPartner } from "./inbox";
+export {
+  subscribeInbox,
+  fetchInboxRelays,
+  publishInboxRelays,
+  relaysForPartner,
+  KIND_NIP17_INBOX_RELAYS,
+} from "./inbox";
 export { sendDM } from "./send";
+export { backfillInbox } from "./backfill";
+export type { BackfillOptions, BackfillResult } from "./backfill";
+export {
+  setReadCursor,
+  markRead,
+  getReadCursor,
+  getReadCursors,
+  getUnreadCount,
+  getUnreadCounts,
+  subscribeReadCursors,
+  detectScheme,
+  _resetReadCursors,
+} from "./read-cursors";
+export {
+  getOrCreateCacheKey,
+  encryptToCache,
+  decryptFromCache,
+  wrapStorageWithEncryption,
+  _resetCacheKeyState,
+} from "./encrypted-storage";
 
 /**
  * Bootstrap a DM session: hydrates persisted conversations (if storage

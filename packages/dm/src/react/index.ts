@@ -7,6 +7,10 @@ import {
   sendDM,
   persistDMSession,
   _sessionState,
+  getReadCursors,
+  getUnreadCount,
+  getUnreadCounts,
+  subscribeReadCursors,
   type DMConversation,
   type DMMessage,
   type DMSession,
@@ -110,5 +114,71 @@ export function useConversations(myPubkey: string | null): DMConversation[] {
       return state.conversations.get(state.myPubkey).value ?? [];
     },
     () => [],
+  );
+}
+
+/**
+ * Subscribe to the unread count for a single partner. Re-renders when
+ * either a new message lands or the read cursor advances.
+ */
+export function useUnreadCount(
+  myPubkey: string | null,
+  partnerPubkey: string | null,
+): number {
+  const state = myPubkey ? _sessionState(myPubkey) : null;
+  return useSyncExternalStore(
+    (cb) => {
+      if (!myPubkey || !partnerPubkey || !state) return () => {};
+      const offCursors = subscribeReadCursors(myPubkey, cb);
+      const offMessages = state.messages.subscribe(partnerPubkey, () => cb());
+      return () => {
+        offCursors();
+        offMessages();
+      };
+    },
+    () =>
+      myPubkey && partnerPubkey ? getUnreadCount(myPubkey, partnerPubkey) : 0,
+    () => 0,
+  );
+}
+
+/**
+ * Subscribe to all unread counts for `myPubkey`. Returns an object keyed
+ * by partner pubkey → count. Updates on cursor changes or new messages
+ * for any partner.
+ */
+export function useUnreadCounts(
+  myPubkey: string | null,
+): Record<string, number> {
+  const state = myPubkey ? _sessionState(myPubkey) : null;
+  return useSyncExternalStore(
+    (cb) => {
+      if (!myPubkey || !state) return () => {};
+      const offCursors = subscribeReadCursors(myPubkey, cb);
+      const offConv = state.conversations.subscribe(state.myPubkey, () => cb());
+      return () => {
+        offCursors();
+        offConv();
+      };
+    },
+    () => (myPubkey ? getUnreadCounts(myPubkey) : {}),
+    () => ({}),
+  );
+}
+
+/**
+ * Subscribe to the raw read-cursor map for `myPubkey`. Updates on every
+ * `setReadCursor` / `markRead` call.
+ */
+export function useReadCursors(
+  myPubkey: string | null,
+): Record<string, number> {
+  return useSyncExternalStore(
+    (cb) => {
+      if (!myPubkey) return () => {};
+      return subscribeReadCursors(myPubkey, cb);
+    },
+    () => (myPubkey ? getReadCursors(myPubkey) : {}),
+    () => ({}),
   );
 }
