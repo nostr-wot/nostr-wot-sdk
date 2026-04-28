@@ -1,102 +1,55 @@
-name: Create Release
+name: Release
 
 on:
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version bump type'
-        required: true
-        default: 'patch'
-        type: choice
-        options:
-          - patch
-          - minor
-          - major
-          - prepatch
-          - preminor
-          - premajor
-          - prerelease
-      preid:
-        description: 'Prerelease identifier (e.g., alpha, beta, rc)'
-        required: false
-        default: ''
-        type: string
+  push:
+    branches: [main]
+
+# Only one release run at a time so a queued workflow doesn't race the
+# version PR open by an earlier run.
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+permissions:
+  contents: write       # changesets writes version commits + tags
+  pull-requests: write  # opens / updates the "version packages" PR
+  id-token: write       # required for npm provenance attestation
 
 jobs:
   release:
+    name: Version PR or Publish
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0   # changesets needs full history for changelog
 
-      - name: Setup Node.js
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version: 20
+          registry-url: https://registry.npmjs.org/
 
-      - name: Configure Git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-      - name: Install dependencies
+      - name: Install
         run: npm ci
 
-      - name: Build
+      - name: Build all packages
         run: npm run build
 
-      - name: Type check
-        run: npm run typecheck
-
-      - name: Bump version
-        id: version
-        run: |
-          if [ -n "${{ github.event.inputs.preid }}" ]; then
-            NEW_VERSION=$(npm version ${{ github.event.inputs.version }} --preid=${{ github.event.inputs.preid }} --no-git-tag-version)
-          else
-            NEW_VERSION=$(npm version ${{ github.event.inputs.version }} --no-git-tag-version)
-          fi
-          echo "new_version=${NEW_VERSION}" >> $GITHUB_OUTPUT
-          echo "New version: ${NEW_VERSION}"
-
-      - name: Commit version bump
-        run: |
-          git add package.json package-lock.json
-          git commit -m "chore: release ${{ steps.version.outputs.new_version }}"
-          git push
-
-      - name: Create and push tag
-        run: |
-          git tag ${{ steps.version.outputs.new_version }}
-          git push origin ${{ steps.version.outputs.new_version }}
-
-      - name: Generate release notes
-        id: release_notes
-        run: |
-          # Get commits since last tag
-          LAST_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-          if [ -n "$LAST_TAG" ]; then
-            COMMITS=$(git log ${LAST_TAG}..HEAD --pretty=format:"- %s" --no-merges | head -50)
-          else
-            COMMITS=$(git log --pretty=format:"- %s" --no-merges | head -50)
-          fi
-
-          # Write to file to preserve newlines
-          echo "$COMMITS" > release_notes.txt
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+      # Two paths:
+      #   - Changesets present → opens / updates a "release" PR with bumped
+      #     versions + CHANGELOG entries. Nothing publishes yet.
+      #   - No changesets present (e.g. the release PR just merged) →
+      #     publishes everything that doesn't yet exist on npm at its
+      #     current version.
+      - name: Release PR or Publish
+        uses: changesets/action@v1
         with:
-          tag_name: ${{ steps.version.outputs.new_version }}
-          name: ${{ steps.version.outputs.new_version }}
-          body_path: release_notes.txt
-          draft: false
-          prerelease: ${{ contains(github.event.inputs.version, 'pre') }}
+          publish: npm run release
+          version: npm run version-packages
+          commit: "chore: release"
+          title: "chore: release"
+          createGithubReleases: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "true"

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://unpkg.com/@changesets/config@3.1.4/schema.json",
+  "changelog": [
+    "@changesets/changelog-github",
+    { "repo": "nostr-wot/nostr-wot-sdk" }
+  ],
+  "commit": false,
+  "fixed": [],
+  "linked": [["@nostr-wot/data", "@nostr-wot/relay", "@nostr-wot/wot", "nostr-wot-sdk"]],
+  "access": "public",
+  "baseBranch": "main",
+  "updateInternalDependencies": "patch",
+  "ignore": []
+}
