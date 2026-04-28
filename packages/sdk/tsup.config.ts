@@ -8,6 +8,9 @@ const COMMON = {
   treeshake: true,
   splitting: false,
   external: ['@nostr-wot/wot', '@nostr-wot/relay', '@nostr-wot/data', 'react', 'solid-js'],
+  esbuildOptions(o: { jsx?: string }) {
+    o.jsx = 'automatic';
+  },
 };
 
 export default defineConfig([

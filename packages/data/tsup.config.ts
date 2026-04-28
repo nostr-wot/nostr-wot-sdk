@@ -1,8 +1,15 @@
 import { defineConfig } from 'tsup';
 
+const JSX_AUTO = {
+  esbuildOptions(o: { jsx?: string }) {
+    o.jsx = 'automatic';
+  },
+};
+
 export default defineConfig([
   // Main entry: pure fetchers + parsers + outbox + pool
   {
+    ...JSX_AUTO,
     entry: ['src/index.ts'],
     format: ['cjs', 'esm'],
     dts: true,
@@ -15,6 +22,7 @@ export default defineConfig([
   },
   // Optional cache layer
   {
+    ...JSX_AUTO,
     entry: ['src/cache/index.ts'],
     format: ['cjs', 'esm'],
     dts: true,
@@ -24,8 +32,9 @@ export default defineConfig([
     treeshake: true,
     splitting: false,
   },
-  // React hooks (depends on cache)
+  // React hooks + NostrDataProvider
   {
+    ...JSX_AUTO,
     entry: ['src/react/index.ts'],
     format: ['cjs', 'esm'],
     dts: true,

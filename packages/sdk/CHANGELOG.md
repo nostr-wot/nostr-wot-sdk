@@ -1,5 +1,15 @@
 # nostr-wot-sdk
 
+## 0.8.2
+
+### Patch Changes
+
+- Build fix: tsup now emits the automatic JSX transform (`import { jsx } from 'react/jsx-runtime'`) instead of `React.createElement`, so providers work in Next.js / RSC environments without needing a top-level `import React from 'react'`.
+
+- Updated dependencies []:
+  - @nostr-wot/data@0.1.1
+  - @nostr-wot/wot@0.1.1
+
 ## 0.8.1
 
 ### Patch Changes

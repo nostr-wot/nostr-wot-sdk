@@ -1,5 +1,11 @@
 # @nostr-wot/data
 
+## 0.1.1
+
+### Patch Changes
+
+- Build fix: tsup now emits the automatic JSX transform (`import { jsx } from 'react/jsx-runtime'`) instead of `React.createElement`, so providers work in Next.js / RSC environments without needing a top-level `import React from 'react'`.
+
 ## 0.1.0
 
 ### Minor Changes
