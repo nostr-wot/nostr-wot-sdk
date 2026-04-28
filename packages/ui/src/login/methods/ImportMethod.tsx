@@ -2,21 +2,19 @@
 
 import { useState } from "react";
 import { nip19 } from "nostr-tools";
-import { PrivateKeySigner } from "@nostr-wot/signers";
-import { useLogin } from "@nostr-wot/data/react";
+import { PrivateKeySigner, type NostrSigner } from "@nostr-wot/signers";
 
 const REMEMBER_KEY = "@nostr-wot/ui:nsec";
 
 export function ImportMethod({
   onError,
-  onDone,
+  onAttached,
   onBack,
 }: {
   onError: (msg: string) => void;
-  onDone: () => void;
+  onAttached: (signer: NostrSigner, pubkey: string) => void | Promise<void>;
   onBack: () => void;
 }) {
-  const login = useLogin();
   const [value, setValue] = useState("");
   const [remember, setRemember] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -51,8 +49,8 @@ export function ImportMethod({
           /* ignore */
         }
       }
-      await login(signer);
-      onDone();
+      const pubkey = await signer.getPublicKey();
+      await onAttached(signer, pubkey);
     } catch (err) {
       onError(err instanceof Error ? err.message : String(err));
     } finally {

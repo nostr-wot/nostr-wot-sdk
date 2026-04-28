@@ -102,6 +102,20 @@ Sets `data-nui-root` on its wrapper element so the default stylesheet can scope 
     subtitle: "Pick how you'd like to sign in",
     methods: ["nip07", "nip46", "generate"],   // hide "import"
     hideAdvanced: true,
+    // Backend handshake against @nostr-wot/auth — handles challenge,
+    // signs with the active signer, persists the JWT cookie.
+    authBaseUrl: "/api/auth",
+    // Async hook — awaited; throw to keep the modal open with an error.
+    onLogin: async ({ signer, pubkey }) => {
+      analytics.track("login", { pubkey });
+    },
+    // Override the "Get an extension" CTA. Default points to nostr-wot.com.
+    noExtensionCta: <a href="/install">Install our extension</a>,
+    // Branding slots — render anywhere around the methods.
+    slots: {
+      header: <img src="/logo.svg" alt="" height={40} />,
+      footer: <p>By signing in you agree to our <a href="/tos">terms</a>.</p>,
+    },
   }}
 />
 ```
@@ -129,7 +143,13 @@ The inline form, for embedding in a page (no modal chrome):
   subtitle="Choose a method"
   methods={["nip07", "nip46", "generate", "import"]}
   hideAdvanced={false}
+  // Awaited; throw to keep the widget open with the error inline.
+  onLogin={async ({ signer, pubkey }) => {
+    await db.users.touch(pubkey);
+  }}
   onSuccess={() => router.push("/")}
+  // Backend integration — runs challenge → sign → verify against this URL.
+  authBaseUrl="/api/auth"
   // NIP-46 — render a nostrconnect:// QR by default; users can switch
   // to "Paste URI" for the bunker:// flow.
   nip46Mode="qr"
@@ -139,8 +159,36 @@ The inline form, for embedding in a page (no modal chrome):
   // Generate flow — show a profile-setup step + publish kind-0
   profileSetup
   profileRelays={["wss://relay.damus.io", "wss://nos.lol"]}
+  // Branding slots
+  slots={{
+    header: <Logo />,
+    footer: <Tos />,
+  }}
+  // CTA when no NIP-07 extension is detected. Default points to
+  // nostr-wot.com/download. Pass `false` to suppress entirely.
+  noExtensionCta={<InstallLinks />}
 />
 ```
+
+#### `onLogin` (awaited) vs `onSuccess` (fire-and-forget)
+
+`onLogin` runs *after* the signer is attached but *before* the widget signals success. Awaited: throwing keeps the widget open with the error in the inline `nui-error` slot. Use it for backend handshakes, profile fetches, audit logs.
+
+`onSuccess` runs after `onLogin` resolves. Use it for navigation, analytics events, or any "we're definitely done" side effects.
+
+Modal closes on success unless `closeOnSuccess={false}`.
+
+#### `authBaseUrl` — built-in `@nostr-wot/auth` integration
+
+When set, the widget automatically performs the NIP-98 challenge → sign → verify handshake:
+
+1. `POST {authBaseUrl}/challenge` → server returns a stateless challenge
+2. The active signer signs a kind-27235 event with the challenge
+3. `POST {authBaseUrl}/verify` with the signed event → server validates + sets the JWT cookie
+
+If the handshake fails, the error appears in the inline `nui-error` slot and the widget stays open. Pair with `@nostr-wot/auth` on the server (the `createNextHandlers` shim mounts cleanly in any App Router app).
+
+`rollbackOnAuthFailure` (default `false`): when `true`, a backend failure also unsets the local signer so the user starts fresh. Default off so the user can retry without re-signing (especially relevant for NIP-46 which requires a fresh approval per signature).
 
 #### NIP-46 modes
 

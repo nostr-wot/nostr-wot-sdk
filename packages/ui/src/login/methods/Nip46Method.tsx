@@ -1,31 +1,56 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Nip46Signer, type NostrConnectHandle } from "@nostr-wot/signers";
-import { nip19 } from "nostr-tools";
+import {
+  Nip46Signer,
+  type NostrConnectHandle,
+  type NostrSigner,
+} from "@nostr-wot/signers";
+import { generateSecretKey, getPublicKey, nip19 } from "nostr-tools";
 import QRCode from "qrcode";
-import { useLogin } from "@nostr-wot/data/react";
 
 const STORAGE_KEY = "@nostr-wot/ui:nip46";
 
-interface PersistedNip46 {
-  /** The bunker URI (when pairing started via paste). */
-  uri?: string;
-  /** The bunker pubkey + relays (when pairing started via nostrconnect QR). */
-  bunkerPubkey?: string;
-  relays?: string[];
-  clientNsec: string;
-}
+type Persisted =
+  | {
+      kind: "bunker";
+      uri: string;
+      clientNsec: string;
+    }
+  | {
+      kind: "nostrconnect";
+      bunkerPubkey: string;
+      relays: string[];
+      clientNsec: string;
+    };
 
-/** Read-only helper exported for the session-restore path. */
-export function readPersistedNip46(): PersistedNip46 | null {
+/** Saved either before pairing (clientNsec only — same key persists across attempts so the bunker remembers us) or after pairing (full record). */
+function readPersisted(): Persisted | null {
   if (typeof localStorage === "undefined") return null;
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as PersistedNip46) : null;
+    return raw ? (JSON.parse(raw) as Persisted) : null;
   } catch {
     return null;
   }
+}
+
+function writePersisted(p: Persisted): void {
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(p));
+  } catch {
+    /* ignore quota */
+  }
+}
+
+export function readPersistedNip46(): {
+  uri?: string;
+  bunkerPubkey?: string;
+  relays?: string[];
+  clientNsec: string;
+} | null {
+  return readPersisted();
 }
 
 export function clearPersistedNip46(): void {
@@ -42,25 +67,36 @@ const DEFAULT_NOSTRCONNECT_RELAYS = [
   "wss://relay.damus.io",
 ];
 
+/** Get-or-mint a stable client nsec across pairing attempts so the bunker
+ *  remembers us. Persisted under a sentinel key alongside the saved
+ *  pairing record. The full pairing is overwritten on success. */
+function getOrMintClientNsec(): string {
+  const existing = readPersisted();
+  if (existing?.clientNsec) return existing.clientNsec;
+  const sk = generateSecretKey();
+  return nip19.nsecEncode(sk);
+}
+
+function nsecToBytes(nsec: string): Uint8Array {
+  const decoded = nip19.decode(nsec);
+  if (decoded.type !== "nsec") throw new Error("Invalid nsec");
+  return decoded.data;
+}
+
 export interface Nip46MethodProps {
   onError: (msg: string) => void;
-  onDone: () => void;
+  onAttached: (signer: NostrSigner, pubkey: string) => void | Promise<void>;
   onBack?: () => void;
-  /** Skip the entry button and render the form/QR directly. */
   inline?: boolean;
-  /** Default tab when both modes are available. Default "qr". */
   defaultMode?: "qr" | "paste";
-  /** Relays to advertise on the nostrconnect QR. Defaults to nsec.app + damus. */
   nostrConnectRelays?: string[];
-  /** App metadata in the QR URI (name shown to the user during pairing). */
   metadata?: { name?: string; url?: string; description?: string; image?: string };
-  /** Permissions to request (NIP-46 perms string). */
   perms?: string;
 }
 
 export function Nip46Method({
   onError,
-  onDone,
+  onAttached,
   onBack,
   inline = false,
   defaultMode = "qr",
@@ -68,22 +104,18 @@ export function Nip46Method({
   metadata,
   perms,
 }: Nip46MethodProps) {
-  const login = useLogin();
   const [stage, setStage] = useState<"button" | "form">(inline ? "form" : "button");
   const [mode, setMode] = useState<"qr" | "paste">(defaultMode);
 
-  // Paste flow state
   const [uri, setUri] = useState("");
   const [pasting, setPasting] = useState(false);
 
-  // QR flow state
   const handleRef = useRef<NostrConnectHandle | null>(null);
   const [qrSvg, setQrSvg] = useState<string | null>(null);
   const [qrUri, setQrUri] = useState<string | null>(null);
   const [waiting, setWaiting] = useState(false);
   const [slowHint, setSlowHint] = useState(false);
 
-  // Auth-URL challenge banner (shared)
   const [authChallenge, setAuthChallenge] = useState<string | null>(null);
 
   const startQr = async () => {
@@ -91,8 +123,22 @@ export function Nip46Method({
     setSlowHint(false);
     setAuthChallenge(null);
     try {
+      // Mint or reuse a client nsec across attempts so the bunker
+      // remembers us if the user closes + reopens before pairing.
+      const clientNsec = getOrMintClientNsec();
+      const clientSk = nsecToBytes(clientNsec);
+      const clientPk = getPublicKey(clientSk);
+      writePersisted({
+        kind: "nostrconnect",
+        bunkerPubkey: "",
+        relays: nostrConnectRelays,
+        clientNsec,
+      });
+      void clientPk;
+
       const handle = Nip46Signer.startNostrConnect({
         relays: nostrConnectRelays,
+        clientSecretKey: clientSk,
         ...(metadata ? { metadata } : {}),
         ...(perms ? { perms } : {}),
         onAuthChallenge: (url) => setAuthChallenge(url),
@@ -110,21 +156,14 @@ export function Nip46Method({
       try {
         const signer = await handle.ready;
         clearTimeout(slowTimer);
-        const clientNsec = signer.exportClientNsec();
-        try {
-          localStorage.setItem(
-            STORAGE_KEY,
-            JSON.stringify({
-              bunkerPubkey: signer.bunkerPubkey,
-              relays: signer.relays,
-              clientNsec,
-            } satisfies PersistedNip46),
-          );
-        } catch {
-          /* ignore quota */
-        }
-        await login(signer);
-        onDone();
+        writePersisted({
+          kind: "nostrconnect",
+          bunkerPubkey: signer.bunkerPubkey,
+          relays: signer.relays,
+          clientNsec: signer.exportClientNsec(),
+        });
+        const pubkey = await signer.getPublicKey();
+        await onAttached(signer, pubkey);
       } catch (err) {
         clearTimeout(slowTimer);
         if (handleRef.current === handle) {
@@ -148,7 +187,6 @@ export function Nip46Method({
     setAuthChallenge(null);
   };
 
-  // Auto-start QR on mount when QR mode is the default
   useEffect(() => {
     if (stage !== "form" || mode !== "qr") return;
     if (qrSvg || waiting) return;
@@ -173,19 +211,9 @@ export function Nip46Method({
         onAuthChallenge: (url) => setAuthChallenge(url),
       });
       const clientNsec = signer.exportClientNsec();
-      try {
-        localStorage.setItem(
-          STORAGE_KEY,
-          JSON.stringify({
-            uri: trimmed,
-            clientNsec,
-          } satisfies PersistedNip46),
-        );
-      } catch {
-        /* ignore */
-      }
-      await login(signer);
-      onDone();
+      writePersisted({ kind: "bunker", uri: trimmed, clientNsec });
+      const pubkey = await signer.getPublicKey();
+      await onAttached(signer, pubkey);
     } catch (err) {
       onError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -224,7 +252,6 @@ export function Nip46Method({
         </button>
       )}
 
-      {/* Mode tabs */}
       <div className="nui-tabs" role="tablist">
         <button
           type="button"
@@ -356,28 +383,27 @@ export function Nip46Method({
   );
 }
 
-/** Helper for app-level silent-restore on mount. Returns null on any error. */
+/** Helper for app-level silent-restore on mount. Only fires for *paired*
+ *  records (full bunker URI or full nostrconnect record). Pre-pair
+ *  clientNsecs are kept to maintain the same client identity across
+ *  attempts but never restore a signer on their own. */
 export async function tryRestoreNip46(): Promise<Nip46Signer | null> {
-  const persisted = readPersistedNip46();
+  const persisted = readPersisted();
   if (!persisted) return null;
   try {
     const decoded = nip19.decode(persisted.clientNsec);
     if (decoded.type !== "nsec") return null;
-    if (persisted.uri) {
+    if (persisted.kind === "bunker" && persisted.uri) {
       return await Nip46Signer.fromBunkerUri(persisted.uri, {
         clientSecretKey: decoded.data,
       });
     }
-    if (persisted.bunkerPubkey && persisted.relays) {
-      // Reconstruct a signer that's already paired (no QR re-pair needed).
-      const handle = Nip46Signer.startNostrConnect({
-        relays: persisted.relays,
-        clientSecretKey: decoded.data,
-      });
-      // Emulate the post-pair state directly: cancel the pending pairing
-      // since we already know the bunker pubkey, and use the bunkerUri
-      // shape going forward. Cleanest path: build a synthetic bunker URI.
-      handle.cancel();
+    if (
+      persisted.kind === "nostrconnect" &&
+      persisted.bunkerPubkey &&
+      persisted.relays &&
+      persisted.relays.length > 0
+    ) {
       const fakeBunkerUri =
         `bunker://${persisted.bunkerPubkey}?` +
         persisted.relays.map((r) => `relay=${encodeURIComponent(r)}`).join("&");

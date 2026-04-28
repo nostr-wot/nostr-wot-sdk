@@ -7,23 +7,18 @@ import {
   getPublicKey,
   nip19,
 } from "nostr-tools";
-import { PrivateKeySigner } from "@nostr-wot/signers";
+import { PrivateKeySigner, type NostrSigner } from "@nostr-wot/signers";
 import { getPool } from "@nostr-wot/data";
-import { useLogin } from "@nostr-wot/data/react";
 
 const REMEMBER_KEY = "@nostr-wot/ui:nsec";
 
 export interface GenerateMethodProps {
   onError: (msg: string) => void;
-  onDone: () => void;
+  onAttached: (signer: NostrSigner, pubkey: string) => void | Promise<void>;
   onBack: () => void;
-  /**
-   * When true, after the user confirms the backup, ask for name / about
-   * / picture and publish a kind-0 event so their profile shows up
-   * across Nostr clients.
-   */
+  /** When true, asks for name/about/picture and publishes a kind-0 after the user backs up their key. */
   profileSetup?: boolean;
-  /** Relays to publish the profile to. Defaults to a tiny built-in set. */
+  /** Relays to publish the profile to. Defaults to a small built-in set. */
   profileRelays?: string[];
 }
 
@@ -36,18 +31,16 @@ const DEFAULT_PROFILE_RELAYS = [
 
 export function GenerateMethod({
   onError,
-  onDone,
+  onAttached,
   onBack,
   profileSetup = false,
   profileRelays = DEFAULT_PROFILE_RELAYS,
 }: GenerateMethodProps) {
-  const login = useLogin();
   const [acknowledged, setAcknowledged] = useState(false);
   const [remember, setRemember] = useState(false);
   const [step, setStep] = useState<"backup" | "profile">("backup");
   const [publishing, setPublishing] = useState(false);
 
-  // Profile fields
   const [name, setName] = useState("");
   const [about, setAbout] = useState("");
   const [picture, setPicture] = useState("");
@@ -79,8 +72,7 @@ export function GenerateMethod({
     URL.revokeObjectURL(url);
   };
 
-  const persistAndLogin = async () => {
-    const signer = new PrivateKeySigner(generated.sk);
+  const attach = async () => {
     if (remember) {
       try {
         localStorage.setItem(REMEMBER_KEY, generated.nsec);
@@ -88,7 +80,8 @@ export function GenerateMethod({
         /* ignore quota */
       }
     }
-    await login(signer);
+    const signer = new PrivateKeySigner(generated.sk);
+    await onAttached(signer, generated.pk);
   };
 
   const continueToNext = async () => {
@@ -97,8 +90,7 @@ export function GenerateMethod({
         setStep("profile");
         return;
       }
-      await persistAndLogin();
-      onDone();
+      await attach();
     } catch (err) {
       onError(err instanceof Error ? err.message : String(err));
     }
@@ -133,8 +125,7 @@ export function GenerateMethod({
           }
         }
       }
-      await persistAndLogin();
-      onDone();
+      await attach();
     } catch (err) {
       onError(err instanceof Error ? err.message : String(err));
     } finally {

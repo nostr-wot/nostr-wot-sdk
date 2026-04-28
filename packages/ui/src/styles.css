@@ -336,6 +336,40 @@
   50% { box-shadow: 0 0 0 4px color-mix(in oklab, #22c55e 18%, transparent); }
 }
 
+/* ─── No-extension CTA ─────────────────────────────────────── */
+.nui-no-extension-cta {
+  display: flex;
+  align-items: center;
+  gap: var(--nui-space);
+  padding: var(--nui-space);
+  border-radius: var(--nui-radius);
+  border: 1px solid var(--nui-border);
+  background: color-mix(in oklab, var(--nui-primary) 6%, transparent);
+  color: var(--nui-fg);
+  font: 500 13px var(--nui-font);
+  text-decoration: none;
+  transition: background 0.15s, border-color 0.15s;
+}
+.nui-no-extension-cta:hover {
+  border-color: var(--nui-primary);
+  background: color-mix(in oklab, var(--nui-primary) 12%, transparent);
+}
+.nui-no-extension-icon {
+  font-size: 22px;
+  flex-shrink: 0;
+}
+.nui-no-extension-title {
+  display: block;
+  font-weight: 600;
+}
+.nui-no-extension-hint {
+  display: block;
+  font-size: 12px;
+  color: var(--nui-muted);
+  font-weight: 400;
+  margin-top: 2px;
+}
+
 /* ─── Profile setup wizard ─────────────────────────────────── */
 .nui-profile-fields {
   display: flex;

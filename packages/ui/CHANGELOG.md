@@ -1,5 +1,17 @@
 # @nostr-wot/ui
 
+## 0.4.0
+
+### Minor Changes
+
+- @nostr-wot/ui: production-ready login bundle.
+
+  - **Awaited `onLogin` hook**. Replaces the fire-and-forget `onSuccess` semantic with `onLogin?: (args: { signer, pubkey }) => Promise<void>`. Awaited after the signer is attached but before the widget signals success — throw to keep the widget open with the error in the inline `nui-error` slot. `onSuccess` is preserved for fire-and-forget side effects after a successful `onLogin`.
+  - **Built-in backend handshake.** New `authBaseUrl` prop — when set, the widget runs the NIP-98 challenge → sign → verify flow against `@nostr-wot/auth` server endpoints automatically (including the JWT cookie set by the server). `rollbackOnAuthFailure` opt-in unsets the local signer if the backend rejects.
+  - **Branding slots.** New `slots={{ header, footer, beforeMethods, afterMethods }}` prop accepts arbitrary `ReactNode`s, rendered at the corresponding position around the method list.
+  - **`noExtensionCta` prop.** Renderable shown when `nip07` is in the method list but no `window.nostr` is detected. Default: a CTA pointing to https://nostr-wot.com/download. Pass `false` to suppress, or any `ReactNode` to fully customize.
+  - **Stable client identity for NIP-46.** The `nostrconnect://` flow now persists the client nsec on QR generation (not just on successful pair). If the user closes the tab and reopens before pairing, the next attempt reuses the same client pubkey so the bunker treats it as the same client (continued permissions, no re-prompt). The full pairing record is overwritten on success; `tryRestoreNip46()` only restores from full records.
+
 ## 0.3.0
 
 ### Minor Changes

@@ -1,6 +1,6 @@
 {
   "name": "@nostr-wot/ui",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Headless React UI for Nostr — login modal/widget, session provider, themable via CSS variables.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "MIT",

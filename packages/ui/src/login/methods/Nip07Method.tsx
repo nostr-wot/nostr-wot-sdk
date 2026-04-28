@@ -1,17 +1,19 @@
 "use client";
 
 import { useState } from "react";
-import { Nip07Signer, isNip07Available } from "@nostr-wot/signers";
-import { useLogin } from "@nostr-wot/data/react";
+import {
+  Nip07Signer,
+  isNip07Available,
+  type NostrSigner,
+} from "@nostr-wot/signers";
 
 export function Nip07Method({
   onError,
-  onDone,
+  onAttached,
 }: {
   onError: (msg: string) => void;
-  onDone: () => void;
+  onAttached: (signer: NostrSigner, pubkey: string) => void | Promise<void>;
 }) {
-  const login = useLogin();
   const [busy, setBusy] = useState(false);
 
   const click = async () => {
@@ -24,11 +26,8 @@ export function Nip07Method({
     setBusy(true);
     try {
       const signer = new Nip07Signer();
-      // Verify it works before committing — getPublicKey throws if the
-      // user denies the permission request.
-      await signer.getPublicKey();
-      await login(signer);
-      onDone();
+      const pubkey = await signer.getPublicKey();
+      await onAttached(signer, pubkey);
     } catch (err) {
       onError(err instanceof Error ? err.message : String(err));
     } finally {
