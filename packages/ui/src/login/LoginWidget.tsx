@@ -26,6 +26,21 @@ export interface LoginWidgetProps {
   onError?: (message: string) => void;
   /** Hide the "Advanced" disclosure for generate + import. Default false. */
   hideAdvanced?: boolean;
+  /**
+   * When true, the "Generate" flow shows a profile-setup step (name /
+   * about / picture) and publishes a kind-0 event. Default false.
+   */
+  profileSetup?: boolean;
+  /** Relays to publish the kind-0 to when `profileSetup` is on. */
+  profileRelays?: string[];
+  /** Default tab on the NIP-46 form: QR or paste-bunker-URI. Default "qr". */
+  nip46Mode?: "qr" | "paste";
+  /** Relays to advertise on the nostrconnect QR. */
+  nip46Relays?: string[];
+  /** App metadata embedded in the nostrconnect QR. */
+  nip46Metadata?: { name?: string; url?: string; description?: string; image?: string };
+  /** NIP-46 perms string (`sign_event:1,nip44_encrypt,...`). */
+  nip46Perms?: string;
   classes?: ClassSlots<LoginWidgetSlot>;
   styles?: StyleSlots<LoginWidgetSlot>;
 }
@@ -47,6 +62,12 @@ export function LoginWidget({
   onSuccess,
   onError,
   hideAdvanced = false,
+  profileSetup = false,
+  profileRelays,
+  nip46Mode = "qr",
+  nip46Relays,
+  nip46Metadata,
+  nip46Perms,
   classes,
   styles,
 }: LoginWidgetProps) {
@@ -213,9 +234,13 @@ export function LoginWidget({
       {view.kind === "nip46-form" && (
         <Nip46Method
           inline
+          defaultMode={nip46Mode}
           onError={onErr}
           onDone={onDone}
           onBack={() => setView({ kind: "picker" })}
+          {...(nip46Relays ? { nostrConnectRelays: nip46Relays } : {})}
+          {...(nip46Metadata ? { metadata: nip46Metadata } : {})}
+          {...(nip46Perms ? { perms: nip46Perms } : {})}
         />
       )}
       {view.kind === "generate" && (
@@ -223,6 +248,8 @@ export function LoginWidget({
           onError={onErr}
           onDone={onDone}
           onBack={() => setView({ kind: "picker" })}
+          profileSetup={profileSetup}
+          {...(profileRelays ? { profileRelays } : {})}
         />
       )}
       {view.kind === "import" && (

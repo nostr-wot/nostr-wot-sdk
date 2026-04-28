@@ -1,24 +1,56 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { generateSecretKey, getPublicKey, nip19 } from "nostr-tools";
+import {
+  finalizeEvent,
+  generateSecretKey,
+  getPublicKey,
+  nip19,
+} from "nostr-tools";
 import { PrivateKeySigner } from "@nostr-wot/signers";
+import { getPool } from "@nostr-wot/data";
 import { useLogin } from "@nostr-wot/data/react";
 
 const REMEMBER_KEY = "@nostr-wot/ui:nsec";
+
+export interface GenerateMethodProps {
+  onError: (msg: string) => void;
+  onDone: () => void;
+  onBack: () => void;
+  /**
+   * When true, after the user confirms the backup, ask for name / about
+   * / picture and publish a kind-0 event so their profile shows up
+   * across Nostr clients.
+   */
+  profileSetup?: boolean;
+  /** Relays to publish the profile to. Defaults to a tiny built-in set. */
+  profileRelays?: string[];
+}
+
+const DEFAULT_PROFILE_RELAYS = [
+  "wss://relay.damus.io",
+  "wss://nos.lol",
+  "wss://relay.nostr.band",
+  "wss://purplepag.es",
+];
 
 export function GenerateMethod({
   onError,
   onDone,
   onBack,
-}: {
-  onError: (msg: string) => void;
-  onDone: () => void;
-  onBack: () => void;
-}) {
+  profileSetup = false,
+  profileRelays = DEFAULT_PROFILE_RELAYS,
+}: GenerateMethodProps) {
   const login = useLogin();
   const [acknowledged, setAcknowledged] = useState(false);
   const [remember, setRemember] = useState(false);
+  const [step, setStep] = useState<"backup" | "profile">("backup");
+  const [publishing, setPublishing] = useState(false);
+
+  // Profile fields
+  const [name, setName] = useState("");
+  const [about, setAbout] = useState("");
+  const [picture, setPicture] = useState("");
 
   const generated = useMemo(() => {
     const sk = generateSecretKey();
@@ -47,22 +79,137 @@ export function GenerateMethod({
     URL.revokeObjectURL(url);
   };
 
-  const finish = async () => {
-    try {
-      const signer = new PrivateKeySigner(generated.sk);
-      if (remember) {
-        try {
-          localStorage.setItem(REMEMBER_KEY, generated.nsec);
-        } catch {
-          /* ignore quota */
-        }
+  const persistAndLogin = async () => {
+    const signer = new PrivateKeySigner(generated.sk);
+    if (remember) {
+      try {
+        localStorage.setItem(REMEMBER_KEY, generated.nsec);
+      } catch {
+        /* ignore quota */
       }
-      await login(signer);
+    }
+    await login(signer);
+  };
+
+  const continueToNext = async () => {
+    try {
+      if (profileSetup) {
+        setStep("profile");
+        return;
+      }
+      await persistAndLogin();
       onDone();
     } catch (err) {
       onError(err instanceof Error ? err.message : String(err));
     }
   };
+
+  const submitProfile = async (skipped: boolean) => {
+    setPublishing(true);
+    try {
+      if (!skipped) {
+        const content: Record<string, string> = {};
+        if (name.trim()) {
+          content.name = name.trim();
+          content.display_name = name.trim();
+        }
+        if (about.trim()) content.about = about.trim();
+        if (picture.trim()) content.picture = picture.trim();
+        if (Object.keys(content).length > 0) {
+          const event = finalizeEvent(
+            {
+              kind: 0,
+              created_at: Math.floor(Date.now() / 1000),
+              tags: [],
+              content: JSON.stringify(content),
+            },
+            generated.sk,
+          );
+          try {
+            const pool = getPool();
+            await Promise.allSettled(pool.publish(profileRelays, event));
+          } catch {
+            /* relay publish failures are non-fatal — the user is still logged in */
+          }
+        }
+      }
+      await persistAndLogin();
+      onDone();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPublishing(false);
+    }
+  };
+
+  if (step === "profile") {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>
+          Set up your profile
+        </h3>
+        <p style={{ margin: 0, fontSize: 13, color: "var(--nui-muted)" }}>
+          Optional. You can fill these in later from any Nostr client.
+        </p>
+
+        <div className="nui-profile-fields">
+          <span className="nui-profile-field-label">Display name</span>
+          <input
+            className="nui-input"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Satoshi"
+            autoFocus
+          />
+        </div>
+
+        <div className="nui-profile-fields">
+          <span className="nui-profile-field-label">About</span>
+          <input
+            className="nui-input"
+            value={about}
+            onChange={(e) => setAbout(e.target.value)}
+            placeholder="Builder, chef, occasional cyclist."
+          />
+        </div>
+
+        <div className="nui-profile-fields">
+          <span className="nui-profile-field-label">Picture URL</span>
+          <input
+            className="nui-input"
+            value={picture}
+            onChange={(e) => setPicture(e.target.value)}
+            placeholder="https://example.com/avatar.jpg"
+            type="url"
+          />
+        </div>
+
+        <button
+          type="button"
+          className="nui-login-button"
+          onClick={() => void submitProfile(false)}
+          disabled={publishing}
+          style={{ width: "100%", justifyContent: "center" }}
+        >
+          {publishing ? (
+            <>
+              Publishing <span className="nui-spinner" />
+            </>
+          ) : (
+            "Save profile and continue"
+          )}
+        </button>
+        <button
+          type="button"
+          className="nui-profile-skip"
+          onClick={() => void submitProfile(true)}
+          disabled={publishing}
+        >
+          Skip for now
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -140,7 +287,7 @@ export function GenerateMethod({
       <button
         type="button"
         className="nui-login-button"
-        onClick={finish}
+        onClick={continueToNext}
         disabled={!acknowledged}
         style={{ width: "100%", justifyContent: "center" }}
       >

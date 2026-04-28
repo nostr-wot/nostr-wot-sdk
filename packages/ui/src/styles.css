@@ -254,3 +254,106 @@
 @keyframes nui-spin {
   to { transform: rotate(360deg); }
 }
+
+/* ─── NIP-46 tabs + QR ─────────────────────────────────────── */
+.nui-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: var(--nui-radius);
+  background: var(--nui-input-bg);
+  border: 1px solid var(--nui-border);
+}
+.nui-tab {
+  flex: 1;
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  color: var(--nui-muted);
+  font: 500 13px var(--nui-font);
+  cursor: pointer;
+  border-radius: calc(var(--nui-radius) - 2px);
+  transition: background 0.15s, color 0.15s;
+}
+.nui-tab:hover { color: var(--nui-fg); }
+.nui-tab-active {
+  background: var(--nui-bg);
+  color: var(--nui-fg);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+.nui-qr-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+}
+.nui-qr {
+  padding: 12px;
+  background: #fff;
+  border-radius: calc(var(--nui-radius) * 1.25);
+  border: 1px solid var(--nui-border);
+}
+.nui-qr svg {
+  display: block;
+  width: 240px;
+  height: 240px;
+}
+.nui-qr-hint {
+  margin: 0;
+  color: var(--nui-muted);
+  font-size: 13px;
+  text-align: center;
+  max-width: 280px;
+}
+.nui-qr-slow-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--nui-muted);
+  text-align: center;
+  background: var(--nui-input-bg);
+  border-radius: var(--nui-radius);
+  padding: 8px 12px;
+  max-width: 280px;
+}
+
+.nui-auth-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--nui-space);
+  border-radius: var(--nui-radius);
+  background: color-mix(in oklab, #22c55e 16%, transparent);
+  color: var(--nui-fg);
+  text-decoration: none;
+  border: 1px solid color-mix(in oklab, #22c55e 36%, transparent);
+  animation: nui-pulse 1.6s ease-in-out infinite;
+}
+.nui-auth-banner:hover {
+  background: color-mix(in oklab, #22c55e 22%, transparent);
+}
+@keyframes nui-pulse {
+  50% { box-shadow: 0 0 0 4px color-mix(in oklab, #22c55e 18%, transparent); }
+}
+
+/* ─── Profile setup wizard ─────────────────────────────────── */
+.nui-profile-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.nui-profile-field-label {
+  font-size: 12px;
+  color: var(--nui-muted);
+  font-weight: 500;
+}
+.nui-profile-skip {
+  background: transparent;
+  border: none;
+  color: var(--nui-muted);
+  font: 13px var(--nui-font);
+  cursor: pointer;
+  align-self: center;
+  padding: 4px 8px;
+}
+.nui-profile-skip:hover { color: var(--nui-fg); }

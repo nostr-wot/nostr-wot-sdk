@@ -1,6 +1,6 @@
 {
   "name": "@nostr-wot/blossom",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Blossom file upload / mirror / delete helpers for Nostr. Content-addressed (sha256), kind-24242 BUD-01 auth, configurable server failover.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "MIT",
@@ -51,7 +51,7 @@
   },
   "dependencies": {
     "@noble/hashes": "^1.5.0",
-    "@nostr-wot/signers": "0.2.0"
+    "@nostr-wot/signers": "0.3.0"
   },
   "sideEffects": false
 }

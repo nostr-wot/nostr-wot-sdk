@@ -50,24 +50,53 @@ const event = await signer.signEvent({
 
 ## NIP-46 (bunker)
 
+Two pairing modes:
+
+### Bunker-initiated (paste a `bunker://` URI)
+
 ```ts
 import { Nip46Signer } from "@nostr-wot/signers";
 
 const signer = await Nip46Signer.fromBunkerUri(
   "bunker://abc...?relay=wss://relay.x&secret=xxx",
+  {
+    onAuthChallenge: (url) => {
+      // Bunker asked the user to approve at this URL — show a banner.
+      window.open(url, "_blank");
+    },
+  },
 );
 
 // Persist client identity so future sessions reuse it
 localStorage.setItem("bunker-client-nsec", signer.exportClientNsec());
-
-// Later:
-const savedNsec = localStorage.getItem("bunker-client-nsec");
-const signer = await Nip46Signer.fromBunkerUri(uri, {
-  clientSecretKey: nip19.decode(savedNsec).data as Uint8Array,
-});
 ```
 
 `fromBunkerUri` accepts the standard `bunker://` URI (Amber's QR pairing, Nsec.app's connection screen, etc.) and auto-generates an ephemeral client key. Export it with `exportClientNsec()` and re-supply on next session — the bunker remembers paired clients by pubkey, so reusing the same client identity avoids re-authorization prompts.
+
+### Client-initiated (`nostrconnect://` QR)
+
+The desktop generates the URI and shows it as a QR; the bunker scans it.
+
+```ts
+import { Nip46Signer } from "@nostr-wot/signers";
+
+const handle = Nip46Signer.startNostrConnect({
+  relays: ["wss://relay.nsec.app", "wss://relay.damus.io"],
+  metadata: { name: "MyApp", url: "https://myapp.com" },
+  perms: "sign_event:1,nip44_encrypt,nip44_decrypt",
+  pairTimeoutMs: 5 * 60_000,
+  onAuthChallenge: (url) => {/* user-approval banner */},
+});
+
+renderQr(handle.uri);          // nostrconnect://<clientPubkey>?...
+const signer = await handle.ready;  // resolves once the bunker pairs
+```
+
+`handle.cancel()` stops the pairing wait early. After `await handle.ready`, the signer behaves identically to one created via `fromBunkerUri` — `exportClientNsec()`, `signer.bunkerPubkey`, and `signer.relays` are all populated.
+
+### Auth-URL challenges
+
+The bunker may respond to any signing call with `result: "auth_url"` (meaning "ask the user to approve at this URL, then I'll send the real result"). Both `fromBunkerUri` and `startNostrConnect` accept an `onAuthChallenge(url)` callback — render the URL as a banner / link; the in-flight request stays pending until the bunker eventually responds with the real result or it times out.
 
 ## NIP-55 (Android Amber)
 

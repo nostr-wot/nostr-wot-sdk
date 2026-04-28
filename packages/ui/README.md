@@ -130,8 +130,30 @@ The inline form, for embedding in a page (no modal chrome):
   methods={["nip07", "nip46", "generate", "import"]}
   hideAdvanced={false}
   onSuccess={() => router.push("/")}
+  // NIP-46 — render a nostrconnect:// QR by default; users can switch
+  // to "Paste URI" for the bunker:// flow.
+  nip46Mode="qr"
+  nip46Relays={["wss://relay.nsec.app", "wss://relay.damus.io"]}
+  nip46Metadata={{ name: "MyApp", url: "https://myapp.com" }}
+  nip46Perms="sign_event:1,nip44_encrypt,nip44_decrypt"
+  // Generate flow — show a profile-setup step + publish kind-0
+  profileSetup
+  profileRelays={["wss://relay.damus.io", "wss://nos.lol"]}
 />
 ```
+
+#### NIP-46 modes
+
+The `nip46` method has two pairing flows, switchable via tabs in the UI:
+
+- **Scan QR** (`nostrconnect://`) — the SDK generates an ephemeral client key + QR; the user opens their signer app (Amber, Nsec.app, Keychat) and scans it. Default tab. Best UX for desktop ↔ phone.
+- **Paste URI** (`bunker://`) — the user copies a `bunker://` URI from their signer app and pastes it. Best when the signer is on the same device.
+
+Auth-URL prompts (`"Approve in your signer app"`) appear automatically as a green banner above the QR/form when the bunker requests user approval mid-flow. The banner links straight to the URL the bunker provided.
+
+#### Profile setup
+
+Pass `profileSetup` to extend the "Generate" flow with a second step asking for `name`, `about`, and `picture`. After the user fills (or skips), the SDK publishes a kind-0 event to `profileRelays` so the new account shows up across Nostr clients.
 
 ## Hooks
 
