@@ -1,0 +1,62 @@
+{
+  "name": "@nostr-wot/wallet",
+  "version": "0.1.0",
+  "description": "Nostr wallet helpers: NIP-47 NWC client (pay invoices, balance, info) and NIP-57 zap request builder.",
+  "author": "Leon Acosta <leon@nostr-wot.com>",
+  "license": "MIT",
+  "keywords": [
+    "nostr",
+    "wallet",
+    "nwc",
+    "nip-47",
+    "zap",
+    "nip-57",
+    "lnurl",
+    "lightning"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nostr-wot/nostr-wot-sdk.git",
+    "directory": "packages/wallet"
+  },
+  "homepage": "https://github.com/nostr-wot/nostr-wot-sdk/tree/main/packages/wallet",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@noble/hashes": "^1.5.0",
+    "@nostr-wot/signers": "0.1.0"
+  },
+  "peerDependencies": {
+    "nostr-tools": ">=2.0.0"
+  },
+  "sideEffects": false
+}

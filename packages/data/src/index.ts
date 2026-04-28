@@ -12,6 +12,15 @@ export {
 // without importing the cache module directly).
 export { configurePersistence } from "./cache/persistence";
 
+// Subscription coalescer (debounces concurrent reads into one REQ per relay-set)
+export {
+  RequestCoalescer,
+  sharedCoalescer,
+  type CoalescerEnqueue,
+  type CoalescerOptions,
+  type QuerySyncOptions,
+} from "./coalescer";
+
 // Outbox (NIP-65)
 export { relaysForAuthor, readRelaysForAuthor } from "./outbox";
 

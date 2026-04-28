@@ -1,0 +1,61 @@
+{
+  "name": "@nostr-wot/dm",
+  "version": "0.1.0",
+  "description": "Direct messages for Nostr: NIP-04 legacy, NIP-44 v2, and NIP-17 sealed messages with gift-wrap.",
+  "author": "Leon Acosta <leon@nostr-wot.com>",
+  "license": "MIT",
+  "keywords": [
+    "nostr",
+    "dm",
+    "direct-message",
+    "nip-04",
+    "nip-17",
+    "nip-44",
+    "gift-wrap",
+    "sealed"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nostr-wot/nostr-wot-sdk.git",
+    "directory": "packages/dm"
+  },
+  "homepage": "https://github.com/nostr-wot/nostr-wot-sdk/tree/main/packages/dm",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@nostr-wot/signers": "0.1.0"
+  },
+  "peerDependencies": {
+    "nostr-tools": ">=2.0.0"
+  },
+  "sideEffects": false
+}
