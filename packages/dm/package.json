@@ -1,6 +1,6 @@
 {
   "name": "@nostr-wot/dm",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Direct messages for Nostr: NIP-04 legacy, NIP-44 v2, and NIP-17 sealed messages with gift-wrap.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "MIT",
@@ -38,6 +38,26 @@
         "types": "./dist/index.d.cts",
         "default": "./dist/index.cjs"
       }
+    },
+    "./cache": {
+      "import": {
+        "types": "./dist/cache/index.d.ts",
+        "default": "./dist/cache/index.js"
+      },
+      "require": {
+        "types": "./dist/cache/index.d.cts",
+        "default": "./dist/cache/index.cjs"
+      }
+    },
+    "./react": {
+      "import": {
+        "types": "./dist/react/index.d.ts",
+        "default": "./dist/react/index.js"
+      },
+      "require": {
+        "types": "./dist/react/index.d.cts",
+        "default": "./dist/react/index.cjs"
+      }
     }
   },
   "files": [
@@ -52,10 +72,17 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
+    "@nostr-wot/data": "^0.3.0",
     "@nostr-wot/signers": "0.1.0"
   },
   "peerDependencies": {
-    "nostr-tools": ">=2.0.0"
+    "nostr-tools": ">=2.0.0",
+    "react": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
   },
   "sideEffects": false
 }

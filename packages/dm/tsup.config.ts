@@ -1,7 +1,11 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: ['src/index.ts'],
+  entry: {
+    index: 'src/index.ts',
+    'cache/index': 'src/cache/index.ts',
+    'react/index': 'src/react/index.ts',
+  },
   format: ['cjs', 'esm'],
   dts: true,
   clean: true,
@@ -10,4 +14,8 @@ export default defineConfig({
   outDir: 'dist',
   treeshake: true,
   splitting: false,
+  external: ['react', 'nostr-tools', '@nostr-wot/data', '@nostr-wot/signers'],
+  esbuildOptions(o) {
+    o.jsx = 'automatic';
+  },
 });

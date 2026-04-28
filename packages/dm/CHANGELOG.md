@@ -1,5 +1,15 @@
 # @nostr-wot/dm
 
+## 0.2.0
+
+### Minor Changes
+
+- Add `@nostr-wot/dm/cache` and `@nostr-wot/dm/react` subpaths.
+
+  `/cache` provides a per-session DM cache: `initDMSession`, `subscribeInbox` (auto-decrypts NIP-04 + NIP-17 gift wraps), `sendDM` (NIP-17 default with NIP-04 fallback), `fetchInboxRelays` (kind 10050), `relaysForPartner` (NIP-65 outbox), and pluggable `DMStorage` with built-in `localStorageDMStorage`.
+
+  `/react` ships `useDMSession`, `useThread`, and `useConversations` hooks built on `useSyncExternalStore` for SWR-style updates.
+
 ## 0.1.0
 
 ### Minor Changes
