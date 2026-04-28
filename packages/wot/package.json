@@ -1,10 +1,16 @@
 {
   "name": "@nostr-wot/wot",
-  "version": "0.0.0",
+  "version": "0.8.0",
   "description": "Web-of-Trust scoring + extension bridge for Nostr. WoT class, distance/scoring, browser extension integration, React + Solid hooks.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "MIT",
-  "keywords": ["nostr", "web-of-trust", "wot", "social-graph", "trust"],
+  "keywords": [
+    "nostr",
+    "web-of-trust",
+    "wot",
+    "social-graph",
+    "trust"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/nostr-wot/nostr-wot-sdk.git",
@@ -21,19 +27,41 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "import": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
-      "require": { "types": "./dist/index.d.cts", "default": "./dist/index.cjs" }
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     },
     "./react": {
-      "import": { "types": "./dist/react/index.d.ts", "default": "./dist/react/index.js" },
-      "require": { "types": "./dist/react/index.d.cts", "default": "./dist/react/index.cjs" }
+      "import": {
+        "types": "./dist/react/index.d.ts",
+        "default": "./dist/react/index.js"
+      },
+      "require": {
+        "types": "./dist/react/index.d.cts",
+        "default": "./dist/react/index.cjs"
+      }
     },
     "./solid": {
-      "import": { "types": "./dist/solid/index.d.ts", "default": "./dist/solid/index.js" },
-      "require": { "types": "./dist/solid/index.d.cts", "default": "./dist/solid/index.cjs" }
+      "import": {
+        "types": "./dist/solid/index.d.ts",
+        "default": "./dist/solid/index.js"
+      },
+      "require": {
+        "types": "./dist/solid/index.d.cts",
+        "default": "./dist/solid/index.cjs"
+      }
     }
   },
-  "files": ["dist", "README.md", "LICENSE"],
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
@@ -41,15 +69,19 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@nostr-wot/data": "0.0.0"
+    "@nostr-wot/data": "0.8.0"
   },
   "peerDependencies": {
     "react": ">=16.8.0",
     "solid-js": ">=1.0.0"
   },
   "peerDependenciesMeta": {
-    "react": { "optional": true },
-    "solid-js": { "optional": true }
+    "react": {
+      "optional": true
+    },
+    "solid-js": {
+      "optional": true
+    }
   },
   "sideEffects": false
 }

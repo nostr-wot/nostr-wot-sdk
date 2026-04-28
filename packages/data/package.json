@@ -1,6 +1,6 @@
 {
   "name": "@nostr-wot/data",
-  "version": "0.0.0",
+  "version": "0.8.0",
   "description": "Pure-function Nostr data layer: profiles, notes, threads, engagement, NIP-65 outbox. Optional SWR cache + React hooks.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "MIT",
@@ -20,19 +20,41 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "import": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
-      "require": { "types": "./dist/index.d.cts", "default": "./dist/index.cjs" }
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     },
     "./cache": {
-      "import": { "types": "./dist/cache/index.d.ts", "default": "./dist/cache/index.js" },
-      "require": { "types": "./dist/cache/index.d.cts", "default": "./dist/cache/index.cjs" }
+      "import": {
+        "types": "./dist/cache/index.d.ts",
+        "default": "./dist/cache/index.js"
+      },
+      "require": {
+        "types": "./dist/cache/index.d.cts",
+        "default": "./dist/cache/index.cjs"
+      }
     },
     "./react": {
-      "import": { "types": "./dist/react/index.d.ts", "default": "./dist/react/index.js" },
-      "require": { "types": "./dist/react/index.d.cts", "default": "./dist/react/index.cjs" }
+      "import": {
+        "types": "./dist/react/index.d.ts",
+        "default": "./dist/react/index.js"
+      },
+      "require": {
+        "types": "./dist/react/index.d.cts",
+        "default": "./dist/react/index.cjs"
+      }
     }
   },
-  "files": ["dist", "README.md", "LICENSE"],
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
@@ -44,7 +66,9 @@
     "react": ">=16.8.0"
   },
   "peerDependenciesMeta": {
-    "react": { "optional": true }
+    "react": {
+      "optional": true
+    }
   },
   "sideEffects": false
 }
