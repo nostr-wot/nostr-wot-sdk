@@ -1,5 +1,5 @@
 import { fastSingle } from "../internal/sub";
-import { DEFAULT_RELAYS } from "../pool";
+import { getDefaultRelays } from "../pool";
 
 export type NoteEntry = {
   id: string;
@@ -23,8 +23,8 @@ export async function fetchNote(
   hintRelays: string[] = [],
 ): Promise<NoteEntry | null> {
   const relays = hintRelays.length > 0
-    ? [...new Set([...hintRelays, ...DEFAULT_RELAYS])]
-    : DEFAULT_RELAYS;
+    ? [...new Set([...hintRelays, ...getDefaultRelays()])]
+    : getDefaultRelays();
   const event = await fastSingle(relays, { ids: [id] });
   if (!event) return null;
   return {

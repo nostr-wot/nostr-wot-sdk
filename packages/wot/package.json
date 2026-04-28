@@ -1,0 +1,55 @@
+{
+  "name": "@nostr-wot/wot",
+  "version": "0.1.0",
+  "description": "Web-of-Trust scoring + extension bridge for Nostr. WoT class, distance/scoring, browser extension integration, React + Solid hooks.",
+  "author": "Leon Acosta <leon@nostr-wot.com>",
+  "license": "MIT",
+  "keywords": ["nostr", "web-of-trust", "wot", "social-graph", "trust"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nostr-wot/nostr-wot-sdk.git",
+    "directory": "packages/wot"
+  },
+  "homepage": "https://github.com/nostr-wot/nostr-wot-sdk/tree/main/packages/wot",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+      "require": { "types": "./dist/index.d.cts", "default": "./dist/index.cjs" }
+    },
+    "./react": {
+      "import": { "types": "./dist/react/index.d.ts", "default": "./dist/react/index.js" },
+      "require": { "types": "./dist/react/index.d.cts", "default": "./dist/react/index.cjs" }
+    },
+    "./solid": {
+      "import": { "types": "./dist/solid/index.d.ts", "default": "./dist/solid/index.js" },
+      "require": { "types": "./dist/solid/index.d.cts", "default": "./dist/solid/index.cjs" }
+    }
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@nostr-wot/data": "0.1.0"
+  },
+  "peerDependencies": {
+    "react": ">=16.8.0",
+    "solid-js": ">=1.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react": { "optional": true },
+    "solid-js": { "optional": true }
+  },
+  "sideEffects": false
+}

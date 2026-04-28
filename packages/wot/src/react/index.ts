@@ -33,17 +33,5 @@ export type {
 // Re-export WoT class for convenience
 export { WoT } from '../wot';
 
-// SWR data hooks (profiles, notes, follows, threads, engagement, relay-list)
-// These are backed by `nostr-wot-sdk/data/cache`. The cache layer is also
-// usable directly for non-React consumers.
-export {
-  useProfile,
-  useNote,
-  useAuthorNotes,
-  useFollows,
-  useEngagement,
-  useEngagementBatch,
-  useThread,
-  loadThread,
-  useRelayList,
-} from './data-hooks';
+// Unified provider (WoT opt-in via `wot.enabled`)
+export { NostrSdkProvider, type NostrSdkProviderProps } from './nostr-sdk-provider';

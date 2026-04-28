@@ -1,6 +1,6 @@
 import type { Event } from "nostr-tools";
 import { fastCollect } from "../internal/sub";
-import { DEFAULT_RELAYS } from "../pool";
+import { getDefaultRelays } from "../pool";
 import { parseZapMsats } from "../parsers/kind9735";
 
 export type Engagement = {
@@ -20,7 +20,7 @@ const empty = (): Engagement => ({ reactionCount: 0, repostCount: 0, zapTotalSat
  */
 export async function fetchEngagement(
   noteIds: string[],
-  relays: string[] = DEFAULT_RELAYS,
+  relays: string[] = getDefaultRelays(),
 ): Promise<Map<string, Engagement>> {
   const out = new Map<string, Engagement>();
   for (const id of noteIds) out.set(id, empty());

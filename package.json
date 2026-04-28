@@ -1,119 +1,30 @@
 {
-  "name": "nostr-wot-sdk",
-  "version": "0.8.0",
-  "description": "JavaScript/TypeScript SDK for querying Nostr Web of Trust",
+  "name": "nostr-wot-sdk-monorepo",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Monorepo for the @nostr-wot/* packages.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "MIT",
-  "keywords": [
-    "nostr",
-    "web-of-trust",
-    "wot",
-    "social-graph",
-    "trust",
-    "decentralized"
-  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/nostr-wot/nostr-wot-sdk.git"
   },
-  "bugs": {
-    "url": "https://github.com/nostr-wot/nostr-wot-sdk/issues"
-  },
   "homepage": "https://github.com/nostr-wot/nostr-wot-sdk#readme",
-  "publishConfig": {
-    "access": "public",
-    "registry": "https://registry.npmjs.org/"
-  },
   "type": "module",
-  "main": "./dist/index.cjs",
-  "module": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "import": {
-        "types": "./dist/index.d.ts",
-        "default": "./dist/index.js"
-      },
-      "require": {
-        "types": "./dist/index.d.cts",
-        "default": "./dist/index.cjs"
-      }
-    },
-    "./react": {
-      "import": {
-        "types": "./dist/react/index.d.ts",
-        "default": "./dist/react/index.js"
-      },
-      "require": {
-        "types": "./dist/react/index.d.cts",
-        "default": "./dist/react/index.cjs"
-      }
-    },
-    "./solid": {
-      "import": {
-        "types": "./dist/solid/index.d.ts",
-        "default": "./dist/solid/index.js"
-      },
-      "require": {
-        "types": "./dist/solid/index.d.cts",
-        "default": "./dist/solid/index.cjs"
-      }
-    },
-    "./relay": {
-      "import": {
-        "types": "./dist/relay/index.d.ts",
-        "default": "./dist/relay/index.js"
-      },
-      "require": {
-        "types": "./dist/relay/index.d.cts",
-        "default": "./dist/relay/index.cjs"
-      }
-    },
-    "./relay/react": {
-      "import": {
-        "types": "./dist/relay/react/index.d.ts",
-        "default": "./dist/relay/react/index.js"
-      },
-      "require": {
-        "types": "./dist/relay/react/index.d.cts",
-        "default": "./dist/relay/react/index.cjs"
-      }
-    },
-    "./data": {
-      "import": {
-        "types": "./dist/data/index.d.ts",
-        "default": "./dist/data/index.js"
-      },
-      "require": {
-        "types": "./dist/data/index.d.cts",
-        "default": "./dist/data/index.cjs"
-      }
-    },
-    "./data/cache": {
-      "import": {
-        "types": "./dist/data/cache/index.d.ts",
-        "default": "./dist/data/cache/index.js"
-      },
-      "require": {
-        "types": "./dist/data/cache/index.d.cts",
-        "default": "./dist/data/cache/index.cjs"
-      }
-    }
-  },
-  "files": [
-    "dist",
-    "README.md",
-    "CHANGELOG.md",
-    "LICENSE"
+  "workspaces": [
+    "packages/data",
+    "packages/relay",
+    "packages/wot",
+    "packages/sdk"
   ],
   "scripts": {
-    "build": "tsup",
-    "dev": "tsup --watch",
-    "test": "vitest",
-    "test:run": "vitest run",
-    "lint": "eslint src --ext .ts,.tsx",
-    "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run build"
+    "build": "npm run build -w @nostr-wot/data && npm run build -w @nostr-wot/relay && npm run build -w @nostr-wot/wot && npm run build -w nostr-wot-sdk",
+    "dev": "npm run dev -ws --if-present",
+    "test": "npm run test -ws --if-present",
+    "test:run": "npm run test:run -ws --if-present",
+    "typecheck": "npm run typecheck -ws --if-present",
+    "lint": "npm run lint -ws --if-present",
+    "clean": "rm -rf packages/*/dist"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
@@ -121,29 +32,10 @@
     "esbuild-plugin-solid": "^0.6.0",
     "eslint": "^9.39.2",
     "nostr-tools": "^2.23.3",
+    "react": "^18.2.0",
     "solid-js": "^1.9.0",
     "tsup": "^8.0.1",
     "typescript": "^5.3.0",
     "vitest": "^4.0.18"
-  },
-  "peerDependencies": {
-    "nostr-tools": ">=2.0.0",
-    "react": ">=16.8.0",
-    "solid-js": ">=1.0.0"
-  },
-  "peerDependenciesMeta": {
-    "react": {
-      "optional": true
-    },
-    "solid-js": {
-      "optional": true
-    },
-    "nostr-tools": {
-      "optional": true
-    }
-  },
-  "engines": {
-    "node": ">=14.0.0"
-  },
-  "sideEffects": false
+  }
 }

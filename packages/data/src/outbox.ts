@@ -1,4 +1,4 @@
-import { DEFAULT_RELAYS } from "./pool";
+import { getDefaultRelays } from "./pool";
 import { fetchRelayList } from "./fetchers/relay-list";
 
 /**
@@ -17,7 +17,7 @@ import { fetchRelayList } from "./fetchers/relay-list";
  */
 export async function relaysForAuthor(
   pubkey: string,
-  defaults: string[] = DEFAULT_RELAYS,
+  defaults: string[] = getDefaultRelays(),
 ): Promise<string[]> {
   try {
     const list = await fetchRelayList(pubkey, defaults);
@@ -34,7 +34,7 @@ export async function relaysForAuthor(
  */
 export async function readRelaysForAuthor(
   pubkey: string,
-  defaults: string[] = DEFAULT_RELAYS,
+  defaults: string[] = getDefaultRelays(),
 ): Promise<string[]> {
   try {
     const list = await fetchRelayList(pubkey, defaults);

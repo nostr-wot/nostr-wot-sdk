@@ -1,5 +1,16 @@
 // Pool + relay defaults
-export { getPool, setPool, resetPool, DEFAULT_RELAYS, PROFILE_AGGREGATORS, DEFAULT_TIMEOUT_MS } from "./pool";
+export {
+  getPool, setPool, resetPool,
+  getDefaultRelays, setDefaultRelays,
+  getProfileAggregators, setProfileAggregators,
+  DEFAULT_TIMEOUT_MS,
+  // Deprecated direct constants kept for back-compat
+  DEFAULT_RELAYS, PROFILE_AGGREGATORS,
+} from "./pool";
+
+// Cache configuration (re-exported so callers can configure persistence
+// without importing the cache module directly).
+export { configurePersistence } from "./cache/persistence";
 
 // Outbox (NIP-65)
 export { relaysForAuthor, readRelaysForAuthor } from "./outbox";

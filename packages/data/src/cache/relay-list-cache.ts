@@ -3,7 +3,7 @@ import { singleFlight } from "./inflight";
 import { readPersisted, writePersisted } from "./persistence";
 import { fetchRelayList } from "../fetchers/relay-list";
 import type { RelayListEntry } from "../parsers/kind10002";
-import { DEFAULT_RELAYS } from "../pool";
+import { getDefaultRelays } from "../pool";
 
 const BUCKET = "relay-list";
 const store = createKeyedObservable<string, RelayListEntry>();
@@ -45,7 +45,7 @@ export async function getRelayList(pubkey: string): Promise<RelayListEntry | nul
 export function relaysForAuthorSync(pubkey: string): string[] {
   const slot = store.get(pubkey);
   if (slot.value && slot.value.write.length > 0) {
-    return [...new Set([...slot.value.write, ...DEFAULT_RELAYS])];
+    return [...new Set([...slot.value.write, ...getDefaultRelays()])];
   }
-  return DEFAULT_RELAYS;
+  return getDefaultRelays();
 }

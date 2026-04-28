@@ -1,6 +1,6 @@
 import type { Event } from "nostr-tools";
 import { fastNewest } from "../internal/sub";
-import { DEFAULT_RELAYS, PROFILE_AGGREGATORS } from "../pool";
+import { getDefaultRelays, getProfileAggregators } from "../pool";
 import { parseKind0, type ProfileEntry } from "../parsers/kind0";
 import { relaysForAuthor } from "../outbox";
 
@@ -21,9 +21,9 @@ export async function fetchProfile(
   const targetRelays = relays
     ? relays
     : [...new Set([
-        ...PROFILE_AGGREGATORS,
-        ...DEFAULT_RELAYS,
-        ...(await relaysForAuthor(pubkey).catch(() => DEFAULT_RELAYS)),
+        ...getProfileAggregators(),
+        ...getDefaultRelays(),
+        ...(await relaysForAuthor(pubkey).catch(() => getDefaultRelays())),
       ])];
   const event = await fastNewest(targetRelays, { kinds: [0], authors: [pubkey] });
   return event ? parseKind0(event) : null;
@@ -46,9 +46,9 @@ export function streamProfile(
     const targetRelays = relays
       ? relays
       : [...new Set([
-          ...PROFILE_AGGREGATORS,
-          ...DEFAULT_RELAYS,
-          ...(await relaysForAuthor(pubkey).catch(() => DEFAULT_RELAYS)),
+          ...getProfileAggregators(),
+          ...getDefaultRelays(),
+          ...(await relaysForAuthor(pubkey).catch(() => getDefaultRelays())),
         ])];
     if (cancelled) return;
 

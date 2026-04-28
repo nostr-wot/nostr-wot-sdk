@@ -1,5 +1,5 @@
 import { fastNewest } from "../internal/sub";
-import { DEFAULT_RELAYS } from "../pool";
+import { getDefaultRelays } from "../pool";
 import { parseRelayList, type RelayListEntry } from "../parsers/kind10002";
 
 /**
@@ -8,7 +8,7 @@ import { parseRelayList, type RelayListEntry } from "../parsers/kind10002";
  */
 export async function fetchRelayList(
   pubkey: string,
-  relays: string[] = DEFAULT_RELAYS,
+  relays: string[] = getDefaultRelays(),
 ): Promise<RelayListEntry | null> {
   const event = await fastNewest(relays, { kinds: [10002], authors: [pubkey] });
   return event ? parseRelayList(event) : null;

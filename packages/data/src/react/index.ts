@@ -18,12 +18,12 @@ import {
   getRelayList,
   type AuthorNotesEntry,
   type ThreadEntry,
-} from "../data/cache";
-import type { ProfileEntry } from "../data/parsers/kind0";
-import type { NoteEntry } from "../data/fetchers/note";
-import type { FollowsEntry } from "../data/fetchers/follows";
-import type { Engagement } from "../data/fetchers/engagement";
-import type { RelayListEntry } from "../data/parsers/kind10002";
+} from "../cache";
+import type { ProfileEntry } from "../parsers/kind0";
+import type { NoteEntry } from "../fetchers/note";
+import type { FollowsEntry } from "../fetchers/follows";
+import type { Engagement } from "../fetchers/engagement";
+import type { RelayListEntry } from "../parsers/kind10002";
 
 export function useProfile(pubkey: string | null): ProfileEntry | null {
   const store = _profileStore();
