@@ -1,5 +1,12 @@
 # @nostr-wot/wot
 
+## 0.1.5
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @nostr-wot/data@0.4.0
+
 ## 0.1.4
 
 ### Patch Changes

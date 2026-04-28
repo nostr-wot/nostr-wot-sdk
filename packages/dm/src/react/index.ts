@@ -16,10 +16,12 @@ import {
   type DMSession,
 } from "../cache";
 import type { NostrSigner } from "@nostr-wot/signers";
+import { useSigner as useSessionSigner } from "@nostr-wot/data/react";
 import type { DMStorage, SendDMOptions } from "../cache/types";
 
 export interface UseDMSessionArgs {
-  signer: NostrSigner | null;
+  /** Override the session signer. If omitted, reads from `<NostrSessionProvider>`. */
+  signer?: NostrSigner | null;
   relays: string[];
   storage?: DMStorage;
   discoverInboxRelays?: boolean;
@@ -35,21 +37,23 @@ export function useDMSession(args: UseDMSessionArgs): {
   session: DMSession | null;
   sendDM: (partner: string, content: string, opts?: SendDMOptions) => Promise<void>;
 } {
+  const ctxSigner = useSessionSigner() as NostrSigner | null;
+  const signer = args.signer === undefined ? ctxSigner : args.signer;
   const [session, setSession] = useState<DMSession | null>(null);
   const teardownRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    if (!args.signer) {
+    if (!signer) {
       setSession(null);
       return;
     }
     void (async () => {
-      const myPubkey = await args.signer!.getPublicKey();
+      const myPubkey = await signer.getPublicKey();
       if (cancelled) return;
       const built = await initDMSession({
         myPubkey,
-        signer: args.signer!,
+        signer,
         relays: args.relays,
         ...(args.storage ? { storage: args.storage } : {}),
         ...(args.discoverInboxRelays !== undefined
@@ -66,7 +70,7 @@ export function useDMSession(args: UseDMSessionArgs): {
       teardownRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [args.signer]);
+  }, [signer]);
 
   const send = useMemo(() => {
     return async (partner: string, content: string, opts?: SendDMOptions) => {

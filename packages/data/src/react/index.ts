@@ -138,3 +138,17 @@ export function useRelayList(pubkey: string | null): RelayListEntry | null {
 
 // Provider for configuring relays / aggregators / cache from React
 export { NostrDataProvider, type NostrDataProviderProps } from './nostr-data-provider';
+
+// Session context — shared mount point for the active signer + pubkey.
+// Other @nostr-wot/* packages and apps read auth state from here.
+export {
+  NostrSessionProvider,
+  useSession,
+  useSigner,
+  usePubkey,
+  useLogin,
+  useLogout,
+  type SessionSigner,
+  type SessionState,
+  type NostrSessionProviderProps,
+} from './session-context';
