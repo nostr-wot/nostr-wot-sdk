@@ -122,7 +122,11 @@ Supports all four encryption operations (NIP-04 + NIP-44). Use only when the key
 
 ## Adapting an NDK signer
 
-If your app already uses NDK (`@nostr-dev-kit/ndk`), wrap any `NDKSigner` once and reuse it across the entire SDK:
+If your app already uses NDK (`@nostr-dev-kit/ndk`), this package ships adapters in both directions so you can mix `@nostr-wot/*` packages with NDK call sites without rewriting your auth layer.
+
+### NDK → NostrSigner (`ndkSignerAsNostrSigner`)
+
+Wrap any `NDKSigner` to use it across `@nostr-wot/*` packages:
 
 ```ts
 import { ndkSignerAsNostrSigner } from "@nostr-wot/signers";
@@ -136,7 +140,19 @@ const signer = ndkSignerAsNostrSigner({ ndk, NDKEvent });
 // signer is a NostrSigner; pass it to any @nostr-wot/* package.
 ```
 
-The adapter is type-loose w.r.t. NDK so this package doesn't pull NDK as a dependency — you supply the `NDKEvent` constructor at call time. Compatible with NDK ≥ 2.10 (which added the third `scheme` argument to `encrypt`/`decrypt` for NIP-44). Older NDK versions still work for NIP-04 only.
+### NostrSigner → NDK (`nostrSignerAsNdkSigner`)
+
+The reverse direction — useful when you migrate an NDK app's login UI to `@nostr-wot/ui`'s `<LoginModal>` but keep the rest of the app on NDK. The new modal hands you a `NostrSigner`; wrap it back to NDK and assign to your existing `ndk.signer`:
+
+```ts
+import { nostrSignerAsNdkSigner } from "@nostr-wot/signers";
+import { NDKUser, type NDKSigner } from "@nostr-dev-kit/ndk";
+
+const wrapped = await nostrSignerAsNdkSigner(nostrSigner, { NDKUser });
+ndk.signer = wrapped as unknown as NDKSigner;
+```
+
+Both adapters are type-loose w.r.t. NDK so this package doesn't pull NDK as a dependency — you supply the `NDKEvent` / `NDKUser` constructors at call time when you want real NDK instances back. Compatible with NDK ≥ 2.10 for NIP-44 support.
 
 ## Composition
 

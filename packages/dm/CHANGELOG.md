@@ -1,5 +1,12 @@
 # @nostr-wot/dm
 
+## 0.4.3
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @nostr-wot/signers@0.4.0
+
 ## 0.4.2
 
 ### Patch Changes

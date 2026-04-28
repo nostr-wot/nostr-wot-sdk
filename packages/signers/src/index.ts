@@ -10,9 +10,13 @@ export {
 export { Nip55Signer, type Nip55Bridge } from "./nip55";
 export {
   ndkSignerAsNostrSigner,
+  nostrSignerAsNdkSigner,
   type NdkLike,
   type NdkSignerLike,
   type NdkEventCtor,
   type NdkEventLike,
   type NdkAdapterOptions,
+  type NdkUserLike,
+  type NdkSignerOut,
+  type NostrAsNdkOptions,
 } from "./ndk-adapter";

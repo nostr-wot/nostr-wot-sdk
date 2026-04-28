@@ -1,5 +1,12 @@
 # @nostr-wot/auth
 
+## 2.0.0
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @nostr-wot/signers@0.4.0
+
 ## 1.0.0
 
 ### Patch Changes

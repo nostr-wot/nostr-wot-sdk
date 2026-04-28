@@ -1,5 +1,25 @@
 # @nostr-wot/signers
 
+## 0.4.0
+
+### Minor Changes
+
+- @nostr-wot/signers: ship `nostrSignerAsNdkSigner` — the reverse direction of `ndkSignerAsNostrSigner`.
+
+  Wraps any `NostrSigner` to satisfy NDK's `NDKSigner` interface. Useful when migrating an NDK-backed app's login UI to `@nostr-wot/ui`'s `<LoginModal>` while keeping the rest of the app's call sites (DMs, posts, profile updates) on NDK — wrap the new signer once and assign to `ndk.signer`.
+
+  ```ts
+  import { nostrSignerAsNdkSigner } from "@nostr-wot/signers";
+  import { NDKUser, type NDKSigner } from "@nostr-dev-kit/ndk";
+
+  const wrapped = await nostrSignerAsNdkSigner(nostrSigner, { NDKUser });
+  ndk.signer = wrapped as unknown as NDKSigner;
+  ```
+
+  Pubkey is resolved synchronously up front so the resulting signer can be used by NDK code that depends on the sync `pubkey` getter. Encryption/decryption are conditional — calling `encrypt(...,'nip44')` on a wrapper whose underlying signer doesn't implement NIP-44 throws.
+
+  Type-loose w.r.t. NDK (no transitive dep) — caller supplies `NDKUser` constructor when real NDKUser instances are needed.
+
 ## 0.3.0
 
 ### Minor Changes
