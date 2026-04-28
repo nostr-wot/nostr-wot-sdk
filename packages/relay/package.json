@@ -1,6 +1,6 @@
 {
   "name": "@nostr-wot/relay",
-  "version": "0.8.0",
+  "version": "0.1.0",
   "description": "Standalone Nostr relay utilities: pool management, query batching, stats, low-level helpers.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "MIT",
@@ -60,5 +60,14 @@
       "optional": true
     }
   },
-  "sideEffects": false
+  "sideEffects": false,
+  "keywords": [
+    "nostr",
+    "relay",
+    "websocket",
+    "pool",
+    "batcher",
+    "nostr-tools",
+    "low-level"
+  ]
 }

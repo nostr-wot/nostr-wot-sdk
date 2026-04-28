@@ -135,3 +135,6 @@ export function useRelayList(pubkey: string | null): RelayListEntry | null {
     () => null,
   );
 }
+
+// Provider for configuring relays / aggregators / cache from React
+export { NostrDataProvider, type NostrDataProviderProps } from './nostr-data-provider';

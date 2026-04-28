@@ -32,6 +32,3 @@ export type {
 
 // Re-export WoT class for convenience
 export { WoT } from '../wot';
-
-// Unified provider (WoT opt-in via `wot.enabled`)
-export { NostrSdkProvider, type NostrSdkProviderProps } from './nostr-sdk-provider';

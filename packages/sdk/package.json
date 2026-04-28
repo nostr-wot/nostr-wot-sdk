@@ -1,13 +1,21 @@
 {
   "name": "nostr-wot-sdk",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Meta-package re-exporting @nostr-wot/{wot,relay,data}. Existing imports keep working; new code should depend on the scoped packages directly.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "MIT",
   "keywords": [
     "nostr",
     "web-of-trust",
-    "wot"
+    "wot",
+    "sdk",
+    "react-hooks",
+    "social-graph",
+    "trust",
+    "decentralized",
+    "data",
+    "outbox",
+    "nip-65"
   ],
   "repository": {
     "type": "git",
@@ -106,9 +114,9 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@nostr-wot/data": "0.8.0",
-    "@nostr-wot/relay": "0.8.0",
-    "@nostr-wot/wot": "0.8.0"
+    "@nostr-wot/data": "^0.1.0",
+    "@nostr-wot/relay": "^0.1.0",
+    "@nostr-wot/wot": "^0.1.0"
   },
   "peerDependencies": {
     "react": ">=16.8.0",
