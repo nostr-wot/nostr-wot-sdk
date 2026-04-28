@@ -1,5 +1,26 @@
 # @nostr-wot/dm
 
+## 0.4.0
+
+### Minor Changes
+
+- @nostr-wot/dm: follow-aware eviction, auto-persist, and lifecycle helpers.
+
+  - `setFollowSet(myPubkey, set | null)` / `getFollowSet` / `subscribeFollowSet` — register the user's follow list so eviction can protect active partners. Cold-start contract: never calling this leaves all partners protected.
+  - `evictIfNeeded(myPubkey, cap?)` — drop oldest non-followed messages once the cap is exceeded. Followed partners are always preserved.
+  - `initDMSession({ ..., autoPersist?, autoPersistDebounceMs?, evictionCap? })` — debounced auto-save and per-mutation eviction. `autoPersist` defaults to `true` when a `storage` is provided.
+  - `closeDMSession(session)` — stop auto-persist + eviction subscriptions.
+  - `clearDMSession(myPubkey, { storage?, clearStorage? })` — wipe per-account state on logout / account-switch.
+
+  @nostr-wot/signers: NDK adapter.
+
+  - `ndkSignerAsNostrSigner({ ndk, NDKEvent })` — wraps any `NDKSigner` to satisfy the `NostrSigner` interface. NDK is not a dependency; the caller supplies the `NDKEvent` constructor at call time. Lets NDK-using apps adopt `@nostr-wot/*` without rewriting their auth layer.
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @nostr-wot/signers@0.2.0
+
 ## 0.3.0
 
 ### Minor Changes

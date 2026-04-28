@@ -165,6 +165,49 @@ const indexedDBStorage: DMStorage = {
 };
 ```
 
+### Auto-persist + eviction
+
+When you pass a `storage` to `initDMSession`, the session auto-persists on a debounce (default 500ms) after every cache mutation. Set `autoPersist: false` for manual control, or tune the debounce with `autoPersistDebounceMs`.
+
+After each mutation the session also calls `evictIfNeeded(myPubkey, evictionCap)` (default cap 2000). Eviction is **a no-op until you register a follow set** — without one, every partner is treated as protected:
+
+```ts
+import { setFollowSet } from "@nostr-wot/dm/cache";
+import { fetchFollows } from "@nostr-wot/data";
+
+const follows = await fetchFollows(myPubkey);
+setFollowSet(myPubkey, new Set(follows.pubkeys));   // enables eviction
+// or pass null to explicitly mark "follows un-hydrated → protect everything"
+setFollowSet(myPubkey, null);
+```
+
+Followed partners are never evicted; oldest non-followed messages drop first once the cap is exceeded.
+
+### Logout / account switch
+
+```ts
+import { closeDMSession, clearDMSession } from "@nostr-wot/dm/cache";
+
+closeDMSession(session);                               // stop subscriptions
+await clearDMSession(myPubkey, { storage, clearStorage: true }); // wipe state
+```
+
+### Adapting an NDK signer
+
+If you already have an NDK-based app, wrap your `NDKSigner` once and use the SDK end-to-end:
+
+```ts
+import { ndkSignerAsNostrSigner } from "@nostr-wot/signers";
+import { NDKEvent } from "@nostr-dev-kit/ndk";
+
+const signer = ndkSignerAsNostrSigner({
+  ndk,
+  NDKEvent,
+});
+
+await initDMSession({ myPubkey, signer, relays });
+```
+
 ---
 
 ## Layer 3 — React (`/react`)
@@ -221,10 +264,12 @@ function Thread({ myPubkey, partnerPubkey }) {
 ### `@nostr-wot/dm/cache`
 | Export | Purpose |
 |---|---|
-| `initDMSession({ myPubkey, signer, relays, storage?, discoverInboxRelays? })` | Bootstrap |
+| `initDMSession({ myPubkey, signer, relays, storage?, discoverInboxRelays?, autoPersist?, autoPersistDebounceMs?, evictionCap? })` | Bootstrap + hydrate + auto-persist + eviction |
+| `closeDMSession(session)` | Tear down subscriptions |
+| `clearDMSession(myPubkey, { storage?, clearStorage? })` | Wipe per-account state |
 | `subscribeInbox(session)` | Live decrypt loop; returns teardown |
 | `sendDM(session, partner, content, { scheme? })` | Publish + local-echo |
-| `persistDMSession(session)` | Snapshot to storage |
+| `persistDMSession(session)` | Manual snapshot to storage |
 | `backfillInbox(session, opts?)` | Historical walker |
 | `fetchInboxRelays(pubkey, fallback)` | Resolve kind 10050 |
 | `publishInboxRelays(signer, publishRelays, inboxRelays)` | Publish kind 10050 |
@@ -232,6 +277,8 @@ function Thread({ myPubkey, partnerPubkey }) {
 | `setReadCursor`, `markRead`, `getReadCursor`, `getReadCursors` | Read-state |
 | `getUnreadCount`, `getUnreadCounts`, `subscribeReadCursors` | Unread API |
 | `detectScheme(messages)` | NIP-04 vs NIP-17 prediction |
+| `setFollowSet`, `getFollowSet`, `subscribeFollowSet` | Follow set for eviction |
+| `evictIfNeeded(myPubkey, cap?)` | Manual follow-aware LRU pass |
 | `getOrCreateCacheKey(myPubkey, signer)` | KEK derivation |
 | `encryptToCache(key, str)`, `decryptFromCache(key, blob)` | At-rest crypto |
 | `wrapStorageWithEncryption(storage, key)` | At-rest `DMStorage` adapter |

@@ -91,6 +91,24 @@ const signer = PrivateKeySigner.generate();
 
 Supports all four encryption operations (NIP-04 + NIP-44). Use only when the key is loaded into a process you control — never expose this signer to untrusted scripts in a browser.
 
+## Adapting an NDK signer
+
+If your app already uses NDK (`@nostr-dev-kit/ndk`), wrap any `NDKSigner` once and reuse it across the entire SDK:
+
+```ts
+import { ndkSignerAsNostrSigner } from "@nostr-wot/signers";
+import NDK, { NDKEvent, NDKNip07Signer } from "@nostr-dev-kit/ndk";
+
+const ndk = new NDK({ explicitRelayUrls: ["wss://relay.damus.io"] });
+ndk.signer = new NDKNip07Signer();
+await ndk.connect();
+
+const signer = ndkSignerAsNostrSigner({ ndk, NDKEvent });
+// signer is a NostrSigner; pass it to any @nostr-wot/* package.
+```
+
+The adapter is type-loose w.r.t. NDK so this package doesn't pull NDK as a dependency — you supply the `NDKEvent` constructor at call time. Compatible with NDK ≥ 2.10 (which added the third `scheme` argument to `encrypt`/`decrypt` for NIP-44). Older NDK versions still work for NIP-04 only.
+
 ## Composition
 
 The `NostrSigner` interface is what every other SDK package consumes. To swap backends, just construct a different signer:

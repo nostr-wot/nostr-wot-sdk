@@ -42,6 +42,8 @@ export interface DMSession {
   storage?: DMStorage;
   /** Auto-discover the user's NIP-17 inbox relays (kind 10050). */
   discoverInboxRelays?: boolean;
+  /** Internal: teardown for auto-persist subscription. Set by initDMSession. */
+  _autoPersistOff?: () => void;
 }
 
 /**
