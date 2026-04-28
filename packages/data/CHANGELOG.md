@@ -1,5 +1,11 @@
 # @nostr-wot/data
 
+## 0.2.0
+
+### Minor Changes
+
+- `getAuthorNotes` and `loadMoreAuthorNotes` now stream entry updates as each note arrives (not only after EOSE-from-all). Components subscribed via `useAuthorNotes` see rows fill in incrementally — no more waiting for the slowest relay.
+
 ## 0.1.1
 
 ### Patch Changes

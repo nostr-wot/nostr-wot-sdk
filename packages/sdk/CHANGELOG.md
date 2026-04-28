@@ -1,5 +1,15 @@
 # nostr-wot-sdk
 
+## 0.8.3
+
+### Patch Changes
+
+- `getAuthorNotes` and `loadMoreAuthorNotes` now stream entry updates as each note arrives (not only after EOSE-from-all). Components subscribed via `useAuthorNotes` see rows fill in incrementally — no more waiting for the slowest relay.
+
+- Updated dependencies []:
+  - @nostr-wot/data@0.2.0
+  - @nostr-wot/wot@0.1.2
+
 ## 0.8.2
 
 ### Patch Changes
