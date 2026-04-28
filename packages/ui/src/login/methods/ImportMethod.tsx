@@ -3,8 +3,8 @@
 import { useState } from "react";
 import { nip19 } from "nostr-tools";
 import { PrivateKeySigner, type NostrSigner } from "@nostr-wot/signers";
-
-const REMEMBER_KEY = "@nostr-wot/ui:nsec";
+import { SIGNER_STORAGE_KEY_NSEC } from "../../signer-storage";
+import { useSignerStorage } from "../../signer-storage-context";
 
 export function ImportMethod({
   onError,
@@ -15,6 +15,7 @@ export function ImportMethod({
   onAttached: (signer: NostrSigner, pubkey: string) => void | Promise<void>;
   onBack: () => void;
 }) {
+  const storage = useSignerStorage();
   const [value, setValue] = useState("");
   const [remember, setRemember] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -44,7 +45,7 @@ export function ImportMethod({
       const signer = new PrivateKeySigner(secretKey);
       if (remember) {
         try {
-          localStorage.setItem(REMEMBER_KEY, nsec);
+          await storage.setItem(SIGNER_STORAGE_KEY_NSEC, nsec);
         } catch {
           /* ignore */
         }

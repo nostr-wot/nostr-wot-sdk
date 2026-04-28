@@ -1,5 +1,16 @@
 # @nostr-wot/ui
 
+## 0.5.0
+
+### Minor Changes
+
+- @nostr-wot/ui: pluggable signer storage + method discriminator on `onLogin`.
+
+  - **`SignerStorage` adapter.** New `signerStorage?` prop on `<NostrSessionProvider>` lets apps swap the default plaintext-localStorage persistence for any backing — encrypted-at-rest with a WebAuthn-pinned key, IndexedDB AES-GCM, server-side, you name it. The same instance is consumed by every login method and the auto-restore path. Sync or async methods both work.
+  - New exports: `SignerStorage` type, `localStorageSignerStorage` (default), `useSignerStorage()` hook for custom slot rendering, and key constants `SIGNER_STORAGE_KEY_NIP46` / `SIGNER_STORAGE_KEY_NSEC` for adapters that want method-aware encryption schemes.
+  - `tryRestoreNip46` / `tryRestoreGeneratedOrImported` / `clearPersistedNip46` / `clearPersistedNsec` now accept an optional `SignerStorage` first argument (default: localStorage). Existing callers keep working.
+  - **`onLogin` discriminator.** `onLogin` now receives `{ signer, pubkey, method }` where `method` is `"nip07" | "nip46" | "generate" | "import"`. Lets consumers run method-specific follow-ups (e.g. an extension upsell only after `generate`) without needing to inspect the signer instance.
+
 ## 0.4.0
 
 ### Minor Changes

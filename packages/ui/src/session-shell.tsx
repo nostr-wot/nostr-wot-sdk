@@ -9,6 +9,14 @@ import {
   type SessionSigner,
 } from "@nostr-wot/data/react";
 import {
+  localStorageSignerStorage,
+  type SignerStorage,
+} from "./signer-storage";
+import {
+  SignerStorageProvider,
+  useSignerStorage,
+} from "./signer-storage-context";
+import {
   tryRestoreNip46,
   clearPersistedNip46,
 } from "./login/methods/Nip46Method";
@@ -25,6 +33,14 @@ export interface NostrSessionProviderProps extends BaseProviderProps {
    * Disable if your app handles signer construction itself.
    */
   autoRestore?: boolean;
+  /**
+   * Pluggable storage for persisted login state (NIP-46 pairing, remembered
+   * nsec). Default: plaintext localStorage. Apps that need encrypted-at-rest
+   * (WebAuthn-pinned KEK, IndexedDB AES-GCM, …) implement `SignerStorage`
+   * and pass it here. The same instance is consumed by `tryRestoreNip46`,
+   * `tryRestoreGeneratedOrImported`, and the login methods.
+   */
+  signerStorage?: SignerStorage;
 }
 
 /**
@@ -33,9 +49,9 @@ export interface NostrSessionProviderProps extends BaseProviderProps {
  *
  *   - Sets `data-nui-root` (and `data-nui-theme` when forced) on the
  *     wrapper so the default stylesheet can scope its CSS variables.
+ *   - Provides the `SignerStorage` adapter to all login methods.
  *   - On mount, attempts to silently re-attach the user's previous
- *     signer (NIP-46 from saved bunker URI; remembered nsec). Skips if
- *     no method was previously persisted.
+ *     signer using the same storage. Skips if no record is found.
  *
  * If you don't import `@nostr-wot/ui/styles.css`, the `data-nui-root`
  * attribute is harmless — components still render, just unstyled.
@@ -43,18 +59,21 @@ export interface NostrSessionProviderProps extends BaseProviderProps {
 export function NostrSessionProvider({
   theme = "system",
   autoRestore = true,
+  signerStorage = localStorageSignerStorage,
   children,
   ...rest
 }: NostrSessionProviderProps) {
   return (
     <BaseProvider {...rest}>
-      <div
-        data-nui-root=""
-        {...(theme !== "system" ? { "data-nui-theme": theme } : {})}
-      >
-        {autoRestore && <AutoRestore />}
-        {children}
-      </div>
+      <SignerStorageProvider storage={signerStorage}>
+        <div
+          data-nui-root=""
+          {...(theme !== "system" ? { "data-nui-theme": theme } : {})}
+        >
+          {autoRestore && <AutoRestore />}
+          {children}
+        </div>
+      </SignerStorageProvider>
     </BaseProvider>
   );
 }
@@ -63,6 +82,7 @@ export function NostrSessionProvider({
 function AutoRestore() {
   const { signer } = useSession();
   const login = useLogin();
+  const storage = useSignerStorage();
 
   useEffect(() => {
     if (signer) return; // already authed
@@ -70,22 +90,22 @@ function AutoRestore() {
     void (async () => {
       // Order: NIP-46 first (no prompt cost), then nsec (only if user
       // explicitly opted in).
-      const ndk = await tryRestoreNip46();
+      const remote = await tryRestoreNip46(storage);
       if (cancelled) return;
-      if (ndk) {
+      if (remote) {
         try {
-          await login(ndk as unknown as SessionSigner);
+          await login(remote as unknown as SessionSigner);
         } catch {
-          clearPersistedNip46();
+          await clearPersistedNip46(storage);
         }
         return;
       }
-      const stored = tryRestoreGeneratedOrImported();
+      const stored = await tryRestoreGeneratedOrImported(storage);
       if (cancelled || !stored) return;
       try {
         await login(stored as unknown as SessionSigner);
       } catch {
-        clearPersistedNsec();
+        await clearPersistedNsec(storage);
       }
     })();
     return () => {

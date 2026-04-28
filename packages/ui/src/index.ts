@@ -31,6 +31,16 @@ export {
   tryRestoreGeneratedOrImported,
 } from "./login/methods/GenerateMethod";
 
+// Pluggable signer storage — apps with stronger at-rest requirements
+// (encrypted IDB, WebAuthn-pinned KEK, etc.) implement this interface.
+export {
+  localStorageSignerStorage,
+  SIGNER_STORAGE_KEY_NIP46,
+  SIGNER_STORAGE_KEY_NSEC,
+  type SignerStorage,
+} from "./signer-storage";
+export { useSignerStorage } from "./signer-storage-context";
+
 // Primitives + types for advanced consumers
 export { Modal, type ModalProps } from "./primitives/Modal";
 export type {

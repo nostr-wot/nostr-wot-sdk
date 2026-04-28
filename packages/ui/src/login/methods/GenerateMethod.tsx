@@ -9,8 +9,12 @@ import {
 } from "nostr-tools";
 import { PrivateKeySigner, type NostrSigner } from "@nostr-wot/signers";
 import { getPool } from "@nostr-wot/data";
-
-const REMEMBER_KEY = "@nostr-wot/ui:nsec";
+import {
+  localStorageSignerStorage,
+  SIGNER_STORAGE_KEY_NSEC,
+  type SignerStorage,
+} from "../../signer-storage";
+import { useSignerStorage } from "../../signer-storage-context";
 
 export interface GenerateMethodProps {
   onError: (msg: string) => void;
@@ -36,6 +40,7 @@ export function GenerateMethod({
   profileSetup = false,
   profileRelays = DEFAULT_PROFILE_RELAYS,
 }: GenerateMethodProps) {
+  const storage = useSignerStorage();
   const [acknowledged, setAcknowledged] = useState(false);
   const [remember, setRemember] = useState(false);
   const [step, setStep] = useState<"backup" | "profile">("backup");
@@ -75,7 +80,7 @@ export function GenerateMethod({
   const attach = async () => {
     if (remember) {
       try {
-        localStorage.setItem(REMEMBER_KEY, generated.nsec);
+        await storage.setItem(SIGNER_STORAGE_KEY_NSEC, generated.nsec);
       } catch {
         /* ignore quota */
       }
@@ -271,8 +276,7 @@ export function GenerateMethod({
           checked={remember}
           onChange={(e) => setRemember(e.target.checked)}
         />
-        Remember on this device (saves nsec to localStorage — convenient but
-        less secure)
+        Remember on this device
       </label>
 
       <button
@@ -288,11 +292,12 @@ export function GenerateMethod({
   );
 }
 
-/** Read a saved nsec from localStorage; returns a signer or null. */
-export function tryRestoreGeneratedOrImported(): PrivateKeySigner | null {
-  if (typeof localStorage === "undefined") return null;
+/** Read a remembered nsec from storage; returns a signer or null. */
+export async function tryRestoreGeneratedOrImported(
+  storage: SignerStorage = localStorageSignerStorage,
+): Promise<PrivateKeySigner | null> {
   try {
-    const nsec = localStorage.getItem(REMEMBER_KEY);
+    const nsec = await storage.getItem(SIGNER_STORAGE_KEY_NSEC);
     if (!nsec) return null;
     const decoded = nip19.decode(nsec);
     if (decoded.type !== "nsec") return null;
@@ -302,11 +307,8 @@ export function tryRestoreGeneratedOrImported(): PrivateKeySigner | null {
   }
 }
 
-export function clearPersistedNsec(): void {
-  if (typeof localStorage === "undefined") return;
-  try {
-    localStorage.removeItem(REMEMBER_KEY);
-  } catch {
-    /* ignore */
-  }
+export async function clearPersistedNsec(
+  storage: SignerStorage = localStorageSignerStorage,
+): Promise<void> {
+  await storage.removeItem(SIGNER_STORAGE_KEY_NSEC);
 }

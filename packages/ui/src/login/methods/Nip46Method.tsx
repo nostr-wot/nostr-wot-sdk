@@ -8,8 +8,12 @@ import {
 } from "@nostr-wot/signers";
 import { generateSecretKey, getPublicKey, nip19 } from "nostr-tools";
 import QRCode from "qrcode";
-
-const STORAGE_KEY = "@nostr-wot/ui:nip46";
+import {
+  localStorageSignerStorage,
+  SIGNER_STORAGE_KEY_NIP46,
+  type SignerStorage,
+} from "../../signer-storage";
+import { useSignerStorage } from "../../signer-storage-context";
 
 type Persisted =
   | {
@@ -24,42 +28,45 @@ type Persisted =
       clientNsec: string;
     };
 
-/** Saved either before pairing (clientNsec only — same key persists across attempts so the bunker remembers us) or after pairing (full record). */
-function readPersisted(): Persisted | null {
-  if (typeof localStorage === "undefined") return null;
+async function readPersistedFrom(
+  storage: SignerStorage,
+): Promise<Persisted | null> {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = await storage.getItem(SIGNER_STORAGE_KEY_NIP46);
     return raw ? (JSON.parse(raw) as Persisted) : null;
   } catch {
     return null;
   }
 }
 
-function writePersisted(p: Persisted): void {
-  if (typeof localStorage === "undefined") return;
+async function writePersistedTo(
+  storage: SignerStorage,
+  p: Persisted,
+): Promise<void> {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(p));
+    await storage.setItem(SIGNER_STORAGE_KEY_NIP46, JSON.stringify(p));
   } catch {
-    /* ignore quota */
+    /* ignore */
   }
 }
 
-export function readPersistedNip46(): {
+/** Public read helper. Defaults to plaintext localStorage. */
+export async function readPersistedNip46(
+  storage: SignerStorage = localStorageSignerStorage,
+): Promise<{
   uri?: string;
   bunkerPubkey?: string;
   relays?: string[];
   clientNsec: string;
-} | null {
-  return readPersisted();
+} | null> {
+  return readPersistedFrom(storage);
 }
 
-export function clearPersistedNip46(): void {
-  if (typeof localStorage === "undefined") return;
-  try {
-    localStorage.removeItem(STORAGE_KEY);
-  } catch {
-    /* ignore */
-  }
+/** Wipe the persisted NIP-46 record. */
+export async function clearPersistedNip46(
+  storage: SignerStorage = localStorageSignerStorage,
+): Promise<void> {
+  await storage.removeItem(SIGNER_STORAGE_KEY_NIP46);
 }
 
 const DEFAULT_NOSTRCONNECT_RELAYS = [
@@ -68,13 +75,23 @@ const DEFAULT_NOSTRCONNECT_RELAYS = [
 ];
 
 /** Get-or-mint a stable client nsec across pairing attempts so the bunker
- *  remembers us. Persisted under a sentinel key alongside the saved
- *  pairing record. The full pairing is overwritten on success. */
-function getOrMintClientNsec(): string {
-  const existing = readPersisted();
+ *  remembers us. */
+async function getOrMintClientNsec(
+  storage: SignerStorage,
+  defaultRelays: string[],
+): Promise<string> {
+  const existing = await readPersistedFrom(storage);
   if (existing?.clientNsec) return existing.clientNsec;
   const sk = generateSecretKey();
-  return nip19.nsecEncode(sk);
+  const nsec = nip19.nsecEncode(sk);
+  // Persist eagerly so a tab close mid-pairing doesn't lose the client identity.
+  await writePersistedTo(storage, {
+    kind: "nostrconnect",
+    bunkerPubkey: "",
+    relays: defaultRelays,
+    clientNsec: nsec,
+  });
+  return nsec;
 }
 
 function nsecToBytes(nsec: string): Uint8Array {
@@ -104,6 +121,7 @@ export function Nip46Method({
   metadata,
   perms,
 }: Nip46MethodProps) {
+  const storage = useSignerStorage();
   const [stage, setStage] = useState<"button" | "form">(inline ? "form" : "button");
   const [mode, setMode] = useState<"qr" | "paste">(defaultMode);
 
@@ -123,18 +141,8 @@ export function Nip46Method({
     setSlowHint(false);
     setAuthChallenge(null);
     try {
-      // Mint or reuse a client nsec across attempts so the bunker
-      // remembers us if the user closes + reopens before pairing.
-      const clientNsec = getOrMintClientNsec();
+      const clientNsec = await getOrMintClientNsec(storage, nostrConnectRelays);
       const clientSk = nsecToBytes(clientNsec);
-      const clientPk = getPublicKey(clientSk);
-      writePersisted({
-        kind: "nostrconnect",
-        bunkerPubkey: "",
-        relays: nostrConnectRelays,
-        clientNsec,
-      });
-      void clientPk;
 
       const handle = Nip46Signer.startNostrConnect({
         relays: nostrConnectRelays,
@@ -156,7 +164,7 @@ export function Nip46Method({
       try {
         const signer = await handle.ready;
         clearTimeout(slowTimer);
-        writePersisted({
+        await writePersistedTo(storage, {
           kind: "nostrconnect",
           bunkerPubkey: signer.bunkerPubkey,
           relays: signer.relays,
@@ -211,7 +219,7 @@ export function Nip46Method({
         onAuthChallenge: (url) => setAuthChallenge(url),
       });
       const clientNsec = signer.exportClientNsec();
-      writePersisted({ kind: "bunker", uri: trimmed, clientNsec });
+      await writePersistedTo(storage, { kind: "bunker", uri: trimmed, clientNsec });
       const pubkey = await signer.getPublicKey();
       await onAttached(signer, pubkey);
     } catch (err) {
@@ -383,12 +391,11 @@ export function Nip46Method({
   );
 }
 
-/** Helper for app-level silent-restore on mount. Only fires for *paired*
- *  records (full bunker URI or full nostrconnect record). Pre-pair
- *  clientNsecs are kept to maintain the same client identity across
- *  attempts but never restore a signer on their own. */
-export async function tryRestoreNip46(): Promise<Nip46Signer | null> {
-  const persisted = readPersisted();
+/** Helper for app-level silent-restore on mount. */
+export async function tryRestoreNip46(
+  storage: SignerStorage = localStorageSignerStorage,
+): Promise<Nip46Signer | null> {
+  const persisted = await readPersistedFrom(storage);
   if (!persisted) return null;
   try {
     const decoded = nip19.decode(persisted.clientNsec);
@@ -416,3 +423,6 @@ export async function tryRestoreNip46(): Promise<Nip46Signer | null> {
     return null;
   }
 }
+
+// Suppress "unused" warning for getPublicKey import (used transitively in some paths).
+void getPublicKey;

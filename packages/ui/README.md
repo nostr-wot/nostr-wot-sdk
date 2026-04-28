@@ -77,9 +77,10 @@ Wraps your tree, holds session state, and (by default) silently re-attaches the 
 
 ```tsx
 <NostrSessionProvider
-  theme="system"            // "light" | "dark" | "system"
-  autoRestore               // attempt silent NIP-46 + remembered-nsec restore
-  initialSigner={someSigner}  // already-constructed signer
+  theme="system"             // "light" | "dark" | "system"
+  autoRestore                // attempt silent NIP-46 + remembered-nsec restore
+  initialSigner={someSigner} // already-constructed signer
+  signerStorage={myStorage}  // optional encrypted-at-rest adapter (see below)
   onChange={({ signer, pubkey }) => /* mirror to your state */}
   onLogout={async () => { /* clear app caches */ }}
 >
@@ -88,6 +89,40 @@ Wraps your tree, holds session state, and (by default) silently re-attaches the 
 ```
 
 Sets `data-nui-root` on its wrapper element so the default stylesheet can scope its CSS variables.
+
+#### Encrypted-at-rest storage (`signerStorage`)
+
+By default, persisted login state (NIP-46 pairing, remembered nsec) goes to plaintext localStorage. Apps with stronger requirements implement the `SignerStorage` interface and pass it to the provider:
+
+```ts
+import type { SignerStorage } from "@nostr-wot/ui";
+
+export const myEncryptedStorage: SignerStorage = {
+  async getItem(key) {
+    const blob = localStorage.getItem(key);
+    return blob ? await decryptWithWebAuthnKey(blob) : null;
+  },
+  async setItem(key, value) {
+    const blob = await encryptWithWebAuthnKey(value);
+    localStorage.setItem(key, blob);
+  },
+  async removeItem(key) {
+    localStorage.removeItem(key);
+  },
+};
+```
+
+```tsx
+<NostrSessionProvider signerStorage={myEncryptedStorage}>{...}</NostrSessionProvider>
+```
+
+The same instance is consumed by every login method (`Nip46Method`, `GenerateMethod`, `ImportMethod`) and the auto-restore path (`tryRestoreNip46`, `tryRestoreGeneratedOrImported`). Methods may be sync or async — the SDK awaits everything internally.
+
+Two key constants are exported for adapters that want method-aware encryption schemes:
+
+```ts
+import { SIGNER_STORAGE_KEY_NIP46, SIGNER_STORAGE_KEY_NSEC } from "@nostr-wot/ui";
+```
 
 ### `<LoginButton>`
 
@@ -172,7 +207,7 @@ The inline form, for embedding in a page (no modal chrome):
 
 #### `onLogin` (awaited) vs `onSuccess` (fire-and-forget)
 
-`onLogin` runs *after* the signer is attached but *before* the widget signals success. Awaited: throwing keeps the widget open with the error in the inline `nui-error` slot. Use it for backend handshakes, profile fetches, audit logs.
+`onLogin` receives `{ signer, pubkey, method }` where `method` is `"nip07" | "nip46" | "generate" | "import"` — useful for method-specific follow-ups (e.g. show an extension upsell only after `generate`). Awaited *after* the signer is attached but *before* the widget signals success. Throwing keeps the widget open with the error in the inline `nui-error` slot. Use it for backend handshakes, profile fetches, audit logs.
 
 `onSuccess` runs after `onLogin` resolves. Use it for navigation, analytics events, or any "we're definitely done" side effects.
 

@@ -41,12 +41,19 @@ export interface LoginWidgetProps {
   /**
    * Async login hook. Awaited after the signer attaches but BEFORE the
    * modal closes. Throw to keep the modal open + display the error in
-   * the inline `nui-error` slot. Receives `{ signer, pubkey }`.
+   * the inline `nui-error` slot. Receives `{ signer, pubkey, method }`
+   * — `method` discriminates which flow the user used so the consumer
+   * can do method-specific work (e.g. show a "back up your nsec"
+   * follow-up only for `generate`).
    *
    * If you also pass `authBaseUrl`, the backend handshake runs first;
    * `onLogin` runs only on success.
    */
-  onLogin?: (args: { signer: NostrSigner; pubkey: string }) => Promise<void> | void;
+  onLogin?: (args: {
+    signer: NostrSigner;
+    pubkey: string;
+    method: LoginMethodId;
+  }) => Promise<void> | void;
   /** Fire-and-forget callback fired after `onLogin` resolves. */
   onSuccess?: () => void;
   /** Inline error display callback (besides the `nui-error` region). */
@@ -157,7 +164,11 @@ export function LoginWidget({
    * open with an inline message; `rollbackOnAuthFailure` controls whether
    * the local signer is unset on backend failure.
    */
-  const handleAttached = async (signer: NostrSigner, pubkey: string) => {
+  const handleAttached = async (
+    signer: NostrSigner,
+    pubkey: string,
+    method: LoginMethodId,
+  ) => {
     setBusy(true);
     setError(null);
     let signerInContext = false;
@@ -178,7 +189,7 @@ export function LoginWidget({
       }
 
       if (onLogin) {
-        await onLogin({ signer, pubkey });
+        await onLogin({ signer, pubkey, method });
       }
 
       onSuccess?.();
@@ -194,13 +205,14 @@ export function LoginWidget({
     }
   };
 
-  const safeAttached = async (signer: NostrSigner, pubkey: string) => {
-    try {
-      await handleAttached(signer, pubkey);
-    } catch {
-      /* error already surfaced via onErr; swallow so methods don't double-handle */
-    }
-  };
+  const attachedFor = (method: LoginMethodId) =>
+    async (signer: NostrSigner, pubkey: string) => {
+      try {
+        await handleAttached(signer, pubkey, method);
+      } catch {
+        /* error already surfaced via onErr; swallow so methods don't double-handle */
+      }
+    };
 
   const primaryMethods = methods.filter((m) => m === "nip07" || m === "nip46");
   const advancedMethods = methods.filter((m) => m === "generate" || m === "import");
@@ -269,7 +281,7 @@ export function LoginWidget({
             }}
           >
             {primaryMethods.includes("nip07") && (
-              <Nip07Method onError={onErr} onAttached={safeAttached} />
+              <Nip07Method onError={onErr} onAttached={attachedFor("nip07")} />
             )}
             {primaryMethods.includes("nip46") && (
               <button
@@ -373,7 +385,7 @@ export function LoginWidget({
           inline
           defaultMode={nip46Mode}
           onError={onErr}
-          onAttached={safeAttached}
+          onAttached={attachedFor("nip46")}
           onBack={() => setView({ kind: "picker" })}
           {...(nip46Relays ? { nostrConnectRelays: nip46Relays } : {})}
           {...(nip46Metadata ? { metadata: nip46Metadata } : {})}
@@ -383,7 +395,7 @@ export function LoginWidget({
       {view.kind === "generate" && (
         <GenerateMethod
           onError={onErr}
-          onAttached={safeAttached}
+          onAttached={attachedFor("generate")}
           onBack={() => setView({ kind: "picker" })}
           profileSetup={profileSetup}
           {...(profileRelays ? { profileRelays } : {})}
@@ -392,7 +404,7 @@ export function LoginWidget({
       {view.kind === "import" && (
         <ImportMethod
           onError={onErr}
-          onAttached={safeAttached}
+          onAttached={attachedFor("import")}
           onBack={() => setView({ kind: "picker" })}
         />
       )}
