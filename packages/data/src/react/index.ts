@@ -91,12 +91,21 @@ export function useFollows(pubkey: string | null): FollowsEntry | null {
   );
 }
 
+// Stable singleton — see engagement-cache.ts for why this matters
+// (useSyncExternalStore tearing check triggers React #185 if getSnapshot
+// returns a fresh object on each render).
+const EMPTY_ENGAGEMENT: Engagement = Object.freeze({
+  reactionCount: 0,
+  repostCount: 0,
+  zapTotalSats: 0,
+}) as Engagement;
+
 export function useEngagement(noteId: string | null): Engagement {
   const store = _engagementStore();
   return useSyncExternalStore(
     (cb) => (noteId ? store.subscribe(noteId, () => cb()) : () => {}),
-    () => (noteId ? getEngagement(noteId) : { reactionCount: 0, repostCount: 0, zapTotalSats: 0 }),
-    () => ({ reactionCount: 0, repostCount: 0, zapTotalSats: 0 }),
+    () => (noteId ? getEngagement(noteId) : EMPTY_ENGAGEMENT),
+    () => EMPTY_ENGAGEMENT,
   );
 }
 

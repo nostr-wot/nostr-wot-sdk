@@ -13,10 +13,21 @@ export function _engagementStore() {
   return store;
 }
 
+// Stable singleton — `getEngagement` is read on every render via
+// `useSyncExternalStore`'s post-commit tearing check. Returning a fresh
+// object would fail the Object.is comparison every time and trigger an
+// infinite re-render loop (React #185). Frozen so consumers can't mutate
+// the shared sentinel.
+const EMPTY_ENGAGEMENT: Engagement = Object.freeze({
+  reactionCount: 0,
+  repostCount: 0,
+  zapTotalSats: 0,
+}) as Engagement;
+
 const empty = (): Engagement => ({ reactionCount: 0, repostCount: 0, zapTotalSats: 0 });
 
 export function getEngagement(noteId: string): Engagement {
-  return store.get(noteId).value ?? empty();
+  return store.get(noteId).value ?? EMPTY_ENGAGEMENT;
 }
 
 /**
