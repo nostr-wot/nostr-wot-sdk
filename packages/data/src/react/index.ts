@@ -148,7 +148,9 @@ export {
   usePubkey,
   useLogin,
   useLogout,
+  useKEKSigner,
   type SessionSigner,
   type SessionState,
+  type KEKSigner,
   type NostrSessionProviderProps,
 } from './session-context';

@@ -166,6 +166,35 @@ export function useLogout(): () => Promise<void> {
   return useSession().logout;
 }
 
+/**
+ * Narrow signer interface for NIP-44 operations (DM cache-key derivation,
+ * wallet local-store encryption). Guards signers that don't support NIP-44
+ * (e.g. NIP-46 bunkers with restricted perms).
+ */
+export interface KEKSigner {
+  pubkey: string;
+  nip44Encrypt(recipientPubkey: string, plaintext: string): Promise<string>;
+  nip44Decrypt(senderPubkey: string, ciphertext: string): Promise<string>;
+}
+
+/**
+ * Returns a `KEKSigner` if the active signer supports NIP-44, otherwise `null`.
+ * Memoized — only recreates when the signer or pubkey changes.
+ */
+export function useKEKSigner(): KEKSigner | null {
+  const signer = useSigner();
+  const pubkey = usePubkey();
+  return useMemo(() => {
+    if (!signer || !pubkey) return null;
+    if (typeof signer.nip44Encrypt !== 'function' || typeof signer.nip44Decrypt !== 'function') return null;
+    return {
+      pubkey,
+      nip44Encrypt: (r: string, pt: string) => signer.nip44Encrypt!(r, pt),
+      nip44Decrypt: (s: string, ct: string) => signer.nip44Decrypt!(s, ct),
+    };
+  }, [signer, pubkey]);
+}
+
 const defaultState: SessionState = {
   signer: null,
   pubkey: null,
