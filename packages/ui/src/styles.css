@@ -11,7 +11,8 @@
  *
  *   [data-nui-root] {
  *     --nui-primary: oklch(0.6 0.2 280);
- *     --nui-radius: 12px;
+ *     --nui-card-radius: 12px;
+ *     --nui-btn-radius: 9999px;
  *   }
  *
  * Override per-element via the `classes` slot prop on each component.
@@ -31,7 +32,11 @@
   --nui-danger: #ef4444;
   --nui-danger-fg: #ffffff;
 
+  /* --nui-radius kept for backward compat; new code uses the split vars */
   --nui-radius: 8px;
+  --nui-card-radius: var(--nui-radius);
+  --nui-btn-radius: var(--nui-radius);
+
   --nui-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
   --nui-space: 12px;
   --nui-font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -58,13 +63,32 @@
   --nui-input-bg: #1e293b;
 }
 
+[data-nui-root][data-nui-theme="la-crypta"] {
+  --nui-bg: #0a0a0a;
+  --nui-fg: #fafafa;
+  --nui-muted: #a3a3a3;
+  --nui-border: #262626;
+  --nui-input-bg: #171717;
+
+  --nui-primary: #b4f953;
+  --nui-primary-fg: #0a0a0a;
+  --nui-primary-hover: #c6ff6b;
+
+  --nui-card-radius: 12px;
+  --nui-btn-radius: 9999px;
+
+  --nui-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  --nui-overlay-bg: rgba(0, 0, 0, 0.85);
+  --nui-font: Inter, system-ui, -apple-system, sans-serif;
+}
+
 /* ─── Login button ─────────────────────────────────────────── */
 .nui-login-button {
   display: inline-flex;
   align-items: center;
   gap: calc(var(--nui-space) * 0.5);
   padding: calc(var(--nui-space) * 0.75) calc(var(--nui-space) * 1.25);
-  border-radius: var(--nui-radius);
+  border-radius: var(--nui-btn-radius);
   border: 1px solid transparent;
   background: var(--nui-primary);
   color: var(--nui-primary-fg);
@@ -89,7 +113,7 @@
 .nui-modal {
   background: var(--nui-bg);
   color: var(--nui-fg);
-  border-radius: calc(var(--nui-radius) * 1.5);
+  border-radius: var(--nui-card-radius);
   box-shadow: var(--nui-shadow);
   max-width: 420px;
   width: 100%;
@@ -109,7 +133,7 @@
   line-height: 1;
   cursor: pointer;
   padding: 4px 8px;
-  border-radius: var(--nui-radius);
+  border-radius: var(--nui-card-radius);
 }
 .nui-modal-close:hover { color: var(--nui-fg); }
 
@@ -137,7 +161,7 @@
   align-items: center;
   gap: var(--nui-space);
   padding: var(--nui-space);
-  border-radius: var(--nui-radius);
+  border-radius: var(--nui-card-radius);
   border: 1px solid var(--nui-border);
   background: var(--nui-bg);
   color: var(--nui-fg);
@@ -160,7 +184,7 @@
   flex-shrink: 0;
   display: grid;
   place-items: center;
-  border-radius: calc(var(--nui-radius) * 0.75);
+  border-radius: calc(var(--nui-card-radius) * 0.75);
   background: var(--nui-input-bg);
   font-size: 18px;
 }
@@ -187,7 +211,7 @@
 .nui-input {
   width: 100%;
   padding: calc(var(--nui-space) * 0.75) var(--nui-space);
-  border-radius: var(--nui-radius);
+  border-radius: var(--nui-card-radius);
   border: 1px solid var(--nui-border);
   background: var(--nui-input-bg);
   color: var(--nui-fg);
@@ -205,7 +229,7 @@
 
 .nui-error {
   padding: calc(var(--nui-space) * 0.75) var(--nui-space);
-  border-radius: var(--nui-radius);
+  border-radius: var(--nui-card-radius);
   background: color-mix(in oklab, var(--nui-danger) 12%, transparent);
   color: var(--nui-danger);
   font-size: 13px;
@@ -213,7 +237,7 @@
 
 .nui-warning {
   padding: var(--nui-space);
-  border-radius: var(--nui-radius);
+  border-radius: var(--nui-card-radius);
   background: color-mix(in oklab, #f59e0b 16%, transparent);
   color: var(--nui-fg);
   font-size: 13px;
@@ -226,7 +250,7 @@
   word-break: break-all;
   padding: calc(var(--nui-space) * 0.75) var(--nui-space);
   background: var(--nui-input-bg);
-  border-radius: var(--nui-radius);
+  border-radius: var(--nui-card-radius);
   border: 1px solid var(--nui-border);
 }
 
@@ -260,7 +284,7 @@
   display: flex;
   gap: 4px;
   padding: 4px;
-  border-radius: var(--nui-radius);
+  border-radius: var(--nui-card-radius);
   background: var(--nui-input-bg);
   border: 1px solid var(--nui-border);
 }
@@ -272,7 +296,7 @@
   color: var(--nui-muted);
   font: 500 13px var(--nui-font);
   cursor: pointer;
-  border-radius: calc(var(--nui-radius) - 2px);
+  border-radius: calc(var(--nui-card-radius) - 2px);
   transition: background 0.15s, color 0.15s;
 }
 .nui-tab:hover { color: var(--nui-fg); }
@@ -291,7 +315,7 @@
 .nui-qr {
   padding: 12px;
   background: #fff;
-  border-radius: calc(var(--nui-radius) * 1.25);
+  border-radius: var(--nui-card-radius);
   border: 1px solid var(--nui-border);
 }
 .nui-qr svg {
@@ -312,7 +336,7 @@
   color: var(--nui-muted);
   text-align: center;
   background: var(--nui-input-bg);
-  border-radius: var(--nui-radius);
+  border-radius: var(--nui-card-radius);
   padding: 8px 12px;
   max-width: 280px;
 }
@@ -322,7 +346,7 @@
   flex-direction: column;
   gap: 4px;
   padding: var(--nui-space);
-  border-radius: var(--nui-radius);
+  border-radius: var(--nui-card-radius);
   background: color-mix(in oklab, #22c55e 16%, transparent);
   color: var(--nui-fg);
   text-decoration: none;
@@ -342,7 +366,7 @@
   align-items: center;
   gap: var(--nui-space);
   padding: var(--nui-space);
-  border-radius: var(--nui-radius);
+  border-radius: var(--nui-card-radius);
   border: 1px solid var(--nui-border);
   background: color-mix(in oklab, var(--nui-primary) 6%, transparent);
   color: var(--nui-fg);

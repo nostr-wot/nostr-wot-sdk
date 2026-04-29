@@ -27,7 +27,7 @@ import {
 
 export interface NostrSessionProviderProps extends BaseProviderProps {
   /** Theme override for the default stylesheet. Default: follow system. */
-  theme?: "light" | "dark" | "system";
+  theme?: "light" | "dark" | "system" | "la-crypta";
   /**
    * Attempt silent restore of the previous signer on mount. Default true.
    * Disable if your app handles signer construction itself.
