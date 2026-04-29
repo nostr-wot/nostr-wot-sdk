@@ -182,8 +182,7 @@ export interface KEKSigner {
  * Memoized — only recreates when the signer or pubkey changes.
  */
 export function useKEKSigner(): KEKSigner | null {
-  const signer = useSigner();
-  const pubkey = usePubkey();
+  const { signer, pubkey } = useSession();
   return useMemo(() => {
     if (!signer || !pubkey) return null;
     if (typeof signer.nip44Encrypt !== 'function' || typeof signer.nip44Decrypt !== 'function') return null;
