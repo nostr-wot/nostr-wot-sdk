@@ -1,4 +1,8 @@
 import { useEffect, useSyncExternalStore } from "react";
+import { useSigner, usePubkey } from "./session-context";
+import { getPool, getDefaultRelays } from "../pool";
+import { fastNewest } from "../internal/sub";
+import type { EventTemplate } from "nostr-tools";
 import {
   _profileStore,
   getProfile,
@@ -143,6 +147,51 @@ export function useRelayList(pubkey: string | null): RelayListEntry | null {
     () => (pubkey ? store.get(pubkey).value ?? null : null),
     () => null,
   );
+}
+
+export type PublishProfileFields = {
+  name?: string;
+  display_name?: string;
+  picture?: string;
+  about?: string;
+  banner?: string;
+  website?: string;
+  lud16?: string;
+  nip05?: string;
+};
+
+/**
+ * Returns a `publishProfile` callback that merges the provided fields into
+ * the caller's existing kind-0 event, then signs and publishes the result.
+ * Returns null when no signer is attached to the session.
+ */
+export function usePublishProfile(): ((fields: PublishProfileFields) => Promise<void>) | null {
+  const session = useSigner();
+  const pubkey = usePubkey();
+
+  if (!session || !pubkey) return null;
+
+  return async (fields: PublishProfileFields) => {
+    const relays = getDefaultRelays();
+    const existing = await fastNewest(relays, { kinds: [0], authors: [pubkey] });
+    let base: Record<string, unknown> = {};
+    if (existing) {
+      try { base = JSON.parse(existing.content) as Record<string, unknown>; } catch { /* ignore */ }
+    }
+    const merged: Record<string, unknown> = { ...base };
+    for (const [k, v] of Object.entries(fields)) {
+      if (v !== undefined && v !== null && v !== "") merged[k] = v;
+    }
+    const template: EventTemplate = {
+      kind: 0,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [],
+      content: JSON.stringify(merged),
+    };
+    const signed = await session.signEvent(template);
+    const pool = getPool();
+    await Promise.allSettled(pool.publish(relays, signed as never));
+  };
 }
 
 // Provider for configuring relays / aggregators / cache from React

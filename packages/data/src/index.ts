@@ -30,6 +30,9 @@ export { parseRelayList, type RelayListEntry } from "./parsers/kind10002";
 export { parseZapMsats } from "./parsers/kind9735";
 export { findReplyParentId, findRootEventId } from "./parsers/reply-detection";
 
+// Address utilities
+export { npubToHex, hexToNpub, formatPubkey } from "./addresses";
+
 // Fetchers
 export { fetchProfile, streamProfile } from "./fetchers/profile";
 export { fetchNote, type NoteEntry } from "./fetchers/note";

@@ -9,6 +9,7 @@ export type ProfileEntry = {
   about: string | null;
   nip05: string | null;
   lud16: string | null;
+  website: string | null;
   fetchedAt: number;
 };
 
@@ -24,13 +25,14 @@ export function parseKind0(event: Event): ProfileEntry {
   }
   return {
     pubkey: event.pubkey,
-    displayName: str(parsed.display_name),
+    displayName: str(parsed.display_name) ?? str(parsed.displayName),
     name: str(parsed.name),
-    picture: str(parsed.picture),
+    picture: str(parsed.picture) ?? str(parsed.image),
     banner: str(parsed.banner),
     about: str(parsed.about),
     nip05: str(parsed.nip05),
     lud16: str(parsed.lud16),
+    website: str(parsed.website),
     fetchedAt: Date.now(),
   };
 }
