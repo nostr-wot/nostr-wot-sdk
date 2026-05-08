@@ -53,6 +53,14 @@ export interface LoginWidgetProps {
     signer: NostrSigner;
     pubkey: string;
     method: LoginMethodId;
+    /** Present when `method === 'generate'` or `'import'` — the user's nsec (bech32). */
+    nsec?: string;
+    /** Present when `method === 'nip46'` — the bunker:// URI used (real for paste mode,
+     *  synthesized from the bunker pubkey + relays for QR mode). */
+    bunkerUri?: string;
+    /** Present when `method === 'nip46'` — the client-side nsec used to pair with the
+     *  remote signer. Re-using this nsec is required to reconnect without re-authorizing. */
+    clientNsec?: string;
   }) => Promise<void> | void;
   /** Fire-and-forget callback fired after `onLogin` resolves. */
   onSuccess?: () => void;
@@ -70,6 +78,28 @@ export interface LoginWidgetProps {
   rollbackOnAuthFailure?: boolean;
   /** Hide the "Advanced" disclosure for generate + import. Default false. */
   hideAdvanced?: boolean;
+  /**
+   * When true, render all methods in a single flat vertical list — no
+   * "Advanced" disclosure, no divider. Generate / import sit alongside
+   * nip07 / nip46. Default false.
+   */
+  flatLayout?: boolean;
+  /**
+   * Reserved for future remember-me UI; currently no-op. Accepted so
+   * consumers can pre-thread the prop. Default true.
+   */
+  showRememberToggle?: boolean;
+  /**
+   * Override the default emoji icons (`🔌`, `🔐`, `✨`, `🔑`) for each
+   * method's primary button. Provided node renders inside the existing
+   * `nui-method-icon` span so styling is preserved.
+   */
+  methodIcons?: {
+    nip07?: ReactNode;
+    nip46?: ReactNode;
+    generate?: ReactNode;
+    import?: ReactNode;
+  };
   /**
    * Renderable shown below the methods when `nip07` is in the method list
    * but no `window.nostr` is detected. Default: a CTA pointing to
@@ -130,6 +160,9 @@ export function LoginWidget({
   authBaseUrl,
   rollbackOnAuthFailure = false,
   hideAdvanced = false,
+  flatLayout = false,
+  showRememberToggle: _showRememberToggle = true,
+  methodIcons,
   noExtensionCta,
   profileSetup = false,
   profileRelays,
@@ -142,6 +175,8 @@ export function LoginWidget({
 }: LoginWidgetProps) {
   const login = useLogin();
   const logout = useLogout();
+  // Reserved for future remember-me UI; currently a no-op flag.
+  void _showRememberToggle;
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [view, setView] = useState<
@@ -168,6 +203,7 @@ export function LoginWidget({
     signer: NostrSigner,
     pubkey: string,
     method: LoginMethodId,
+    extras?: { nsec?: string; bunkerUri?: string; clientNsec?: string },
   ) => {
     setBusy(true);
     setError(null);
@@ -189,7 +225,14 @@ export function LoginWidget({
       }
 
       if (onLogin) {
-        await onLogin({ signer, pubkey, method });
+        await onLogin({
+          signer,
+          pubkey,
+          method,
+          ...(extras?.nsec ? { nsec: extras.nsec } : {}),
+          ...(extras?.bunkerUri ? { bunkerUri: extras.bunkerUri } : {}),
+          ...(extras?.clientNsec ? { clientNsec: extras.clientNsec } : {}),
+        });
       }
 
       onSuccess?.();
@@ -206,9 +249,13 @@ export function LoginWidget({
   };
 
   const attachedFor = (method: LoginMethodId) =>
-    async (signer: NostrSigner, pubkey: string) => {
+    async (
+      signer: NostrSigner,
+      pubkey: string,
+      extras?: { nsec?: string; bunkerUri?: string; clientNsec?: string },
+    ) => {
       try {
-        await handleAttached(signer, pubkey, method);
+        await handleAttached(signer, pubkey, method, extras);
       } catch {
         /* error already surfaced via onErr; swallow so methods don't double-handle */
       }
@@ -281,7 +328,11 @@ export function LoginWidget({
             }}
           >
             {primaryMethods.includes("nip07") && (
-              <Nip07Method onError={onErr} onAttached={attachedFor("nip07")} />
+              <Nip07Method
+                onError={onErr}
+                onAttached={attachedFor("nip07")}
+                {...(methodIcons?.nip07 !== undefined ? { icon: methodIcons.nip07 } : {})}
+              />
             )}
             {primaryMethods.includes("nip46") && (
               <button
@@ -294,7 +345,7 @@ export function LoginWidget({
                   className={cx("nui-method-icon", classes?.methodIcon)}
                   aria-hidden
                 >
-                  🔐
+                  {methodIcons?.nip46 ?? "🔐"}
                 </span>
                 <span className={cx("nui-method-text", classes?.methodText)}>
                   <span
@@ -310,9 +361,49 @@ export function LoginWidget({
                 </span>
               </button>
             )}
+            {flatLayout && advancedMethods.includes("generate") && (
+              <button
+                type="button"
+                className={cx("nui-method-button", classes?.method)}
+                style={styles?.method}
+                onClick={() => setView({ kind: "generate" })}
+              >
+                <span className="nui-method-icon" aria-hidden>
+                  {methodIcons?.generate ?? "✨"}
+                </span>
+                <span className="nui-method-text">
+                  <span className="nui-method-label">
+                    Create a new account
+                  </span>
+                  <span className="nui-method-hint">
+                    Generates a fresh keypair on this device
+                  </span>
+                </span>
+              </button>
+            )}
+            {flatLayout && advancedMethods.includes("import") && (
+              <button
+                type="button"
+                className={cx("nui-method-button", classes?.method)}
+                style={styles?.method}
+                onClick={() => setView({ kind: "import" })}
+              >
+                <span className="nui-method-icon" aria-hidden>
+                  {methodIcons?.import ?? "🔑"}
+                </span>
+                <span className="nui-method-text">
+                  <span className="nui-method-label">
+                    Paste private key
+                  </span>
+                  <span className="nui-method-hint">
+                    nsec or 64-char hex — risky in browsers
+                  </span>
+                </span>
+              </button>
+            )}
           </div>
 
-          {advancedMethods.length > 0 && !hideAdvanced && (
+          {!flatLayout && advancedMethods.length > 0 && !hideAdvanced && (
             <>
               {!showAdvanced ? (
                 <button
@@ -341,7 +432,9 @@ export function LoginWidget({
                         style={styles?.method}
                         onClick={() => setView({ kind: "generate" })}
                       >
-                        <span className="nui-method-icon" aria-hidden>✨</span>
+                        <span className="nui-method-icon" aria-hidden>
+                          {methodIcons?.generate ?? "✨"}
+                        </span>
                         <span className="nui-method-text">
                           <span className="nui-method-label">
                             Create a new account
@@ -359,7 +452,9 @@ export function LoginWidget({
                         style={styles?.method}
                         onClick={() => setView({ kind: "import" })}
                       >
-                        <span className="nui-method-icon" aria-hidden>🔑</span>
+                        <span className="nui-method-icon" aria-hidden>
+                          {methodIcons?.import ?? "🔑"}
+                        </span>
                         <span className="nui-method-text">
                           <span className="nui-method-label">
                             Paste private key
