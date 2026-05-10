@@ -8,7 +8,7 @@ Pure-function Nostr data layer. Profiles, notes, threads, follows, follower list
 |---|---|---|
 | `@nostr-wot/data` | Pure fetchers, parsers, outbox helper, `getPool()`, `sharedCoalescer` | `nostr-tools` (peer) |
 | `@nostr-wot/data/cache` | SWR cache wrapping the fetchers; observable primitive; `localStorage` persistence | + the above |
-| `@nostr-wot/data/react` | `useProfile`, `useNote`, `useThread`, `<NostrDataProvider>`, … | + `react` (peer) |
+| `@nostr-wot/data/react` | `useProfile`, `useNote`, `useThread`, `<NostrDataProvider>`, plus the shared session context (`<NostrSessionProvider>`, `useSession`, `useKEKSigner`, …) | + `react` (peer) |
 
 Use only what you need.
 
@@ -155,6 +155,51 @@ function ProfileCard({ pubkey }: { pubkey: string }) {
 ```
 
 `<NostrDataProvider>` configures defaults (relays, aggregators, persistence) on mount. If you're using `@nostr-wot/wot` or `nostr-wot-sdk`, prefer `<NostrSdkProvider>` instead — it wraps `<NostrDataProvider>` and adds opt-in WoT context.
+
+---
+
+## Session context
+
+`@nostr-wot/data/react` also hosts the shared session context — the single mount point for the active `NostrSigner` and the user's pubkey. It lives here (not in `@nostr-wot/ui`) so non-UI packages — DM hooks, blossom uploads, wallet/zap hooks — can read the signer from context without depending on the React UI package.
+
+```tsx
+import {
+  NostrSessionProvider,
+  useSession,
+  useSigner,
+  usePubkey,
+  useLogin,
+  useLogout,
+  useKEKSigner,
+} from "@nostr-wot/data/react";
+
+<NostrSessionProvider
+  initialSigner={someSigner /* optional — e.g. constructed at boot */}
+  onChange={({ signer, pubkey }) => /* mirror to your state */}
+  onLogout={async () => { /* clear app caches */ }}
+>
+  <App />
+</NostrSessionProvider>;
+```
+
+| Hook | Returns |
+|---|---|
+| `useSession()` | `{ signer, pubkey, isLoading, error, setSigner, logout }` |
+| `useSigner()` | The active `NostrSigner` or `null` |
+| `usePubkey()` | The active hex pubkey or `null` |
+| `useLogin()` | `(signer) => Promise<void>` callback — set the active signer |
+| `useLogout()` | `() => Promise<void>` callback — drops the signer + runs `onLogout` |
+| `useKEKSigner()` | A narrow `KEKSigner` (NIP-44 encrypt + decrypt + pubkey) when the active signer supports NIP-44, else `null` |
+
+`useKEKSigner` exists because some operations — DM cache-key derivation, wallet local-store encryption — need NIP-44 specifically and must skip signers that don't expose it (e.g. NIP-46 bunkers with restricted perms). The hook returns `null` instead of throwing, so consumers can branch on capability:
+
+```tsx
+const kek = useKEKSigner();
+if (!kek) return <p>Your signer doesn't support NIP-44 — encrypted-at-rest cache disabled.</p>;
+const cacheKey = await getOrCreateCacheKey(kek.pubkey, kek);
+```
+
+`@nostr-wot/ui` mounts and consumes this same context for its login flows, and re-exports the hooks for convenience. If you're only using `@nostr-wot/data` (no UI), construct a signer yourself (from `@nostr-wot/signers`) and call `useLogin()(signer)` to attach it.
 
 ---
 

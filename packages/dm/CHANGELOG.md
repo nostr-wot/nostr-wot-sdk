@@ -1,5 +1,28 @@
 # @nostr-wot/dm
 
+## 0.5.0
+
+### Minor Changes
+
+- @nostr-wot/dm: pluggable storage prefix for the encrypted DM cache key.
+
+  `getOrCreateCacheKey(myPubkey, signer, opts)` now accepts `opts.storageKeyPrefix` to override the default `@nostr-wot/dm:cache-key:` namespace. Apps migrating off a pre-existing key namespace need their own prefix or every existing user's encrypted-at-rest data is invalidated. The in-memory key cache also incorporates the prefix so multi-app processes don't collide on the same pubkey.
+
+  Example (Obelisk migrating from a legacy `obelisk:dm-cache-key:` namespace):
+
+  ```ts
+  const key = await getOrCreateCacheKey(myPubkey, signer, {
+    storageKeyPrefix: "obelisk:dm-cache-key:",
+  });
+  ```
+
+  Default behaviour unchanged for callers that don't pass the option.
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @nostr-wot/data@0.5.0
+
 ## 0.4.3
 
 ### Patch Changes

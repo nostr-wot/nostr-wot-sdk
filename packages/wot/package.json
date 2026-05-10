@@ -1,6 +1,6 @@
 {
   "name": "@nostr-wot/wot",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Web-of-Trust scoring + extension bridge for Nostr. WoT class, distance/scoring, browser extension integration, React + Solid hooks.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "MIT",
@@ -72,7 +72,7 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@nostr-wot/data": "^0.4.0"
+    "@nostr-wot/data": "^0.5.0"
   },
   "peerDependencies": {
     "react": ">=16.8.0",

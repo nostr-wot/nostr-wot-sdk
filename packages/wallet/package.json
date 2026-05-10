@@ -1,6 +1,6 @@
 {
   "name": "@nostr-wot/wallet",
-  "version": "0.1.4",
+  "version": "0.3.0",
   "description": "Nostr wallet helpers: NIP-47 NWC client (pay invoices, balance, info) and NIP-57 zap request builder.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "MIT",
@@ -38,6 +38,16 @@
         "types": "./dist/index.d.cts",
         "default": "./dist/index.cjs"
       }
+    },
+    "./react": {
+      "import": {
+        "types": "./dist/react/index.d.ts",
+        "default": "./dist/react/index.js"
+      },
+      "require": {
+        "types": "./dist/react/index.d.cts",
+        "default": "./dist/react/index.cjs"
+      }
     }
   },
   "files": [
@@ -53,10 +63,17 @@
   },
   "dependencies": {
     "@noble/hashes": "^1.5.0",
+    "@nostr-wot/data": "0.5.0",
     "@nostr-wot/signers": "0.4.0"
   },
   "peerDependencies": {
-    "nostr-tools": ">=2.0.0"
+    "nostr-tools": ">=2.0.0",
+    "react": ">=16.8.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
   },
   "sideEffects": false
 }

@@ -1,6 +1,6 @@
 {
   "name": "nostr-wot-sdk",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Meta-package re-exporting @nostr-wot/{wot,relay,data}. Existing imports keep working; new code should depend on the scoped packages directly.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "MIT",
@@ -114,9 +114,9 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@nostr-wot/data": "^0.4.0",
+    "@nostr-wot/data": "^0.5.0",
     "@nostr-wot/relay": "^0.1.1",
-    "@nostr-wot/wot": "^0.1.5"
+    "@nostr-wot/wot": "^0.1.6"
   },
   "peerDependencies": {
     "react": ">=16.8.0",
