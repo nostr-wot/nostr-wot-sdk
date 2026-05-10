@@ -194,6 +194,14 @@ export function usePublishProfile(): ((fields: PublishProfileFields) => Promise<
   };
 }
 
+// One-shot ad-hoc filter query (NIP-50 search, custom kinds, …) routed
+// through the shared coalescer.
+export {
+  useNostrQuery,
+  type UseNostrQueryOptions,
+  type UseNostrQueryResult,
+} from './use-nostr-query';
+
 // Provider for configuring relays / aggregators / cache from React
 export { NostrDataProvider, type NostrDataProviderProps } from './nostr-data-provider';
 
