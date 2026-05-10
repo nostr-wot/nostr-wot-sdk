@@ -16,6 +16,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -113,10 +114,26 @@ export function NostrSessionProvider({
     setSignerState(next);
   }, []);
 
+  // Keep a ref to the current signer so `logout` can see it without
+  // declaring `signer` in its deps. Without the ref, every `setSigner`
+  // call would change `signer`, recreate `logout`, change the context
+  // value's `logout` field, and force consumers whose `useEffect` deps
+  // include the result of `useLogout()` to re-run — which in turn lets
+  // them call `setSigner` again, producing an infinite render loop.
+  const signerRef = useRef(signer);
+  useEffect(() => { signerRef.current = signer; }, [signer]);
+
+  // Same reason for `onLogout`: callers may pass an inline lambda whose
+  // identity changes on every render. Pin to a ref so logout stays
+  // referentially stable across renders.
+  const onLogoutRef = useRef(onLogout);
+  useEffect(() => { onLogoutRef.current = onLogout; }, [onLogout]);
+
   const logout = useCallback(async () => {
-    if (signer?.close) {
+    const cur = signerRef.current;
+    if (cur?.close) {
       try {
-        await signer.close();
+        await cur.close();
       } catch {
         /* ignore */
       }
@@ -124,8 +141,9 @@ export function NostrSessionProvider({
     setSignerState(null);
     setPubkey(null);
     setError(null);
-    if (onLogout) await onLogout();
-  }, [signer, onLogout]);
+    const cb = onLogoutRef.current;
+    if (cb) await cb();
+  }, []);
 
   const value: SessionState = useMemo(
     () => ({ signer, pubkey, isLoading, error, setSigner, logout }),

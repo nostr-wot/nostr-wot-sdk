@@ -1,5 +1,12 @@
 # @nostr-wot/wallet
 
+## 0.3.1
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @nostr-wot/data@0.5.1
+
 ## 0.3.0
 
 ### Minor Changes

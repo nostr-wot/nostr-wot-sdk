@@ -1,5 +1,17 @@
 # @nostr-wot/data
 
+## 0.5.1
+
+### Patch Changes
+
+- @nostr-wot/data: stop infinite render loop in `NostrSessionProvider`'s `logout` callback.
+
+  `logout` previously re-created on every signer change because the callback closed over `signer` (to call `signer.close?.()` on logout). Consumers whose `useEffect` deps include `useLogout()` therefore re-ran every time the signer flipped — and inside such effects, calling `setSigner(...)` (e.g. via `useLogin`) created a new signer ref → new `logout` ref → effect re-ran → infinite loop.
+
+  Repro: any host that wires a foreign auth source into `setSigner` from a `useEffect` whose deps include `useLogout()` would crash with `Maximum update depth exceeded` at `setPubkey(pk)` inside the provider's `[signer]` effect.
+
+  Fix: pin the current signer + the optional `onLogout` prop to refs and drop them from the `useCallback` deps. `logout` is now referentially stable across renders, while still always logging out the latest signer.
+
 ## 0.5.0
 
 ### Minor Changes
