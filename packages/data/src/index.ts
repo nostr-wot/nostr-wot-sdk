@@ -33,6 +33,17 @@ export { findReplyParentId, findRootEventId } from "./parsers/reply-detection";
 // Address utilities
 export { npubToHex, hexToNpub, formatPubkey } from "./addresses";
 
+// Keyed observable primitive — backs every per-kind cache. Apps that
+// build their own caches (e.g. DM-relay-routed profile cache) reuse it
+// rather than reimplementing the Map + subscriber + dedup pattern.
+export {
+  createKeyedObservable,
+  type Slot,
+  type SlotStatus,
+  type KeyedObservable,
+  type KeyedObservableOptions,
+} from "./cache/keyed-observable";
+
 // Fetchers
 export { fetchProfile, streamProfile } from "./fetchers/profile";
 export { fetchNote, type NoteEntry } from "./fetchers/note";
