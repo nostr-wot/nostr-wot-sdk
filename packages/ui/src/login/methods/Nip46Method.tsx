@@ -14,6 +14,7 @@ import {
   type SignerStorage,
 } from "../../signer-storage";
 import { useSignerStorage } from "../../signer-storage-context";
+import { AnchorButton } from "../../primitives/Button";
 
 type Persisted =
   | {
@@ -69,9 +70,18 @@ export async function clearPersistedNip46(
   await storage.removeItem(SIGNER_STORAGE_KEY_NIP46);
 }
 
+// Default rendezvous relays for NIP-46 pairing. Two used to be enough but
+// `relay.nsec.app` is frequently rate-limited; when both defaults are slow
+// the QR pairing silently times out with no signal to the user. The
+// extended set gives the bunker more fallback hops; consumers can still
+// pass their own via `nostrConnectRelays` to override.
 const DEFAULT_NOSTRCONNECT_RELAYS = [
   "wss://relay.nsec.app",
   "wss://relay.damus.io",
+  "wss://relay.nostr.band",
+  "wss://nos.lol",
+  "wss://relay.primal.net",
+  "wss://purplepag.es",
 ];
 
 /** Get-or-mint a stable client nsec across pairing attempts so the bunker
@@ -339,6 +349,23 @@ export function Nip46Method({
                 aria-label="Nostr Connect QR code"
                 dangerouslySetInnerHTML={{ __html: qrSvg }}
               />
+              {/* Deep-link affordance — useful on mobile where the user
+               *  can't scan their own screen but the platform's URL handler
+               *  will hand off `nostrconnect://` to Amber / Nsec.app / etc.
+               *  Hidden when the URI isn't ready yet (qrUri only flips truthy
+               *  after `startQr` resolves the connect handle). */}
+              {qrUri && (
+                <AnchorButton
+                  variant="secondary"
+                  size="sm"
+                  fullWidth
+                  href={qrUri}
+                  rel="noopener noreferrer"
+                  trailingIcon={<span aria-hidden>↗</span>}
+                >
+                  Open in signer app
+                </AnchorButton>
+              )}
               <p className="nui-qr-hint">
                 Scan with Amber, Nsec.app, Keychat, or any NIP-46 signer.
               </p>

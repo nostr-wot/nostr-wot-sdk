@@ -43,6 +43,14 @@ export { useSignerStorage } from "./signer-storage-context";
 
 // Primitives + types for advanced consumers
 export { Modal, type ModalProps } from "./primitives/Modal";
+export {
+  Button,
+  AnchorButton,
+  type ButtonProps,
+  type AnchorButtonProps,
+  type ButtonVariant,
+  type ButtonSize,
+} from "./primitives/Button";
 export type {
   ClassSlots,
   StyleSlots,

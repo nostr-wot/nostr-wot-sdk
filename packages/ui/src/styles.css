@@ -99,6 +99,65 @@
 .nui-login-button:hover { background: var(--nui-primary-hover); }
 .nui-login-button:disabled { opacity: 0.6; cursor: not-allowed; }
 
+/* ─── Generic Button primitive ─────────────────────────────── */
+/* Drives the four <Button> variants exported from primitives/Button.tsx.
+ * Keeps shape + interaction concerns here so apps can re-theme via CSS
+ * variables without redefining each variant from scratch. */
+.nui-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(var(--nui-space) * 0.5);
+  border-radius: var(--nui-btn-radius);
+  border: 1px solid transparent;
+  font: 500 14px/1 var(--nui-font);
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  /* Aligns icon size to the label baseline so leading/trailing slots
+   * don't push the label around when only one is present. */
+  line-height: 1.2;
+}
+.nui-btn:disabled,
+.nui-btn[data-loading] { opacity: 0.6; cursor: not-allowed; }
+.nui-btn-full { width: 100%; }
+.nui-btn-sm { padding: calc(var(--nui-space) * 0.45) calc(var(--nui-space) * 0.9); font-size: 12px; }
+.nui-btn-md { padding: calc(var(--nui-space) * 0.75) calc(var(--nui-space) * 1.25); font-size: 14px; }
+.nui-btn-lg { padding: calc(var(--nui-space) * 1) calc(var(--nui-space) * 1.5); font-size: 15px; }
+.nui-btn-icon { display: inline-flex; }
+.nui-btn-label { display: inline-flex; }
+.nui-btn-spinner { width: 14px; height: 14px; border-width: 2px; }
+
+.nui-btn-primary {
+  background: var(--nui-primary);
+  color: var(--nui-primary-fg);
+}
+.nui-btn-primary:hover:not(:disabled) { background: var(--nui-primary-hover); }
+
+.nui-btn-secondary {
+  background: var(--nui-bg);
+  color: var(--nui-fg);
+  border-color: var(--nui-border);
+}
+.nui-btn-secondary:hover:not(:disabled) {
+  background: var(--nui-input-bg);
+  border-color: var(--nui-primary);
+}
+
+.nui-btn-ghost {
+  background: transparent;
+  color: var(--nui-fg);
+}
+.nui-btn-ghost:hover:not(:disabled) { background: var(--nui-input-bg); }
+
+.nui-btn-link {
+  background: transparent;
+  color: var(--nui-primary);
+  padding: 0;
+  border: none;
+}
+.nui-btn-link:hover:not(:disabled) { text-decoration: underline; }
+
 /* ─── Modal ────────────────────────────────────────────────── */
 .nui-modal-overlay {
   position: fixed;
