@@ -6,7 +6,7 @@ import {
   type NostrConnectHandle,
   type NostrSigner,
 } from "@nostr-wot/signers";
-import { generateSecretKey, getPublicKey, nip19 } from "nostr-tools";
+import { generateSecretKey, nip19 } from "nostr-tools";
 import QRCode from "qrcode";
 import {
   localStorageSignerStorage,
@@ -478,6 +478,3 @@ export async function tryRestoreNip46(
     return null;
   }
 }
-
-// Suppress "unused" warning for getPublicKey import (used transitively in some paths).
-void getPublicKey;

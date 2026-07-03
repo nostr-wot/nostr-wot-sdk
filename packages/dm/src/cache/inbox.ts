@@ -179,6 +179,3 @@ export async function relaysForPartner(
   if (!list || list.write.length === 0) return defaults;
   return [...new Set([...list.write, ...defaults])];
 }
-
-/** Re-export for the publisher path. */
-export const _publishPool = getPool;

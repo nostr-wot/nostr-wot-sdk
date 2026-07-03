@@ -40,7 +40,7 @@ import { NostrSdkProvider } from "nostr-wot-sdk/react";
 - `<NostrDataProvider>` from `@nostr-wot/data/react` — configures default relays, profile aggregators, and SWR cache persistence
 - `<WoTProvider>` from `@nostr-wot/wot/react` (only when `wot.enabled: true`) — provides WoT scoring context
 
-WoT hooks (`useWoT`, `useTrustScore`, `useIsInWoT`, `useBatchWoT`) require `wot.enabled: true`. Data hooks (`useProfile`, `useNote`, `useThread`, …) work either way.
+WoT hooks (`useWoT`, `useIsInWoT`, `useBatchWoT`) require `wot.enabled: true`. Data hooks (`useProfile`, `useNote`, `useThread`, …) work either way.
 
 ## Re-export map
 
@@ -48,21 +48,34 @@ WoT hooks (`useWoT`, `useTrustScore`, `useIsInWoT`, `useBatchWoT`) require `wot.
 |---|---|
 | `nostr-wot-sdk` | `@nostr-wot/wot` |
 | `nostr-wot-sdk/react` | `@nostr-wot/wot/react` + `@nostr-wot/data/react` + `<NostrSdkProvider>` |
-| `nostr-wot-sdk/solid` | `@nostr-wot/wot/solid` |
 | `nostr-wot-sdk/relay` | `@nostr-wot/relay` |
 | `nostr-wot-sdk/relay/react` | `@nostr-wot/relay/react` |
 | `nostr-wot-sdk/data` | `@nostr-wot/data` |
 | `nostr-wot-sdk/data/cache` | `@nostr-wot/data/cache` |
+| `nostr-wot-sdk/signers` | `@nostr-wot/signers` |
+| `nostr-wot-sdk/ui` | `@nostr-wot/ui` |
+| `nostr-wot-sdk/dm` | `@nostr-wot/dm` |
+| `nostr-wot-sdk/dm/react` | `@nostr-wot/dm/react` |
+| `nostr-wot-sdk/wallet` | `@nostr-wot/wallet` |
+| `nostr-wot-sdk/wallet/react` | `@nostr-wot/wallet/react` |
+| `nostr-wot-sdk/auth` | `@nostr-wot/auth` |
+| `nostr-wot-sdk/blossom` | `@nostr-wot/blossom` |
 
-For DM, signers, blossom, and wallet, use the scoped packages directly — they're not re-exported from this meta:
+The whole family is surfaced through this meta, so you can either import via a
+subpath or depend on the scoped package directly:
 
 ```ts
-import { Nip07Signer } from "@nostr-wot/signers";
-import { sealAndGiftWrap } from "@nostr-wot/dm";
-import { useDMSession } from "@nostr-wot/dm/react";
-import { uploadToBlossom } from "@nostr-wot/blossom";
-import { NwcClient, requestZapInvoice } from "@nostr-wot/wallet";
+import { Nip07Signer } from "nostr-wot-sdk/signers";
+import { sealAndGiftWrap } from "nostr-wot-sdk/dm";
+import { useDMSession } from "nostr-wot-sdk/dm/react";
+import { uploadToBlossom } from "nostr-wot-sdk/blossom";
+import { NwcClient, requestZapInvoice } from "nostr-wot-sdk/wallet";
 ```
+
+> Note: `@nostr-wot/ui`'s stylesheet is not re-exported — import it from the
+> scoped package directly: `import "@nostr-wot/ui/styles.css"`. The
+> framework-specific `@nostr-wot/auth/next` and `@nostr-wot/auth/client`
+> entries are likewise only available on the scoped package.
 
 ## Architecture
 
@@ -91,7 +104,7 @@ Every `@nostr-wot/*` package shares the same connection pool via `getPool()` / `
 
 - [@nostr-wot/data](https://www.npmjs.com/package/@nostr-wot/data) — fetchers, cache, hooks
 - [@nostr-wot/relay](https://www.npmjs.com/package/@nostr-wot/relay) — pool, batcher, stats
-- [@nostr-wot/signers](https://www.npmjs.com/package/@nostr-wot/signers) — NIP-07/46/55 + private key
+- [@nostr-wot/signers](https://www.npmjs.com/package/@nostr-wot/signers) — NIP-07/46 + private key
 - [@nostr-wot/dm](https://www.npmjs.com/package/@nostr-wot/dm) — NIP-04, NIP-17, cache, hooks
 - [@nostr-wot/blossom](https://www.npmjs.com/package/@nostr-wot/blossom) — uploads
 - [@nostr-wot/wallet](https://www.npmjs.com/package/@nostr-wot/wallet) — NWC + zaps

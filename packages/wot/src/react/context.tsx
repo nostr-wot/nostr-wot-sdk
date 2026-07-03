@@ -1,48 +1,11 @@
 import {
   createContext,
   useContext,
-  useState,
-  useEffect,
   useMemo,
-  useCallback,
   type ReactNode,
 } from 'react';
 import { WoT } from '../wot';
-import type { WoTOptions, NostrWindow } from '../types';
-
-/**
- * Extension connection state
- */
-export type ExtensionConnectionState =
-  | 'checking'
-  | 'connected'
-  | 'not-available';
-
-/**
- * Extension status exposed to consumers
- */
-export interface ExtensionState {
-  /**
-   * Current connection state
-   */
-  state: ExtensionConnectionState;
-  /**
-   * Whether extension is connected and ready
-   */
-  isConnected: boolean;
-  /**
-   * Whether extension is currently checking
-   */
-  isChecking: boolean;
-  /**
-   * Whether check is complete
-   */
-  isChecked: boolean;
-  /**
-   * Manually trigger a check
-   */
-  refresh: () => void;
-}
+import type { WoTOptions } from '../types';
 
 /**
  * WoT context value
@@ -50,7 +13,6 @@ export interface ExtensionState {
 interface WoTContextValue {
   wot: WoT | null;
   isReady: boolean;
-  extension: ExtensionState;
 }
 
 /**
@@ -73,38 +35,17 @@ export interface WoTProviderProps {
 }
 
 /**
- * Check if extension is available
- */
-function checkExtensionAvailable(): boolean {
-  if (typeof window === 'undefined') return false;
-  return !!(window as NostrWindow).nostr?.wot;
-}
-
-/**
  * WoT provider component
  *
- * Provides WoT instance to all children components.
- * Automatically detects extension availability.
+ * Provides a WoT instance to all children components.
  *
  * @example
  * ```tsx
- * import { WoTProvider } from 'nostr-wot-sdk/react';
+ * import { WoTProvider } from '@nostr-wot/wot/react';
  *
- * // Basic usage - automatically detects extension
  * function App() {
  *   return (
- *     <WoTProvider>
- *       <YourApp />
- *     </WoTProvider>
- *   );
- * }
- *
- * // With fallback for when extension is not available
- * function App() {
- *   return (
- *     <WoTProvider options={{
- *       fallback: { myPubkey: 'abc123...' }
- *     }}>
+ *     <WoTProvider options={{ myPubkey: 'abc123...' }}>
  *       <YourApp />
  *     </WoTProvider>
  *   );
@@ -115,58 +56,8 @@ export function WoTProvider({
   options = {},
   children,
 }: WoTProviderProps) {
-  const [extensionState, setExtensionState] = useState<ExtensionConnectionState>('checking');
-  const [isReady, setIsReady] = useState(false);
-
-  // Check extension availability (manual refresh)
-  const checkExtension = useCallback(() => {
-    const available = checkExtensionAvailable();
-    setExtensionState(available ? 'connected' : 'not-available');
-    setIsReady(true);
-  }, []);
-
-  // Check on mount with retry mechanism
-  // Extensions inject their content scripts asynchronously after page load,
-  // so we need to poll for a short period to detect them reliably
-  useEffect(() => {
-    // Check immediately
-    if (checkExtensionAvailable()) {
-      setExtensionState('connected');
-      setIsReady(true);
-      return;
-    }
-
-    // Retry several times - extensions may inject after page load
-    let attempts = 0;
-    const maxAttempts = 15;
-    const intervalMs = 100; // Check every 100ms for 1.5 seconds total
-
-    const intervalId = setInterval(() => {
-      attempts++;
-
-      if (checkExtensionAvailable()) {
-        setExtensionState('connected');
-        setIsReady(true);
-        clearInterval(intervalId);
-        return;
-      }
-
-      if (attempts >= maxAttempts) {
-        setExtensionState('not-available');
-        setIsReady(true);
-        clearInterval(intervalId);
-      }
-    }, intervalMs);
-
-    return () => clearInterval(intervalId);
-  }, []);
-
-  // Create WoT instance
+  // Create WoT instance immediately
   const wot = useMemo(() => {
-    if (!isReady) {
-      return null;
-    }
-
     try {
       return new WoT(options);
     } catch (error) {
@@ -174,7 +65,6 @@ export function WoTProvider({
       return null;
     }
   }, [
-    isReady,
     options.oracle,
     options.myPubkey,
     options.maxHops,
@@ -183,28 +73,12 @@ export function WoTProvider({
     options.fallback?.oracle,
   ]);
 
-  // Extension state for consumers
-  const extension = useMemo<ExtensionState>(() => {
-    const isConnected = extensionState === 'connected';
-    const isChecking = extensionState === 'checking';
-    const isChecked = extensionState !== 'checking';
-
-    return {
-      state: extensionState,
-      isConnected,
-      isChecking,
-      isChecked,
-      refresh: checkExtension,
-    };
-  }, [extensionState, checkExtension]);
-
   const value = useMemo<WoTContextValue>(
     () => ({
       wot,
-      isReady: isReady && wot !== null,
-      extension,
+      isReady: wot !== null,
     }),
-    [wot, isReady, extension]
+    [wot]
   );
 
   return <WoTContext.Provider value={value}>{children}</WoTContext.Provider>;
@@ -234,25 +108,4 @@ export function useWoTContext(): WoTContextValue {
 export function useWoTInstance(): WoT | null {
   const { wot } = useWoTContext();
   return wot;
-}
-
-/**
- * Hook to access extension state
- *
- * @returns Extension state and status
- *
- * @example
- * ```tsx
- * function ExtensionStatus() {
- *   const { isConnected, isChecking } = useExtension();
- *
- *   if (isChecking) return <span>Checking...</span>;
- *   if (isConnected) return <span>Extension connected!</span>;
- *   return <span>Extension not available</span>;
- * }
- * ```
- */
-export function useExtension(): ExtensionState {
-  const { extension } = useWoTContext();
-  return extension;
 }

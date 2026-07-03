@@ -25,8 +25,3 @@ export interface NostrSigner {
    *  (NIP-46) or extension permission. */
   close?(): Promise<void> | void;
 }
-
-export type SignerCapabilities = {
-  nip04: boolean;
-  nip44: boolean;
-};

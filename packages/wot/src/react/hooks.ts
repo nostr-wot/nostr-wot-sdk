@@ -11,10 +11,6 @@ export interface UseWoTResult {
    */
   distance: number | null;
   /**
-   * Trust score (0-1)
-   */
-  score: number;
-  /**
    * Whether data is currently loading
    */
   loading: boolean;
@@ -52,14 +48,14 @@ export interface UseWoTOptions extends QueryOptions {
  * @example
  * ```tsx
  * function Profile({ pubkey }) {
- *   const { distance, score, loading } = useWoT(pubkey);
+ *   const { distance, loading } = useWoT(pubkey);
  *
  *   if (loading) return <Spinner />;
  *
  *   return (
  *     <div>
  *       {distance !== null ? (
- *         <span>{distance} hops away (score: {score.toFixed(2)})</span>
+ *         <span>{distance} hops away</span>
  *       ) : (
  *         <span>Not in your network</span>
  *       )}
@@ -71,7 +67,6 @@ export interface UseWoTOptions extends QueryOptions {
 export function useWoT(pubkey: string, options?: UseWoTOptions): UseWoTResult {
   const { wot, isReady } = useWoTContext();
   const [distance, setDistance] = useState<number | null>(null);
-  const [score, setScore] = useState(0);
   const [details, setDetails] = useState<DistanceResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
@@ -90,16 +85,14 @@ export function useWoT(pubkey: string, options?: UseWoTOptions): UseWoTResult {
     setError(null);
 
     try {
-      const [distResult, scoreResult, detailsResult] = await Promise.all([
+      const [distResult, detailsResult] = await Promise.all([
         wot.getDistance(pubkey, options),
-        wot.getTrustScore(pubkey),
         wot.getDetails(pubkey, options),
       ]);
 
       // Only update if this is still the latest request
       if (fetchId === fetchIdRef.current) {
         setDistance(distResult);
-        setScore(scoreResult);
         setDetails(detailsResult);
         setLoading(false);
       }
@@ -123,7 +116,6 @@ export function useWoT(pubkey: string, options?: UseWoTOptions): UseWoTResult {
 
   return {
     distance,
-    score,
     loading,
     error,
     details,
@@ -227,101 +219,6 @@ export function useIsInWoT(
 }
 
 /**
- * Result from useTrustScore hook
- */
-export interface UseTrustScoreResult {
-  /**
-   * Trust score (0-1)
-   */
-  score: number;
-  /**
-   * Whether data is currently loading
-   */
-  loading: boolean;
-  /**
-   * Error if query failed
-   */
-  error: Error | null;
-  /**
-   * Refetch data
-   */
-  refetch: () => void;
-}
-
-/**
- * Hook to get trust score for a pubkey
- *
- * @param pubkey - Target pubkey
- * @param options - Query options
- * @returns Trust score
- *
- * @example
- * ```tsx
- * function TrustMeter({ pubkey }) {
- *   const { score, loading } = useTrustScore(pubkey);
- *
- *   if (loading) return <Spinner />;
- *
- *   return <ProgressBar value={score} />;
- * }
- * ```
- */
-export function useTrustScore(
-  pubkey: string,
-  options?: UseWoTOptions
-): UseTrustScoreResult {
-  const { wot, isReady } = useWoTContext();
-  const [score, setScore] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<Error | null>(null);
-  const fetchIdRef = useRef(0);
-
-  const skip = options?.skip ?? false;
-
-  const fetchData = useCallback(async () => {
-    if (!wot || !pubkey || skip) {
-      setLoading(false);
-      return;
-    }
-
-    const fetchId = ++fetchIdRef.current;
-    setLoading(true);
-    setError(null);
-
-    try {
-      const result = await wot.getTrustScore(pubkey);
-
-      if (fetchId === fetchIdRef.current) {
-        setScore(result);
-        setLoading(false);
-      }
-    } catch (err) {
-      if (fetchId === fetchIdRef.current) {
-        setError(err instanceof Error ? err : new Error('Unknown error'));
-        setLoading(false);
-      }
-    }
-  }, [wot, pubkey, skip]);
-
-  useEffect(() => {
-    if (isReady && !skip) {
-      fetchData();
-    }
-  }, [isReady, fetchData, skip]);
-
-  const refetch = useCallback(() => {
-    fetchData();
-  }, [fetchData]);
-
-  return {
-    score,
-    loading,
-    error,
-    refetch,
-  };
-}
-
-/**
  * Result from useBatchWoT hook
  */
 export interface UseBatchWoTResult {
@@ -332,7 +229,6 @@ export interface UseBatchWoTResult {
     string,
     {
       distance: number | null;
-      score: number;
       inWoT: boolean;
     }
   >;
@@ -408,12 +304,11 @@ export function useBatchWoT(
       if (fetchId === fetchIdRef.current) {
         const mapped = new Map<
           string,
-          { distance: number | null; score: number; inWoT: boolean }
+          { distance: number | null; inWoT: boolean }
         >();
         for (const [pk, result] of batchResults) {
           mapped.set(pk, {
             distance: result.distance,
-            score: result.score,
             inWoT: result.inWoT,
           });
         }

@@ -5,11 +5,9 @@ import {
   encryptNip04,
   sealAndGiftWrap,
 } from "../index";
-import { _publishPool, relaysForPartner } from "./inbox";
+import { relaysForPartner } from "./inbox";
 import { ingestMessage } from "./store";
 import type { DMMessage, DMSession, SendDMOptions } from "./types";
-
-void _publishPool; // silence unused-export warning
 
 /**
  * Send a DM to `partnerPubkey`. Returns the on-the-wire event after
