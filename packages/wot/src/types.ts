@@ -24,6 +24,20 @@ export interface WoTFallbackOptions {
 }
 
 /**
+ * A local Web-of-Trust query source that answers distance/membership queries
+ * without the remote Oracle. `@nostr-wot/graph`'s `WotGraph.asWoTSource()`
+ * returns a structurally-compatible object.
+ */
+export interface WoTLocalSource {
+  /** Distance in hops to `target`, or `null` if unreached/unknown. */
+  getDistance(target: string): number | null;
+  /** Whether `target` is within `maxHops`. */
+  isInMyWoT(target: string, maxHops?: number): boolean;
+  /** Trusted subset of `pubkeys`, sorted by score descending. */
+  filterByWoT(pubkeys: string[], opts?: { maxHops?: number }): string[];
+}
+
+/**
  * Options for WoT constructor
  */
 export interface WoTOptions {
@@ -51,6 +65,12 @@ export interface WoTOptions {
    * oracle queries.
    */
   fallback?: WoTFallbackOptions;
+  /**
+   * Optional local query source (e.g. from `@nostr-wot/graph`). When provided,
+   * `getDistance`, `isInMyWoT`, and `filterByWoT` resolve from it instead of
+   * the Oracle. Additive: all other methods still use the Oracle.
+   */
+  source?: WoTLocalSource;
 }
 
 /**

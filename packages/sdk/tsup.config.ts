@@ -17,6 +17,7 @@ const COMMON = {
     '@nostr-wot/wallet',
     '@nostr-wot/auth',
     '@nostr-wot/blossom',
+    '@nostr-wot/graph',
     'react',
   ],
   esbuildOptions(o: { jsx?: string }) {
@@ -39,4 +40,6 @@ export default defineConfig([
   { ...COMMON, entry: ['src/wallet/react/index.ts'], outDir: 'dist/wallet/react' },
   { ...COMMON, entry: ['src/auth/index.ts'], outDir: 'dist/auth' },
   { ...COMMON, entry: ['src/blossom/index.ts'], outDir: 'dist/blossom' },
+  { ...COMMON, entry: ['src/graph/index.ts'], outDir: 'dist/graph' },
+  { ...COMMON, entry: ['src/graph/react/index.ts'], outDir: 'dist/graph/react' },
 ]);

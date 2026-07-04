@@ -171,6 +171,26 @@
         "types": "./dist/blossom/index.d.cts",
         "default": "./dist/blossom/index.cjs"
       }
+    },
+    "./graph": {
+      "import": {
+        "types": "./dist/graph/index.d.ts",
+        "default": "./dist/graph/index.js"
+      },
+      "require": {
+        "types": "./dist/graph/index.d.cts",
+        "default": "./dist/graph/index.cjs"
+      }
+    },
+    "./graph/react": {
+      "import": {
+        "types": "./dist/graph/react/index.d.ts",
+        "default": "./dist/graph/react/index.js"
+      },
+      "require": {
+        "types": "./dist/graph/react/index.d.cts",
+        "default": "./dist/graph/react/index.cjs"
+      }
     }
   },
   "files": [
@@ -187,6 +207,7 @@
     "@nostr-wot/auth": "^2.0.0",
     "@nostr-wot/blossom": "^0.1.4",
     "@nostr-wot/data": "^0.5.0",
+    "@nostr-wot/graph": "^0.1.0",
     "@nostr-wot/dm": "^0.5.0",
     "@nostr-wot/relay": "^0.1.1",
     "@nostr-wot/signers": "^0.4.0",

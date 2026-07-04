@@ -1,6 +1,7 @@
 import type {
   WoTOptions,
   WoTFallbackOptions,
+  WoTLocalSource,
   QueryOptions,
   DistanceResult,
   DistanceBatchOptions,
@@ -36,9 +37,11 @@ export class WoT {
   private readonly maxHops: number;
   private readonly timeout: number;
   private readonly fallbackOptions: WoTFallbackOptions | null;
+  private readonly source: WoTLocalSource | null;
 
   constructor(options: WoTOptions = {}) {
     this.fallbackOptions = options.fallback ?? null;
+    this.source = options.source ?? null;
 
     // Use provided pubkey or fallback pubkey for oracle queries
     if (options.myPubkey && isValidPubkey(options.myPubkey)) {
@@ -142,6 +145,11 @@ export class WoT {
   ): Promise<number | null> {
     const normalizedTarget = this.validatePubkey(target, 'target');
 
+    // Local source short-circuits the Oracle when provided.
+    if (this.source) {
+      return this.source.getDistance(normalizedTarget);
+    }
+
     const myPubkey = this.getEffectivePubkey();
     const maxHops = options?.maxHops ?? this.maxHops;
 
@@ -171,9 +179,13 @@ export class WoT {
    */
   async isInMyWoT(target: string, options?: QueryOptions): Promise<boolean> {
     const normalizedTarget = this.validatePubkey(target, 'target');
+    const maxHops = options?.maxHops ?? this.maxHops;
+
+    if (this.source) {
+      return this.source.isInMyWoT(normalizedTarget, maxHops);
+    }
 
     const distance = await this.getDistance(normalizedTarget, options);
-    const maxHops = options?.maxHops ?? this.maxHops;
 
     return distance !== null && distance <= maxHops;
   }
@@ -362,6 +374,11 @@ export class WoT {
 
     if (normalizedPubkeys.length === 0) {
       return [];
+    }
+
+    if (this.source) {
+      const maxHops = options?.maxHops ?? this.maxHops;
+      return this.source.filterByWoT(normalizedPubkeys, { maxHops });
     }
 
     const results = await this.batchCheck(normalizedPubkeys, options);

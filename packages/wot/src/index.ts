@@ -5,6 +5,7 @@ export { WoT } from './wot';
 export type {
   WoTOptions,
   WoTFallbackOptions,
+  WoTLocalSource,
   QueryOptions,
   DistanceResult,
   DistanceBatchOptions,
