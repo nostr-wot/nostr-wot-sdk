@@ -1,5 +1,28 @@
 # @nostr-wot/ui
 
+## 0.6.0
+
+### Minor Changes
+
+- @nostr-wot/ui: customization knobs for hosts that bring their own session/persistence.
+
+  - **`flatLayout?: boolean`** on `LoginWidget` / `LoginModal` — render every login method in a single list with no Advanced disclosure. Useful when the host has decided up-front which methods to show and wants the full picker visible at once.
+  - **`methodIcons?: Partial<Record<LoginMethodId, ReactNode>>`** — replace the default emoji icon (`🔐`, `🔑`, `✨`, `🛡️`) for any of the four methods. The override renders inside the existing `nui-method-icon` slot so styling is preserved.
+  - **`showRememberToggle?: boolean`** — reserved for a future "stay signed in" UI; currently a no-op so consumers can pre-thread the prop without a breaking change later.
+  - **Extended `onLogin` payload** — when the host maintains its own session/bridge and needs to re-route the user's auth material, the callback now receives optional method-specific extras:
+
+    - `nsec` for `generate` / `import`
+    - `bunkerUri` + `clientNsec` for `nip46`
+
+    For NIP-46 QR mode, the bunker URI is synthesized as `bunker://<pubkey>?relay=...` matching the format `tryRestoreNip46` uses, so the host can later reconnect by passing the URI back through `Nip46Method` paste mode.
+
+  All new props are optional and existing callers keep their current rendering / payload shape.
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @nostr-wot/data@0.5.0
+
 ## 0.5.1
 
 ### Patch Changes

@@ -1,7 +1,7 @@
 {
   "name": "@nostr-wot/wot",
-  "version": "0.1.5",
-  "description": "Web-of-Trust scoring + extension bridge for Nostr. WoT class, distance/scoring, browser extension integration, React + Solid hooks.",
+  "version": "0.1.6",
+  "description": "Web-of-Trust distance queries for Nostr over an Oracle/relays. WoT class + React hooks.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "MIT",
   "keywords": [
@@ -48,16 +48,6 @@
         "types": "./dist/react/index.d.cts",
         "default": "./dist/react/index.cjs"
       }
-    },
-    "./solid": {
-      "import": {
-        "types": "./dist/solid/index.d.ts",
-        "default": "./dist/solid/index.js"
-      },
-      "require": {
-        "types": "./dist/solid/index.d.cts",
-        "default": "./dist/solid/index.cjs"
-      }
     }
   },
   "files": [
@@ -71,18 +61,11 @@
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build"
   },
-  "dependencies": {
-    "@nostr-wot/data": "^0.4.0"
-  },
   "peerDependencies": {
-    "react": ">=16.8.0",
-    "solid-js": ">=1.0.0"
+    "react": ">=16.8.0"
   },
   "peerDependenciesMeta": {
     "react": {
-      "optional": true
-    },
-    "solid-js": {
       "optional": true
     }
   },

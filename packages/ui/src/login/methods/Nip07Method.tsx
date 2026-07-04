@@ -1,18 +1,29 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import {
   Nip07Signer,
   isNip07Available,
   type NostrSigner,
 } from "@nostr-wot/signers";
 
+export interface Nip07MethodExtras {
+  // Reserved for parity with other methods. NIP-07 has no extra material.
+}
+
 export function Nip07Method({
   onError,
   onAttached,
+  icon,
 }: {
   onError: (msg: string) => void;
-  onAttached: (signer: NostrSigner, pubkey: string) => void | Promise<void>;
+  onAttached: (
+    signer: NostrSigner,
+    pubkey: string,
+    extras?: Nip07MethodExtras,
+  ) => void | Promise<void>;
+  /** Custom icon node rendered inside `nui-method-icon`. Defaults to a plug emoji. */
+  icon?: ReactNode;
 }) {
   const [busy, setBusy] = useState(false);
 
@@ -43,7 +54,7 @@ export function Nip07Method({
       data-busy={busy}
       disabled={busy}
     >
-      <span className="nui-method-icon" aria-hidden>🔌</span>
+      <span className="nui-method-icon" aria-hidden>{icon ?? "🔌"}</span>
       <span className="nui-method-text">
         <span className="nui-method-label">
           Browser extension

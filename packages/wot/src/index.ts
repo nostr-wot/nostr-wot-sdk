@@ -5,19 +5,11 @@ export { WoT } from './wot';
 export type {
   WoTOptions,
   WoTFallbackOptions,
-  ScoringConfig,
+  WoTLocalSource,
   QueryOptions,
   DistanceResult,
   DistanceBatchOptions,
-  ExtensionDistanceResult,
-  ExtensionConfig,
-  ExtensionStatus,
-  ExtensionConnectionStatus,
-  GraphStats,
   BatchResult,
-  NostrContactEvent,
-  NostrWoTExtension,
-  NostrWindow,
 } from './types';
 
 // Errors

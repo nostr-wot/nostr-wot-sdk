@@ -34,11 +34,23 @@ export interface ZapRequestArgs {
 /**
  * Build + sign a NIP-57 zap request event. Returns the signed event,
  * which the caller appends to the LNURL callback as `nostr=...`.
+ *
+ * Validates two NIP-57 requirements that the spec calls out explicitly:
+ *   - `relays` must be non-empty (the LNURL provider needs at least one
+ *     relay to publish the kind 9735 receipt to).
+ *   - `amountMsats` must be a positive integer.
  */
 export async function buildZapRequest(
   signer: NostrSigner,
   args: ZapRequestArgs,
 ): Promise<{ event: import("nostr-tools").Event; encoded: string }> {
+  if (!Number.isFinite(args.amountMsats) || args.amountMsats <= 0) {
+    throw new Error("amountMsats must be a positive number");
+  }
+  if (!args.relays || args.relays.length === 0) {
+    throw new Error("relays must not be empty (NIP-57 requires at least one relay)");
+  }
+
   const tags: string[][] = [
     ["p", args.recipientPubkey],
     ["amount", String(args.amountMsats)],

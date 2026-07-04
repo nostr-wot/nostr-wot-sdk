@@ -1,22 +1,12 @@
 import type {
   WoTOptions,
   WoTFallbackOptions,
+  WoTLocalSource,
   QueryOptions,
   DistanceResult,
   DistanceBatchOptions,
   BatchResult,
-  NostrWindow,
-  NostrWoTExtension,
-  ExtensionConfig,
-  ExtensionStatus,
-  ExtensionConnectionStatus,
-  GraphStats,
 } from './types';
-
-/**
- * Default Chrome Web Store extension ID
- */
-const DEFAULT_EXTENSION_ID = 'gfmefgdkmjpjinecjchlangpamhclhdo';
 import {
   NetworkError,
   NotFoundError,
@@ -38,10 +28,8 @@ import {
 /**
  * WoT (Web of Trust) SDK for querying Nostr trust relationships
  *
- * The SDK always tries to use the browser extension when available.
- * The extension syncs and caches the follow graph locally, providing
- * the best performance and privacy. When the extension is not available,
- * it falls back to the oracle API.
+ * Queries are answered by the oracle API, which computes hop distance
+ * over the public kind-3 follow graph.
  */
 export class WoT {
   private readonly oracle: string;
@@ -49,15 +37,13 @@ export class WoT {
   private readonly maxHops: number;
   private readonly timeout: number;
   private readonly fallbackOptions: WoTFallbackOptions | null;
-  private readonly extensionId: string;
-  private extension: NostrWoTExtension | null = null;
-  private extensionPubkey: string | null = null;
+  private readonly source: WoTLocalSource | null;
 
   constructor(options: WoTOptions = {}) {
     this.fallbackOptions = options.fallback ?? null;
-    this.extensionId = options.extensionId ?? DEFAULT_EXTENSION_ID;
+    this.source = options.source ?? null;
 
-    // Use provided pubkey or fallback pubkey for oracle fallback
+    // Use provided pubkey or fallback pubkey for oracle queries
     if (options.myPubkey && isValidPubkey(options.myPubkey)) {
       this.fallbackPubkey = normalizePubkey(options.myPubkey);
     } else if (this.fallbackOptions?.myPubkey) {
@@ -76,63 +62,15 @@ export class WoT {
   }
 
   /**
-   * Checks if browser extension is available and returns it
-   * Simply checks window.nostr.wot - extension auto-injects when enabled
-   * Always returns fresh reference to handle extension reloads
+   * Gets the effective pubkey for oracle queries
    */
-  private async getExtension(): Promise<NostrWoTExtension | null> {
-    // Check if running in browser
-    if (typeof window === 'undefined') return null;
-
-    const win = window as NostrWindow;
-
-    // Check if extension API is available (auto-injected by extension)
-    if (win.nostr?.wot) {
-      this.extension = win.nostr.wot;
-
-      // Get pubkey if not already fetched
-      if (!this.extensionPubkey) {
-        try {
-          this.extensionPubkey = await this.extension.getMyPubkey();
-        } catch {
-          // Fall back to NIP-07 window.nostr.getPublicKey()
-          if (win.nostr?.getPublicKey) {
-            try {
-              this.extensionPubkey = await win.nostr.getPublicKey();
-            } catch {
-              // Ignore - will use fallback pubkey
-            }
-          }
-        }
-      }
-
-      return this.extension;
-    }
-
-    // Extension not available - will fall back to oracle
-    this.extension = null;
-    return null;
-  }
-
-  /**
-   * Gets the effective pubkey (from extension or fallback)
-   */
-  private async getEffectivePubkey(): Promise<string> {
-    // Try to get extension first
-    await this.getExtension();
-
-    // Use extension pubkey if available
-    if (this.extensionPubkey) {
-      return this.extensionPubkey;
-    }
-
-    // Fall back to provided pubkey
+  private getEffectivePubkey(): string {
     if (this.fallbackPubkey) {
       return this.fallbackPubkey;
     }
 
     throw new ValidationError(
-      'No pubkey available. Either install the WoT extension or provide myPubkey/fallback options.',
+      'No pubkey available. Provide myPubkey or fallback options.',
       'myPubkey'
     );
   }
@@ -207,14 +145,12 @@ export class WoT {
   ): Promise<number | null> {
     const normalizedTarget = this.validatePubkey(target, 'target');
 
-    // Check extension first - extension always takes priority
-    const ext = await this.getExtension();
-    if (ext) {
-      return ext.getDistance(normalizedTarget);
+    // Local source short-circuits the Oracle when provided.
+    if (this.source) {
+      return this.source.getDistance(normalizedTarget);
     }
 
-    // Fall back to oracle
-    const myPubkey = await this.getEffectivePubkey();
+    const myPubkey = this.getEffectivePubkey();
     const maxHops = options?.maxHops ?? this.maxHops;
 
     interface DistanceResponse {
@@ -243,38 +179,15 @@ export class WoT {
    */
   async isInMyWoT(target: string, options?: QueryOptions): Promise<boolean> {
     const normalizedTarget = this.validatePubkey(target, 'target');
-
-    // Check extension first - extension always takes priority
-    const ext = await this.getExtension();
-    if (ext) {
-      const maxHops = options?.maxHops ?? this.maxHops;
-      return ext.isInMyWoT(normalizedTarget, maxHops);
-    }
-
-    // Fall back to oracle
-    const distance = await this.getDistance(normalizedTarget, options);
     const maxHops = options?.maxHops ?? this.maxHops;
 
-    return distance !== null && distance <= maxHops;
-  }
-
-  /**
-   * Get computed trust score from extension
-   * @param target - Target pubkey (hex)
-   * @returns Trust score between 0 and 1, or 0 if not connected or extension unavailable
-   */
-  async getTrustScore(target: string): Promise<number> {
-    const normalizedTarget = this.validatePubkey(target, 'target');
-
-    // Trust scores come from extension only
-    const ext = await this.getExtension();
-    if (ext) {
-      const score = await ext.getTrustScore(normalizedTarget);
-      return score ?? 0;
+    if (this.source) {
+      return this.source.isInMyWoT(normalizedTarget, maxHops);
     }
 
-    // No extension - cannot calculate trust score
-    return 0;
+    const distance = await this.getDistance(normalizedTarget, options);
+
+    return distance !== null && distance <= maxHops;
   }
 
   /**
@@ -292,13 +205,6 @@ export class WoT {
     const normalizedFrom = this.validatePubkey(from, 'from');
     const normalizedTo = this.validatePubkey(to, 'to');
 
-    // Check extension first - extension always takes priority
-    const ext = await this.getExtension();
-    if (ext) {
-      return ext.getDistanceBetween(normalizedFrom, normalizedTo);
-    }
-
-    // Fall back to oracle
     const maxHops = options?.maxHops ?? this.maxHops;
 
     interface DistanceResponse {
@@ -345,34 +251,7 @@ export class WoT {
 
     const maxHops = options?.maxHops ?? this.maxHops;
 
-    // Check extension first - extension always takes priority
-    const ext = await this.getExtension();
-    if (ext) {
-      const results = new Map<string, BatchResult>();
-
-      // Use extension's batch APIs for efficiency
-      const [distances, scores] = await Promise.all([
-        ext.getDistanceBatch(normalizedTargets),
-        ext.getTrustScoreBatch(normalizedTargets),
-      ]);
-
-      for (const pubkey of normalizedTargets) {
-        const distance = distances[pubkey] ?? null;
-        const score = scores[pubkey] ?? 0;
-
-        results.set(pubkey, {
-          pubkey,
-          distance,
-          score,
-          inWoT: distance !== null && distance <= maxHops,
-        });
-      }
-
-      return results;
-    }
-
-    // Fall back to oracle batch API
-    const myPubkey = await this.getEffectivePubkey();
+    const myPubkey = this.getEffectivePubkey();
     const results = new Map<string, BatchResult>();
 
     // Process in batches of 50 to avoid URL length limits
@@ -400,7 +279,6 @@ export class WoT {
           results.set(item.pubkey, {
             pubkey: item.pubkey,
             distance: item.distance,
-            score: 0, // Trust scores only available via extension
             inWoT,
           });
         }
@@ -411,7 +289,6 @@ export class WoT {
             results.set(pubkey, {
               pubkey,
               distance: null,
-              score: 0,
               inWoT: false,
             });
           }
@@ -432,9 +309,6 @@ export class WoT {
    * @param target - Target pubkey (hex)
    * @param options - Query options
    * @returns Distance result or null if not reachable
-   *
-   * Note: Extension returns `{ hops, paths }`. Oracle may return
-   * additional fields like `bridges` and `mutual`.
    */
   async getDetails(
     target: string,
@@ -442,14 +316,7 @@ export class WoT {
   ): Promise<DistanceResult | null> {
     const normalizedTarget = this.validatePubkey(target, 'target');
 
-    // Check extension first - extension always takes priority
-    const ext = await this.getExtension();
-    if (ext) {
-      return ext.getDetails(normalizedTarget);
-    }
-
-    // Fall back to oracle
-    const myPubkey = await this.getEffectivePubkey();
+    const myPubkey = this.getEffectivePubkey();
     const maxHops = options?.maxHops ?? this.maxHops;
 
     interface DetailsResponse {
@@ -464,8 +331,7 @@ export class WoT {
         `/details/${myPubkey}/${normalizedTarget}?maxHops=${maxHops}`,
         options
       );
-      // Oracle doesn't return score, so default to 0
-      return { ...response, score: 0 };
+      return response;
     } catch (error) {
       if (error instanceof NotFoundError) {
         return null;
@@ -475,8 +341,7 @@ export class WoT {
   }
 
   /**
-   * Get the current pubkey (from extension or fallback)
-   * Returns the extension's pubkey when available.
+   * Get the current pubkey used for oracle queries
    */
   async getMyPubkey(): Promise<string> {
     return this.getEffectivePubkey();
@@ -490,80 +355,10 @@ export class WoT {
   }
 
   /**
-   * Check if extension is available and being used
-   */
-  async isUsingExtension(): Promise<boolean> {
-    const ext = await this.getExtension();
-    return ext !== null;
-  }
-
-  /**
-   * Get detailed extension connection status
-   * Can detect if extension is installed but not enabled for this domain
-   * @returns Connection status: 'connected' | 'not-enabled' | 'unavailable' | 'not-browser'
-   */
-  async getExtensionStatus(): Promise<ExtensionConnectionStatus> {
-    // Not in browser
-    if (typeof window === 'undefined') {
-      return 'not-browser';
-    }
-
-    // Already connected
-    if ((window as NostrWindow).nostr?.wot) {
-      return 'connected';
-    }
-
-    // Try to detect if extension is installed via web_accessible_resources
-    if (this.extensionId) {
-      try {
-        const response = await fetch(
-          `chrome-extension://${this.extensionId}/detect.json`,
-          { method: 'HEAD' }
-        );
-        if (response.ok) {
-          return 'not-enabled'; // Installed but not enabled for this domain
-        }
-      } catch {
-        // Fetch failed - not installed or not accessible
-      }
-    }
-
-    return 'unavailable';
-  }
-
-  /**
-   * Get extension configuration (only available when using extension)
-   * @returns Extension config or null if not using extension
-   */
-  async getExtensionConfig(): Promise<ExtensionConfig | null> {
-    const ext = await this.getExtension();
-    if (!ext) return null;
-
-    return ext.getConfig();
-  }
-
-  // ============================================
-  // Extension-only methods (require extension)
-  // ============================================
-
-  /**
-   * Check if the extension is configured and ready
-   * @returns Status object with configuration state, or null if not using extension
-   */
-  async isConfigured(): Promise<ExtensionStatus | null> {
-    const ext = await this.getExtension();
-    if (!ext) return null;
-
-    return ext.isConfigured();
-  }
-
-  /**
    * Filter a list of pubkeys to only those within the Web of Trust
    * @param pubkeys - Array of pubkeys to filter
    * @param options - Query options (maxHops)
    * @returns Filtered array of pubkeys within WoT
-   *
-   * Note: Extension-only. Falls back to batchCheck when extension unavailable.
    */
   async filterByWoT(
     pubkeys: string[],
@@ -577,15 +372,15 @@ export class WoT {
       .filter((pk) => isValidPubkey(pk))
       .map((pk) => normalizePubkey(pk));
 
-    const maxHops = options?.maxHops ?? this.maxHops;
-
-    // Check extension first - extension has native filterByWoT
-    const ext = await this.getExtension();
-    if (ext) {
-      return ext.filterByWoT(normalizedPubkeys, maxHops);
+    if (normalizedPubkeys.length === 0) {
+      return [];
     }
 
-    // Fall back to batchCheck
+    if (this.source) {
+      const maxHops = options?.maxHops ?? this.maxHops;
+      return this.source.filterByWoT(normalizedPubkeys, { maxHops });
+    }
+
     const results = await this.batchCheck(normalizedPubkeys, options);
     return Array.from(results.entries())
       .filter(([, result]) => result.inWoT)
@@ -593,70 +388,10 @@ export class WoT {
   }
 
   /**
-   * Get the follow list for a pubkey
-   * @param pubkey - Optional, defaults to user's pubkey
-   * @returns Array of followed pubkeys
-   *
-   * Note: Extension-only. Returns empty array if extension unavailable.
-   */
-  async getFollows(pubkey?: string): Promise<string[]> {
-    const ext = await this.getExtension();
-    if (!ext) return [];
-
-    const normalizedPubkey = pubkey ? this.validatePubkey(pubkey, 'pubkey') : undefined;
-    return ext.getFollows(normalizedPubkey);
-  }
-
-  /**
-   * Get mutual follows between the user and a target
-   * @param pubkey - Target pubkey
-   * @returns Array of common followed pubkeys
-   *
-   * Note: Extension-only. Returns empty array if extension unavailable.
-   */
-  async getCommonFollows(pubkey: string): Promise<string[]> {
-    const ext = await this.getExtension();
-    if (!ext) return [];
-
-    const normalizedPubkey = this.validatePubkey(pubkey, 'pubkey');
-    return ext.getCommonFollows(normalizedPubkey);
-  }
-
-  /**
-   * Get graph statistics
-   * @returns Stats object with node/edge counts and sync info
-   *
-   * Note: Extension-only. Returns null if extension unavailable.
-   */
-  async getStats(): Promise<GraphStats | null> {
-    const ext = await this.getExtension();
-    if (!ext) return null;
-
-    return ext.getStats();
-  }
-
-  /**
-   * Get an actual path from the user to the target
-   * @param target - Target pubkey
-   * @returns Array of pubkeys [user, ..., target], or null if not connected
-   *
-   * Note: Extension-only. Returns null if extension unavailable.
-   */
-  async getPath(target: string): Promise<string[] | null> {
-    const ext = await this.getExtension();
-    if (!ext) return null;
-
-    const normalizedTarget = this.validatePubkey(target, 'target');
-    return ext.getPath(normalizedTarget);
-  }
-
-  /**
    * Get distances for multiple pubkeys in a single call
    * @param targets - Array of target pubkeys
    * @param options - Options object or boolean for backwards compatibility
    *   - `{ includePaths: true }` - Include path counts
-   *   - `{ includeScores: true }` - Include trust scores
-   *   - `{ includePaths: true, includeScores: true }` - Include both
    *   - `true` (legacy) - Same as `{ includePaths: true }`
    * @returns Record of pubkey to result based on options
    */
@@ -666,24 +401,16 @@ export class WoT {
   ): Promise<Record<string, number | null>>;
   async getDistanceBatch(
     targets: string[],
-    options: true | { includePaths: true; includeScores?: false }
+    options: true | { includePaths: true }
   ): Promise<Record<string, { hops: number; paths: number } | null>>;
   async getDistanceBatch(
     targets: string[],
-    options: { includePaths?: false; includeScores: true }
-  ): Promise<Record<string, { hops: number; score: number } | null>>;
-  async getDistanceBatch(
-    targets: string[],
-    options: { includePaths: true; includeScores: true }
-  ): Promise<Record<string, { hops: number; paths: number; score: number } | null>>;
-  async getDistanceBatch(
-    targets: string[],
     options?: boolean | DistanceBatchOptions
-  ): Promise<Record<string, number | { hops: number; paths?: number; score?: number } | null>>;
+  ): Promise<Record<string, number | { hops: number; paths?: number } | null>>;
   async getDistanceBatch(
     targets: string[],
     options: boolean | DistanceBatchOptions = false
-  ): Promise<Record<string, number | { hops: number; paths?: number; score?: number } | null>> {
+  ): Promise<Record<string, number | { hops: number; paths?: number } | null>> {
     if (!Array.isArray(targets) || targets.length === 0) {
       return {};
     }
@@ -698,17 +425,10 @@ export class WoT {
         ? { includePaths: options }
         : options || {};
 
-    const { includePaths, includeScores } = opts;
+    const { includePaths } = opts;
 
-    // Check extension first
-    const ext = await this.getExtension();
-    if (ext) {
-      return ext.getDistanceBatch(normalizedTargets, opts);
-    }
-
-    // Fall back to individual queries
-    if (includePaths || includeScores) {
-      const results: Record<string, { hops: number; paths?: number; score?: number } | null> = {};
+    if (includePaths) {
+      const results: Record<string, { hops: number; paths?: number } | null> = {};
       await Promise.all(
         normalizedTargets.map(async (pubkey) => {
           const details = await this.getDetails(pubkey);
@@ -716,10 +436,7 @@ export class WoT {
             results[pubkey] = null;
             return;
           }
-          const result: { hops: number; paths?: number; score?: number } = { hops: details.hops };
-          if (includePaths) result.paths = details.paths;
-          if (includeScores) result.score = details.score;
-          results[pubkey] = result;
+          results[pubkey] = { hops: details.hops, paths: details.paths };
         })
       );
       return results;
@@ -731,40 +448,6 @@ export class WoT {
         results[pubkey] = await this.getDistance(pubkey);
       })
     );
-    return results;
-  }
-
-  /**
-   * Get trust scores for multiple pubkeys in a single call
-   * @param targets - Array of target pubkeys
-   * @returns Record of pubkey to trust score (null if not connected)
-   */
-  async getTrustScoreBatch(
-    targets: string[]
-  ): Promise<Record<string, number | null>> {
-    if (!Array.isArray(targets) || targets.length === 0) {
-      return {};
-    }
-
-    const normalizedTargets = targets.map((t, i) =>
-      this.validatePubkey(t, `targets[${i}]`)
-    );
-
-    // Check extension first
-    const ext = await this.getExtension();
-    if (ext) {
-      return ext.getTrustScoreBatch(normalizedTargets);
-    }
-
-    // Fall back to individual queries
-    const results: Record<string, number | null> = {};
-    await Promise.all(
-      normalizedTargets.map(async (pubkey) => {
-        const score = await this.getTrustScore(pubkey);
-        results[pubkey] = score > 0 ? score : null;
-      })
-    );
-
     return results;
   }
 }

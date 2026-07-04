@@ -1,5 +1,13 @@
 # nostr-wot-sdk
 
+## 0.9.1
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @nostr-wot/data@0.5.0
+  - @nostr-wot/wot@0.1.6
+
 ## 0.9.0
 
 ### Minor Changes

@@ -46,12 +46,19 @@ function base64ToBytes(b64: string): Uint8Array {
  *
  * The signer is consulted ONCE per session (or whenever localStorage is
  * cleared). Subsequent encrypt/decrypt operations use only WebCrypto.
+ *
+ * `opts.storageKeyPrefix` overrides the default localStorage namespace
+ * (`@nostr-wot/dm:cache-key:`). Pass a stable per-app prefix when
+ * migrating from a pre-existing cache so user-side wrapped keys remain
+ * decryptable across the cutover.
  */
 export async function getOrCreateCacheKey(
   myPubkey: string,
   signer: NostrSigner,
+  opts: { storageKeyPrefix?: string } = {},
 ): Promise<CryptoKey> {
-  const cached = ramKeys.get(myPubkey);
+  const ramKey = `${opts.storageKeyPrefix ?? KEY_PREFIX}${myPubkey}`;
+  const cached = ramKeys.get(ramKey);
   if (cached) return cached;
 
   if (!signer.nip44Encrypt || !signer.nip44Decrypt) {
@@ -60,7 +67,7 @@ export async function getOrCreateCacheKey(
     );
   }
 
-  const storageKey = KEY_PREFIX + myPubkey;
+  const storageKey = (opts.storageKeyPrefix ?? KEY_PREFIX) + myPubkey;
   let rawB64: string;
 
   const wrapped =
@@ -88,7 +95,7 @@ export async function getOrCreateCacheKey(
   // GC-pinned for now, so this closes only one of several windows.
   raw.fill(0);
 
-  ramKeys.set(myPubkey, key);
+  ramKeys.set(ramKey, key);
   return key;
 }
 

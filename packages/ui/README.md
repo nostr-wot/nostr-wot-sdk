@@ -249,6 +249,7 @@ Re-exports from `@nostr-wot/data/react` so you can import everything from `@nost
 | `usePubkey()` | The active hex pubkey or `null` |
 | `useLogin()` | `(signer) => Promise<void>` callback |
 | `useLogout()` | `() => Promise<void>` callback |
+| `useKEKSigner()` | Narrow NIP-44 signer (`{ pubkey, nip44Encrypt, nip44Decrypt }`) if the active signer supports NIP-44, else `null` — guard before calling DM cache-key / wallet-store encryption helpers |
 
 ## Login methods
 
@@ -289,7 +290,12 @@ Option A: CSS variables. The provider sets `data-nui-root` on its wrapper, so al
   --nui-primary-fg: #ffffff;
   --nui-primary-hover: #4f46e5;
 
-  --nui-radius: 10px;
+  /* Radius is split so cards and pill-style buttons can diverge.
+     Both fall back to --nui-radius if you only set the legacy var. */
+  --nui-radius: 10px;            /* legacy / fallback */
+  --nui-card-radius: 10px;       /* modal, inputs, method tiles */
+  --nui-btn-radius: 9999px;      /* primary action buttons */
+
   --nui-shadow: 0 8px 24px rgba(0,0,0,0.12);
   --nui-space: 12px;
   --nui-font: "Inter", system-ui, sans-serif;
@@ -303,7 +309,19 @@ Force a theme:
 
 ```tsx
 <NostrSessionProvider theme="dark">{...}</NostrSessionProvider>
+// or:  theme="light" | "system" | "la-crypta"
 ```
+
+### Built-in themes
+
+| `theme=` | What you get |
+|---|---|
+| `"system"` (default) | Light, with dark fallback via `prefers-color-scheme: dark` |
+| `"light"` | Forced light palette regardless of system |
+| `"dark"` | Forced dark palette |
+| `"la-crypta"` | La Crypta palette — near-black background (`#0a0a0a`), lime-green primary (`#b4f953`), 12px card radius + fully pill-shaped buttons (`--nui-btn-radius: 9999px`), Inter font stack |
+
+Each theme is a `[data-nui-root][data-nui-theme="..."]` block in `styles.css` that overrides the variables above. To add your own, target the same selector in your stylesheet and re-define whichever variables you want.
 
 Per-element overrides via the `classes` slot prop on every component:
 

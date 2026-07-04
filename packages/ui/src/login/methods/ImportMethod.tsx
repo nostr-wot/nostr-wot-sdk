@@ -6,13 +6,23 @@ import { PrivateKeySigner, type NostrSigner } from "@nostr-wot/signers";
 import { SIGNER_STORAGE_KEY_NSEC } from "../../signer-storage";
 import { useSignerStorage } from "../../signer-storage-context";
 
+export interface ImportMethodExtras {
+  /** The imported nsec (bech32). When the user pasted hex, this is the
+   *  bech32 encoding of those bytes. */
+  nsec: string;
+}
+
 export function ImportMethod({
   onError,
   onAttached,
   onBack,
 }: {
   onError: (msg: string) => void;
-  onAttached: (signer: NostrSigner, pubkey: string) => void | Promise<void>;
+  onAttached: (
+    signer: NostrSigner,
+    pubkey: string,
+    extras?: ImportMethodExtras,
+  ) => void | Promise<void>;
   onBack: () => void;
 }) {
   const storage = useSignerStorage();
@@ -51,7 +61,7 @@ export function ImportMethod({
         }
       }
       const pubkey = await signer.getPublicKey();
-      await onAttached(signer, pubkey);
+      await onAttached(signer, pubkey, { nsec });
     } catch (err) {
       onError(err instanceof Error ? err.message : String(err));
     } finally {

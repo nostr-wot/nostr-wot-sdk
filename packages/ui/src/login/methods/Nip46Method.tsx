@@ -6,7 +6,7 @@ import {
   type NostrConnectHandle,
   type NostrSigner,
 } from "@nostr-wot/signers";
-import { generateSecretKey, getPublicKey, nip19 } from "nostr-tools";
+import { generateSecretKey, nip19 } from "nostr-tools";
 import QRCode from "qrcode";
 import {
   localStorageSignerStorage,
@@ -14,6 +14,7 @@ import {
   type SignerStorage,
 } from "../../signer-storage";
 import { useSignerStorage } from "../../signer-storage-context";
+import { AnchorButton } from "../../primitives/Button";
 
 type Persisted =
   | {
@@ -69,9 +70,18 @@ export async function clearPersistedNip46(
   await storage.removeItem(SIGNER_STORAGE_KEY_NIP46);
 }
 
+// Default rendezvous relays for NIP-46 pairing. Two used to be enough but
+// `relay.nsec.app` is frequently rate-limited; when both defaults are slow
+// the QR pairing silently times out with no signal to the user. The
+// extended set gives the bunker more fallback hops; consumers can still
+// pass their own via `nostrConnectRelays` to override.
 const DEFAULT_NOSTRCONNECT_RELAYS = [
   "wss://relay.nsec.app",
   "wss://relay.damus.io",
+  "wss://relay.nostr.band",
+  "wss://nos.lol",
+  "wss://relay.primal.net",
+  "wss://purplepag.es",
 ];
 
 /** Get-or-mint a stable client nsec across pairing attempts so the bunker
@@ -100,15 +110,39 @@ function nsecToBytes(nsec: string): Uint8Array {
   return decoded.data;
 }
 
+export interface Nip46MethodExtras {
+  /** The bunker:// URI used to pair (paste mode), or a synthesized
+   *  bunker URI built from the bunker pubkey + relays (QR mode). */
+  bunkerUri?: string;
+  /** The client-side nsec used during the nostrconnect handshake.
+   *  Re-using this nsec lets the same client identity reconnect to
+   *  the remote signer without re-authorizing. */
+  clientNsec?: string;
+}
+
 export interface Nip46MethodProps {
   onError: (msg: string) => void;
-  onAttached: (signer: NostrSigner, pubkey: string) => void | Promise<void>;
+  onAttached: (
+    signer: NostrSigner,
+    pubkey: string,
+    extras?: Nip46MethodExtras,
+  ) => void | Promise<void>;
   onBack?: () => void;
   inline?: boolean;
   defaultMode?: "qr" | "paste";
   nostrConnectRelays?: string[];
   metadata?: { name?: string; url?: string; description?: string; image?: string };
   perms?: string;
+}
+
+/** Build a synthetic `bunker://` URI from a bunker pubkey + relays so that
+ *  callers (e.g. an app-side bridge) can re-connect later without needing
+ *  the original QR handshake. Mirrors the format used by `tryRestoreNip46`. */
+function synthesizeBunkerUri(bunkerPubkey: string, relays: string[]): string {
+  return (
+    `bunker://${bunkerPubkey}?` +
+    relays.map((r) => `relay=${encodeURIComponent(r)}`).join("&")
+  );
 }
 
 export function Nip46Method({
@@ -164,14 +198,18 @@ export function Nip46Method({
       try {
         const signer = await handle.ready;
         clearTimeout(slowTimer);
+        const exportedClientNsec = signer.exportClientNsec();
         await writePersistedTo(storage, {
           kind: "nostrconnect",
           bunkerPubkey: signer.bunkerPubkey,
           relays: signer.relays,
-          clientNsec: signer.exportClientNsec(),
+          clientNsec: exportedClientNsec,
         });
         const pubkey = await signer.getPublicKey();
-        await onAttached(signer, pubkey);
+        await onAttached(signer, pubkey, {
+          bunkerUri: synthesizeBunkerUri(signer.bunkerPubkey, signer.relays),
+          clientNsec: exportedClientNsec,
+        });
       } catch (err) {
         clearTimeout(slowTimer);
         if (handleRef.current === handle) {
@@ -221,7 +259,7 @@ export function Nip46Method({
       const clientNsec = signer.exportClientNsec();
       await writePersistedTo(storage, { kind: "bunker", uri: trimmed, clientNsec });
       const pubkey = await signer.getPublicKey();
-      await onAttached(signer, pubkey);
+      await onAttached(signer, pubkey, { bunkerUri: trimmed, clientNsec });
     } catch (err) {
       onError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -311,6 +349,23 @@ export function Nip46Method({
                 aria-label="Nostr Connect QR code"
                 dangerouslySetInnerHTML={{ __html: qrSvg }}
               />
+              {/* Deep-link affordance — useful on mobile where the user
+               *  can't scan their own screen but the platform's URL handler
+               *  will hand off `nostrconnect://` to Amber / Nsec.app / etc.
+               *  Hidden when the URI isn't ready yet (qrUri only flips truthy
+               *  after `startQr` resolves the connect handle). */}
+              {qrUri && (
+                <AnchorButton
+                  variant="secondary"
+                  size="sm"
+                  fullWidth
+                  href={qrUri}
+                  rel="noopener noreferrer"
+                  trailingIcon={<span aria-hidden>↗</span>}
+                >
+                  Open in signer app
+                </AnchorButton>
+              )}
               <p className="nui-qr-hint">
                 Scan with Amber, Nsec.app, Keychat, or any NIP-46 signer.
               </p>
@@ -423,6 +478,3 @@ export async function tryRestoreNip46(
     return null;
   }
 }
-
-// Suppress "unused" warning for getPublicKey import (used transitively in some paths).
-void getPublicKey;

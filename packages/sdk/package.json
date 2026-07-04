@@ -1,7 +1,7 @@
 {
   "name": "nostr-wot-sdk",
-  "version": "0.9.0",
-  "description": "Meta-package re-exporting @nostr-wot/{wot,relay,data}. Existing imports keep working; new code should depend on the scoped packages directly.",
+  "version": "0.9.1",
+  "description": "Meta-package re-exporting the @nostr-wot/* family (wot, relay, data, signers, ui, dm, wallet, auth, blossom) under subpaths. Existing imports keep working; new code should depend on the scoped packages directly.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "MIT",
   "keywords": [
@@ -52,16 +52,6 @@
         "default": "./dist/react/index.cjs"
       }
     },
-    "./solid": {
-      "import": {
-        "types": "./dist/solid/index.d.ts",
-        "default": "./dist/solid/index.js"
-      },
-      "require": {
-        "types": "./dist/solid/index.d.cts",
-        "default": "./dist/solid/index.cjs"
-      }
-    },
     "./relay": {
       "import": {
         "types": "./dist/relay/index.d.ts",
@@ -101,6 +91,106 @@
         "types": "./dist/data/cache/index.d.cts",
         "default": "./dist/data/cache/index.cjs"
       }
+    },
+    "./signers": {
+      "import": {
+        "types": "./dist/signers/index.d.ts",
+        "default": "./dist/signers/index.js"
+      },
+      "require": {
+        "types": "./dist/signers/index.d.cts",
+        "default": "./dist/signers/index.cjs"
+      }
+    },
+    "./ui": {
+      "import": {
+        "types": "./dist/ui/index.d.ts",
+        "default": "./dist/ui/index.js"
+      },
+      "require": {
+        "types": "./dist/ui/index.d.cts",
+        "default": "./dist/ui/index.cjs"
+      }
+    },
+    "./dm": {
+      "import": {
+        "types": "./dist/dm/index.d.ts",
+        "default": "./dist/dm/index.js"
+      },
+      "require": {
+        "types": "./dist/dm/index.d.cts",
+        "default": "./dist/dm/index.cjs"
+      }
+    },
+    "./dm/react": {
+      "import": {
+        "types": "./dist/dm/react/index.d.ts",
+        "default": "./dist/dm/react/index.js"
+      },
+      "require": {
+        "types": "./dist/dm/react/index.d.cts",
+        "default": "./dist/dm/react/index.cjs"
+      }
+    },
+    "./wallet": {
+      "import": {
+        "types": "./dist/wallet/index.d.ts",
+        "default": "./dist/wallet/index.js"
+      },
+      "require": {
+        "types": "./dist/wallet/index.d.cts",
+        "default": "./dist/wallet/index.cjs"
+      }
+    },
+    "./wallet/react": {
+      "import": {
+        "types": "./dist/wallet/react/index.d.ts",
+        "default": "./dist/wallet/react/index.js"
+      },
+      "require": {
+        "types": "./dist/wallet/react/index.d.cts",
+        "default": "./dist/wallet/react/index.cjs"
+      }
+    },
+    "./auth": {
+      "import": {
+        "types": "./dist/auth/index.d.ts",
+        "default": "./dist/auth/index.js"
+      },
+      "require": {
+        "types": "./dist/auth/index.d.cts",
+        "default": "./dist/auth/index.cjs"
+      }
+    },
+    "./blossom": {
+      "import": {
+        "types": "./dist/blossom/index.d.ts",
+        "default": "./dist/blossom/index.js"
+      },
+      "require": {
+        "types": "./dist/blossom/index.d.cts",
+        "default": "./dist/blossom/index.cjs"
+      }
+    },
+    "./graph": {
+      "import": {
+        "types": "./dist/graph/index.d.ts",
+        "default": "./dist/graph/index.js"
+      },
+      "require": {
+        "types": "./dist/graph/index.d.cts",
+        "default": "./dist/graph/index.cjs"
+      }
+    },
+    "./graph/react": {
+      "import": {
+        "types": "./dist/graph/react/index.d.ts",
+        "default": "./dist/graph/react/index.js"
+      },
+      "require": {
+        "types": "./dist/graph/react/index.d.cts",
+        "default": "./dist/graph/react/index.cjs"
+      }
     }
   },
   "files": [
@@ -114,19 +204,22 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@nostr-wot/data": "^0.4.0",
+    "@nostr-wot/auth": "^2.0.0",
+    "@nostr-wot/blossom": "^0.1.4",
+    "@nostr-wot/data": "^0.5.0",
+    "@nostr-wot/graph": "^0.1.0",
+    "@nostr-wot/dm": "^0.5.0",
     "@nostr-wot/relay": "^0.1.1",
-    "@nostr-wot/wot": "^0.1.5"
+    "@nostr-wot/signers": "^0.4.0",
+    "@nostr-wot/ui": "^0.7.0",
+    "@nostr-wot/wallet": "^0.3.1",
+    "@nostr-wot/wot": "^0.1.6"
   },
   "peerDependencies": {
-    "react": ">=16.8.0",
-    "solid-js": ">=1.0.0"
+    "react": ">=16.8.0"
   },
   "peerDependenciesMeta": {
     "react": {
-      "optional": true
-    },
-    "solid-js": {
       "optional": true
     }
   },

@@ -32,8 +32,7 @@ export interface NostrSdkProviderProps {
    *    - Omit `wot` (or set `wot: { enabled: false }`) → no WoT context;
    *      `useWoTContext()` returns null safely.
    *    - Set `wot: { enabled: true, ... }` → wraps children with the
-   *      WoT context so `useWoT`, `useTrustScore`, `useIsInWoT`,
-   *      `useBatchWoT` work. */
+   *      WoT context so `useWoT`, `useIsInWoT`, `useBatchWoT` work. */
   wot?: { enabled: boolean } & Omit<WoTProviderProps, 'children'>;
 }
 

@@ -16,9 +16,18 @@ import {
 } from "../../signer-storage";
 import { useSignerStorage } from "../../signer-storage-context";
 
+export interface GenerateMethodExtras {
+  /** The freshly generated nsec (bech32). */
+  nsec: string;
+}
+
 export interface GenerateMethodProps {
   onError: (msg: string) => void;
-  onAttached: (signer: NostrSigner, pubkey: string) => void | Promise<void>;
+  onAttached: (
+    signer: NostrSigner,
+    pubkey: string,
+    extras?: GenerateMethodExtras,
+  ) => void | Promise<void>;
   onBack: () => void;
   /** When true, asks for name/about/picture and publishes a kind-0 after the user backs up their key. */
   profileSetup?: boolean;
@@ -86,7 +95,7 @@ export function GenerateMethod({
       }
     }
     const signer = new PrivateKeySigner(generated.sk);
-    await onAttached(signer, generated.pk);
+    await onAttached(signer, generated.pk, { nsec: generated.nsec });
   };
 
   const continueToNext = async () => {

@@ -1,5 +1,39 @@
 # @nostr-wot/data
 
+## 0.5.1
+
+### Patch Changes
+
+- @nostr-wot/data: stop infinite render loop in `NostrSessionProvider`'s `logout` callback.
+
+  `logout` previously re-created on every signer change because the callback closed over `signer` (to call `signer.close?.()` on logout). Consumers whose `useEffect` deps include `useLogout()` therefore re-ran every time the signer flipped — and inside such effects, calling `setSigner(...)` (e.g. via `useLogin`) created a new signer ref → new `logout` ref → effect re-ran → infinite loop.
+
+  Repro: any host that wires a foreign auth source into `setSigner` from a `useEffect` whose deps include `useLogout()` would crash with `Maximum update depth exceeded` at `setPubkey(pk)` inside the provider's `[signer]` effect.
+
+  Fix: pin the current signer + the optional `onLogout` prop to refs and drop them from the `useCallback` deps. `logout` is now referentially stable across renders, while still always logging out the latest signer.
+
+## 0.5.0
+
+### Minor Changes
+
+- @nostr-wot/data: WebSocket-coercing pool helper, NIP-65 filtering, NIP-17 inbox parser, mention scanners, nsec helpers, and an ad-hoc query hook.
+
+  - **`TextCoercingWebSocket`** (new export) — `WebSocket` subclass that coerces binary `EVENT` / `EOSE` / `NOTICE` frames to UTF-8 strings before nostr-tools parses them. Some relays (Cloudflare, compressing proxies, NIP-42 AUTH paths) push frames as binary; nostr-tools v2's pool then crashes inside `getSubscriptionId` and silently drops every event. Pass it via `new SimplePool({ websocketImplementation: TextCoercingWebSocket })`.
+  - **`parseRelayList(event, filter?)`** — new optional `filter` parameter:
+    - `'all'` (default) — current behaviour, keeps every URL.
+    - `'public'` — drops loopback, RFC-1918, `.onion`, and non-`wss://` URLs.
+    - `(url) => boolean` — custom predicate.
+      Companion helper `isPublicWssUrl` exported alongside.
+  - **`parseInboxRelayList(event, filter?)`** — new NIP-17 (kind 10050) DM inbox-relay parser with the same `filter` knob. Accepts both `relay` and `r` tag names.
+  - **`useNostrQuery(filters, opts)`** (new from `@nostr-wot/data/react`) — one-shot ad-hoc filter query as a React hook, routed through `sharedCoalescer.querySync`. Re-fires when filters / relays change. For "fetch this once when X changes" patterns where the dedicated fetchers (`useProfile` / `useNote` / etc.) don't fit (e.g. NIP-50 search).
+  - **NIP-19 nsec helpers** — `nsecToBytes(nsec)` returns the raw 32-byte secret; `nsecToHex(nsec)` returns hex. Pair with the existing `npubToHex` / `hexToNpub` so apps don't need to import `nostr-tools/nip19` directly.
+  - **Mention scanners** — `extractMentionPubkeys(content)` returns the deduplicated set of pubkeys referenced inline (legacy hex form + bech32 `nostr:npub1…`); `findNpubMentions(content)` returns positional offsets for syntax highlighting / autocomplete.
+  - **`shortNpub(hex)`** — abbreviated `npub1abcd…` label, drop-in for tiny avatars / chips.
+
+### Patch Changes
+
+- @nostr-wot/data: re-export `createKeyedObservable` and the `Slot` / `SlotStatus` / `KeyedObservable` / `KeyedObservableOptions` types from the package root (previously only available via `@nostr-wot/data/cache`). Lets consumers build their own per-key slot caches without reaching into the subpath import.
+
 ## 0.4.0
 
 ### Minor Changes

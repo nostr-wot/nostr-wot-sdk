@@ -1,5 +1,30 @@
 # @nostr-wot/wallet
 
+## 0.3.1
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @nostr-wot/data@0.5.1
+
+## 0.3.0
+
+### Minor Changes
+
+- @nostr-wot/wallet: WebLN zap pipeline, LNbits → NWC URI helper, and stricter `buildZapRequest` validation.
+
+  - **`zapViaWebLN({ recipient, amountSats, comment?, eventId?, relays, signer })`** — full NIP-57 + WebLN zap flow in one call. Resolves the recipient's `lud16` → fetches LNURL-pay metadata → builds a kind-9734 zap request → mints an invoice → asks the user's WebLN provider (`window.webln`) to pay. Throws on any step with a clear message so the caller can surface it.
+  - **`isWebLNAvailable()`** — `true` when `window.webln` is present.
+  - **`lnbitsToNwc({ adminUrl, adminKey, walletId? })`** — converts an LNbits admin URL + admin-key pair into an `nostr+walletconnect://` URI. Drop-in for apps that want to bootstrap an NWC connection from existing LNbits credentials without manually crafting the URI.
+  - **`buildZapRequest` validation** — empty `relays` or non-positive `amountMsats` now throw early, matching NIP-57 requirements. Previously the function happily produced an unsendable zap request.
+
+  The webln module is a separate file so consumers that don't ship a wallet UI don't pay for the import.
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @nostr-wot/data@0.5.0
+
 ## 0.1.4
 
 ### Patch Changes

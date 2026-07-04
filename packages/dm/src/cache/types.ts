@@ -1,4 +1,4 @@
-import type { Event as NostrEvent, UnsignedEvent } from "nostr-tools";
+import type { Event as NostrEvent } from "nostr-tools";
 import type { NostrSigner } from "@nostr-wot/signers";
 
 export type DMMessage = {
@@ -63,5 +63,3 @@ export type SendDMOptions = {
   /** "nip17" (default) for sealed messages, "nip04" for legacy. */
   scheme?: "nip04" | "nip17";
 };
-
-export type DraftMessage = Pick<UnsignedEvent, "content" | "tags">;

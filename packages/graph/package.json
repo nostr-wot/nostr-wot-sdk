@@ -1,0 +1,88 @@
+{
+  "name": "@nostr-wot/graph",
+  "version": "0.1.0",
+  "description": "Local Web-of-Trust follow graph in the browser: crawl kind:3 contact lists over relays, persist to IndexedDB (interned + delta-encoded), compute social distance/score locally.",
+  "author": "Leon Acosta <leon@nostr-wot.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nostr-wot/nostr-wot-sdk.git",
+    "directory": "packages/graph"
+  },
+  "homepage": "https://github.com/nostr-wot/nostr-wot-sdk/tree/main/packages/graph",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./react": {
+      "import": {
+        "types": "./dist/react/index.d.ts",
+        "default": "./dist/react/index.js"
+      },
+      "require": {
+        "types": "./dist/react/index.d.cts",
+        "default": "./dist/react/index.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:run": "vitest run",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@nostr-wot/relay": "*"
+  },
+  "peerDependencies": {
+    "nostr-tools": ">=2.0.0",
+    "react": ">=16.8.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "fake-indexeddb": "^6.0.0",
+    "tsup": "^8.0.1",
+    "typescript": "^5.3.0",
+    "vitest": "^4.0.18"
+  },
+  "sideEffects": false,
+  "keywords": [
+    "nostr",
+    "web-of-trust",
+    "wot",
+    "social-graph",
+    "follow-graph",
+    "trust",
+    "distance",
+    "bfs",
+    "indexeddb",
+    "kind-3",
+    "decentralized"
+  ]
+}
