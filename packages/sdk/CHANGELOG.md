@@ -1,5 +1,30 @@
 # nostr-wot-sdk
 
+## 1.0.0
+
+### Major Changes
+
+- [`9e95a70`](https://github.com/nostr-wot/nostr-wot-sdk/commit/9e95a7076bb15e25b048d50c217aaf3759a39d5e) Thanks [@leonacostaok](https://github.com/leonacostaok)! - BREAKING: Remove the Solid entrypoint and surface the full `@nostr-wot/*` family.
+
+  - Removed `nostr-wot-sdk/solid` (re-exported the deleted `@nostr-wot/wot/solid`) and the `solid-js` peer dependency.
+  - Added subpath re-exports so the meta actually surfaces the family: `./signers`, `./ui`, `./dm`, `./dm/react`, `./wallet`, `./wallet/react`, `./auth`, `./blossom` (alongside the existing `./relay`, `./relay/react`, `./data`, `./data/cache`). The corresponding scoped packages are now direct dependencies.
+
+### Minor Changes
+
+- [`2718ee9`](https://github.com/nostr-wot/nostr-wot-sdk/commit/2718ee9063e3efba025a0f8fd2f190392a187ded) Thanks [@leonacostaok](https://github.com/leonacostaok)! - Surface the new `@nostr-wot/graph` package: add `./graph` and `./graph/react` subpath re-exports (and a direct dependency on `@nostr-wot/graph`). Existing imports are unaffected.
+
+### Patch Changes
+
+- Updated dependencies [[`9e95a70`](https://github.com/nostr-wot/nostr-wot-sdk/commit/9e95a7076bb15e25b048d50c217aaf3759a39d5e), [`2718ee9`](https://github.com/nostr-wot/nostr-wot-sdk/commit/2718ee9063e3efba025a0f8fd2f190392a187ded), [`9e95a70`](https://github.com/nostr-wot/nostr-wot-sdk/commit/9e95a7076bb15e25b048d50c217aaf3759a39d5e), [`9e95a70`](https://github.com/nostr-wot/nostr-wot-sdk/commit/9e95a7076bb15e25b048d50c217aaf3759a39d5e), [`9e95a70`](https://github.com/nostr-wot/nostr-wot-sdk/commit/9e95a7076bb15e25b048d50c217aaf3759a39d5e), [`2718ee9`](https://github.com/nostr-wot/nostr-wot-sdk/commit/2718ee9063e3efba025a0f8fd2f190392a187ded)]:
+  - @nostr-wot/dm@0.5.1
+  - @nostr-wot/graph@0.2.0
+  - @nostr-wot/signers@1.0.0
+  - @nostr-wot/ui@0.7.1
+  - @nostr-wot/wot@1.0.0
+  - @nostr-wot/auth@3.0.0
+  - @nostr-wot/blossom@0.1.5
+  - @nostr-wot/wallet@0.3.2
+
 ## 0.9.1
 
 ### Patch Changes

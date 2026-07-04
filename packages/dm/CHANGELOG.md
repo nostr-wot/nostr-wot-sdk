@@ -1,5 +1,14 @@
 # @nostr-wot/dm
 
+## 0.5.1
+
+### Patch Changes
+
+- [`9e95a70`](https://github.com/nostr-wot/nostr-wot-sdk/commit/9e95a7076bb15e25b048d50c217aaf3759a39d5e) Thanks [@leonacostaok](https://github.com/leonacostaok)! - Internal cleanup (no public API change): remove the dead `_publishPool` re-export and its unused-warning suppression, and the unused `DraftMessage` type.
+
+- Updated dependencies [[`9e95a70`](https://github.com/nostr-wot/nostr-wot-sdk/commit/9e95a7076bb15e25b048d50c217aaf3759a39d5e)]:
+  - @nostr-wot/signers@1.0.0
+
 ## 0.5.0
 
 ### Minor Changes

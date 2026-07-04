@@ -1,6 +1,6 @@
 {
   "name": "@nostr-wot/wot",
-  "version": "0.1.6",
+  "version": "1.0.0",
   "description": "Web-of-Trust distance queries for Nostr over an Oracle/relays. WoT class + React hooks.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "MIT",

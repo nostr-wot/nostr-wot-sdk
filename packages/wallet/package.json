@@ -1,6 +1,6 @@
 {
   "name": "@nostr-wot/wallet",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Nostr wallet helpers: NIP-47 NWC client (pay invoices, balance, info) and NIP-57 zap request builder.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "MIT",
@@ -64,7 +64,7 @@
   "dependencies": {
     "@noble/hashes": "^1.5.0",
     "@nostr-wot/data": "0.5.1",
-    "@nostr-wot/signers": "0.4.0"
+    "@nostr-wot/signers": "1.0.0"
   },
   "peerDependencies": {
     "nostr-tools": ">=2.0.0",

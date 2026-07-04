@@ -1,6 +1,6 @@
 {
   "name": "@nostr-wot/graph",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Local Web-of-Trust follow graph in the browser: crawl kind:3 contact lists over relays, persist to IndexedDB (interned + delta-encoded), compute social distance/score locally.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "MIT",

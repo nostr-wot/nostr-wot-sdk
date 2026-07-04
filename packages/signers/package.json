@@ -1,6 +1,6 @@
 {
   "name": "@nostr-wot/signers",
-  "version": "0.4.0",
+  "version": "1.0.0",
   "description": "Nostr signer abstractions: NIP-07 (extension), NIP-46 (Nostr Connect / bunker), NIP-55 (Amber), and in-memory private key.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "MIT",

@@ -1,6 +1,6 @@
 {
   "name": "nostr-wot-sdk",
-  "version": "0.9.1",
+  "version": "1.0.0",
   "description": "Meta-package re-exporting the @nostr-wot/* family (wot, relay, data, signers, ui, dm, wallet, auth, blossom) under subpaths. Existing imports keep working; new code should depend on the scoped packages directly.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "MIT",
@@ -204,16 +204,16 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@nostr-wot/auth": "^2.0.0",
-    "@nostr-wot/blossom": "^0.1.4",
+    "@nostr-wot/auth": "^3.0.0",
+    "@nostr-wot/blossom": "^0.1.5",
     "@nostr-wot/data": "^0.5.0",
-    "@nostr-wot/graph": "^0.1.0",
-    "@nostr-wot/dm": "^0.5.0",
+    "@nostr-wot/graph": "^0.2.0",
+    "@nostr-wot/dm": "^0.5.1",
     "@nostr-wot/relay": "^0.1.1",
-    "@nostr-wot/signers": "^0.4.0",
-    "@nostr-wot/ui": "^0.7.0",
-    "@nostr-wot/wallet": "^0.3.1",
-    "@nostr-wot/wot": "^0.1.6"
+    "@nostr-wot/signers": "^1.0.0",
+    "@nostr-wot/ui": "^0.7.1",
+    "@nostr-wot/wallet": "^0.3.2",
+    "@nostr-wot/wot": "^1.0.0"
   },
   "peerDependencies": {
     "react": ">=16.8.0"

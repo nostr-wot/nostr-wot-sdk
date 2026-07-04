@@ -1,5 +1,24 @@
 # @nostr-wot/wot
 
+## 1.0.0
+
+### Major Changes
+
+- [`9e95a70`](https://github.com/nostr-wot/nostr-wot-sdk/commit/9e95a7076bb15e25b048d50c217aaf3759a39d5e) Thanks [@leonacostaok](https://github.com/leonacostaok)! - BREAKING: Remove the browser-extension bridge, trust-score API, and Solid support.
+
+  - Removed the `window.nostr.wot` extension integration: `getExtension`, `isUsingExtension`, `getExtensionStatus`, `getExtensionConfig`, `isConfigured`, `getFollows`, `getCommonFollows`, `getStats`, `getPath`, and the `extensionId` option. Query methods now go straight to the oracle.
+  - Removed the always-0 trust score: `getTrustScore`, `getTrustScoreBatch`, the `score` field on `DistanceResult`/`BatchResult`, the `includeScores` batch option, and the React `useTrustScore` hook / `score` fields on `useWoT` and `useBatchWoT`.
+  - Removed the Solid entrypoint (`@nostr-wot/wot/solid`) and the `solid-js` peer dependency.
+  - Removed the unused `@nostr-wot/data` dependency and internal helpers (`delay`, `createDeferred`, `Deferred`).
+  - Removed now-dead types: `ExtensionConnectionStatus`, `ScoringConfig`, `ExtensionConfig`, `ExtensionStatus`, `GraphStats`, `NostrWoTExtension`, `NostrWindow`, `ExtensionDistanceResult`, `NostrContactEvent`.
+  - The React provider now constructs the `WoT` instance immediately (no extension-detection polling); `useExtension` and its state types were removed.
+
+  Surviving API: `WoT` class (`getDistance`, `isInMyWoT`, `getDistanceBetween`, `batchCheck`, `filterByWoT`, `getDetails`, `getDistanceBatch`, `getMyPubkey`, `getOracle`) and React `WoTProvider` / `useWoTInstance` / `useWoT` / `useIsInWoT` / `useBatchWoT`.
+
+### Minor Changes
+
+- [`2718ee9`](https://github.com/nostr-wot/nostr-wot-sdk/commit/2718ee9063e3efba025a0f8fd2f190392a187ded) Thanks [@leonacostaok](https://github.com/leonacostaok)! - Add an optional local query `source` to the `WoT` class. When a `WoTLocalSource` is provided (e.g. from `@nostr-wot/graph`'s `WotGraph.asWoTSource()`), `getDistance`, `isInMyWoT`, and `filterByWoT` resolve from it instead of the Oracle. Additive and non-breaking — all other methods still use the Oracle, and omitting `source` keeps the previous behavior. Exports a new `WoTLocalSource` type.
+
 ## 0.1.6
 
 ### Patch Changes

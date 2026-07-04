@@ -1,5 +1,12 @@
 # @nostr-wot/auth
 
+## 3.0.0
+
+### Patch Changes
+
+- Updated dependencies [[`9e95a70`](https://github.com/nostr-wot/nostr-wot-sdk/commit/9e95a7076bb15e25b048d50c217aaf3759a39d5e)]:
+  - @nostr-wot/signers@1.0.0
+
 ## 2.0.0
 
 ### Patch Changes
