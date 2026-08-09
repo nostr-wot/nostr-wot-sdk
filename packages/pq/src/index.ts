@@ -5,16 +5,17 @@
  * and ML-DSA-87 keys from a NIP-06 seed, and building, parsing and verifying the
  * `kind:10203` attestation that advertises them.
  *
- * Two things this package deliberately does not do:
+ * It also defines the message envelope (see `./envelope.ts`): a hybrid ML-KEM-1024 +
+ * NIP-44 construction sealed with XChaCha20-Poly1305, which rides inside NIP-59 gift
+ * wrap unchanged, so post-quantum messages traverse today's relay network with no
+ * relay or client changes required of anyone who has not opted in.
  *
- * - It never takes a secp256k1 private key as derivation input. Deriving post-quantum
- *   keys from the Nostr private key is circular — an adversary who recovers that key
- *   from the published pubkey repeats the derivation and obtains the post-quantum key
- *   too. Keys are derived as *siblings* of the secp256k1 key from the BIP-39 seed, and
- *   because BIP-32 and HKDF are one-way, recovering the secp256k1 key reveals nothing
- *   about the seed.
- * - It defines no encryption payload format. That belongs to a separate specification;
- *   this is only "whose key, and how do you find it".
+ * The one thing this package never does: take a secp256k1 private key as derivation
+ * input. Deriving post-quantum keys from the Nostr private key is circular — an
+ * adversary who recovers that key from the published pubkey repeats the derivation and
+ * obtains the post-quantum key too. Keys are derived as *siblings* of the secp256k1 key
+ * from the BIP-39 seed, and because BIP-32 and HKDF are one-way, recovering the
+ * secp256k1 key reveals nothing about the seed.
  *
  * @see https://csrc.nist.gov/pubs/fips/203/final — FIPS 203 (ML-KEM)
  * @see https://csrc.nist.gov/pubs/fips/204/final — FIPS 204 (ML-DSA)
@@ -343,3 +344,17 @@ export function parseAttestation(event: PqEventLike): PqAttestation {
 export function attestationFilter(pubkeys: string[]) {
   return { kinds: [PQC_KIND], authors: pubkeys };
 }
+
+// ── Message envelope ────────────────────────────────────────────────────────
+
+export {
+  encryptPq,
+  decryptPq,
+  isPqEnvelope,
+  ENVELOPE_VERSION,
+  ALG_MLKEM1024_XCHACHA,
+  KEM_CIPHERTEXT_BYTES,
+  MAX_PLAINTEXT_BYTES,
+  ENVELOPE_OVERHEAD_BYTES,
+  type EnvelopeParties,
+} from './envelope.js';

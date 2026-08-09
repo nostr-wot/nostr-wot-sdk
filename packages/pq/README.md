@@ -115,14 +115,74 @@ so the result is no weaker than either input. The post-quantum secret must never
 alone: a flaw in a comparatively young lattice scheme must not be able to make Nostr
 messaging *worse* than it is today.
 
+## The message envelope
+
+A self-describing payload carrying an ML-KEM-1024 ciphertext and an
+XChaCha20-Poly1305-sealed message. It fits anywhere a string does — in practice as the
+`content` of a NIP-17 kind:14 rumor, sealed and gift-wrapped per NIP-59 **with no change
+to either**. Relays need no changes and clients that have not implemented it are
+unaffected.
+
+```ts
+import { encryptPq, decryptPq } from '@nostr-wot/pq';
+
+const parties = { sender: myPubkey, recipient: theirPubkey };
+
+const payload = encryptPq('hello', att.kem!, nip44ConversationKey, parties);
+const text    = decryptPq(payload, myKem.secretKey, nip44ConversationKey, parties);
+```
+
+### Wire format
+
+```
+version   1 byte    0x01
+alg       1 byte    0x01 = ML-KEM-1024 + NIP-44 conversation key, XChaCha20-Poly1305
+kem_ct    1568      ML-KEM-1024 ciphertext
+nonce     24        XChaCha20-Poly1305 nonce
+sealed    variable  AEAD(padded plaintext), includes the 16-byte tag
+```
+
+base64-encoded for transport.
+
+### Why it looks like this
+
+- **Its own version byte, not NIP-44's.** Overloading NIP-44's version registry would
+  squat a number its authors own. This envelope is self-describing, so it can be adopted,
+  renumbered or superseded without colliding with anyone.
+- **Hybrid, never bare.** The KEM secret is combined with the NIP-44 conversation key
+  through HKDF, so the result is no weaker than either input. Two tests assert this
+  actually binds: a wrong conversation key fails, and a wrong ML-KEM key fails. If either
+  passed, the construction would not be hybrid.
+- **The framing is authenticated.** Version, algorithm and both pubkeys go into the AEAD's
+  associated data, so a ciphertext cannot be replayed into another conversation, have its
+  direction swapped, or have its algorithm byte downgraded.
+- **Length is padded** using NIP-44's scheme, so ciphertext size does not leak message
+  size on a public relay. Messages of 1, 2, 20 and 32 bytes all produce identical wire
+  sizes.
+- **One generic error.** Every decryption failure throws the same message. Distinguishing
+  bad padding from a bad tag from a wrong key hands an attacker an oracle.
+
+### Measured cost
+
+| plaintext | wire (base64) |
+|---|---|
+| 10 B | 2192 B |
+| 100 B | 2320 B |
+| 1 KB | 3516 B |
+| 10 KB | 15804 B |
+
+Roughly **2.1 KB constant overhead**, almost all of it the ML-KEM ciphertext.
+**1.27 ms to encrypt, 1.60 ms to decrypt** a 280-byte message (Node 20, Apple silicon,
+average of 100).
+
 ## What this does not do
 
 - **It does not stop event forgery.** Events are still signed with secp256k1. A quantum
   adversary can sign as any user, and can publish a replacement attestation carrying their
   own keys to intercept future messages. This makes *past* messages permanently
   confidential; it does not protect future messages once secp256k1 is broken.
-- **It defines no encryption payload format.** That belongs to a separate specification.
-  This package answers "whose key, and how do you find it".
+- **It does not hide metadata beyond what gift wrap already hides.** Who talks to whom, and
+  when, is a NIP-59 question, not this envelope's.
 
 ## Parameter sets
 
