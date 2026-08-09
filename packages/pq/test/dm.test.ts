@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { generateSecretKey, getPublicKey, finalizeEvent, nip44, verifyEvent } from 'nostr-tools';
 import { randomBytes } from '@noble/hashes/utils.js';
 import {
-  derivePqKeys, createPqDirectMessage, openPqDirectMessage, inboxFilter,
+  derivePqKeys, createPqDirectMessage, openPqDirectMessage, inboxFilter, encryptPq,
   KIND_GIFT_WRAP, KIND_SEAL, KIND_RUMOR,
 } from '../src/index.js';
 
@@ -113,8 +113,10 @@ describe('post-quantum direct messages', () => {
     ).toThrow(/Decryption failed/);
   });
 
-  it('rejects a rumor claiming an author the seal did not sign', () => {
-    // Forge attempt: mallory seals a rumor that claims to be from alice.
+  it('rejects a post-quantum rumor claiming an author the seal did not sign', () => {
+    // The real forgery: mallory builds a genuine post-quantum message to bob, but the
+    // rumor inside claims to be from alice. Everything verifies cryptographically —
+    // mallory really did sign the seal — so only the author cross-check catches it.
     const alice = identity();
     const bob = identity();
     const mallory = identity();
@@ -127,14 +129,13 @@ describe('post-quantum direct messages', () => {
       content: 'trust me, this is from alice',
     };
 
-    const mConv = nip44.getConversationKey(mallory.sk, bob.pk);
+    const conv = nip44.getConversationKey(mallory.sk, bob.pk);
+    const payload = encryptPq(JSON.stringify(rumor), bob.pq.kem.publicKey, conv, {
+      sender: mallory.pk,
+      recipient: bob.pk,
+    });
     const seal = finalizeEvent(
-      {
-        kind: KIND_SEAL,
-        created_at: Math.floor(Date.now() / 1000),
-        tags: [],
-        content: nip44.encrypt(JSON.stringify(rumor), mConv),
-      },
+      { kind: KIND_SEAL, created_at: Math.floor(Date.now() / 1000), tags: [], content: payload },
       mallory.sk,
     );
     const eph = generateSecretKey();

@@ -132,6 +132,39 @@ const payload = encryptPq('hello', att.kem!, nip44ConversationKey, parties);
 const text    = decryptPq(payload, myKem.secretKey, nip44ConversationKey, parties);
 ```
 
+### Send a gift-wrapped direct message
+
+Most callers want this rather than the raw envelope. It composes the envelope with NIP-17
+and NIP-59 — the result is an ordinary `kind:1059` gift wrap that today's relays accept
+and today's clients ignore.
+
+```ts
+import { createPqDirectMessage, openPqDirectMessage, inboxFilter } from '@nostr-wot/pq';
+
+const wrap = createPqDirectMessage({
+  content: 'hello',
+  senderSecretKey: mySecretKey,
+  recipientPubkey: theirPubkey,
+  recipientKemKey: att.kem!,   // from their kind:10203 attestation
+});
+await pool.publish(theirInboxRelays, wrap);
+
+// On the other side:
+for (const w of await pool.querySync(myInboxRelays, inboxFilter(myPubkey))) {
+  const msg = openPqDirectMessage({
+    wrap: w,
+    recipientSecretKey: mySecretKey,
+    recipientKemSecretKey: myKem.secretKey,
+  });
+  if (msg) console.log(msg.sender, msg.content); // null = an ordinary classic message
+}
+```
+
+`openPqDirectMessage` returns `null` for a classic gift wrap rather than throwing, so a
+post-quantum client does not choke on ordinary messages. It throws only when a message is
+malformed or fails authentication — including when a rumor claims an author the seal did
+not sign, which is the forgery a naive implementation would display as genuine.
+
 ### Wire format
 
 ```
@@ -162,16 +195,47 @@ base64-encoded for transport.
 - **One generic error.** Every decryption failure throws the same message. Distinguishing
   bad padding from a bad tag from a wrong key hands an attacker an oracle.
 
-### Measured cost
+### Gift-wrapped message size
 
-| plaintext | wire (base64) |
-|---|---|
-| 10 B | 2192 B |
-| 100 B | 2320 B |
-| 1 KB | 3516 B |
-| 10 KB | 15804 B |
+Measured on the complete `kind:1059` event, serialized as a relay sees it:
 
-Roughly **2.1 KB constant overhead**, almost all of it the ML-KEM ciphertext.
+| message | classic NIP-17 | post-quantum | overhead | ratio |
+|---|---|---|---|---|
+| "hi" (2 chars) | 1,533 B | 4,605 B | +3,072 B | 3.0x |
+| chat line (32) | 1,701 B | 4,605 B | +2,904 B | 2.7x |
+| a tweet (280) | 2,213 B | 5,285 B | +3,072 B | 2.4x |
+| a paragraph (1 KB) | 3,921 B | 7,333 B | +3,412 B | 1.9x |
+| a long note (4 KB) | 11,429 B | 14,161 B | +2,732 B | 1.2x |
+| a document (16 KB) | 38,737 B | 44,197 B | +5,460 B | 1.1x |
+
+**~3 KB constant overhead, about 2.4x on a typical chat message.** At 100 messages a day
+that is **+300 KB/day, or +107 MB/year per conversation** — the number relay operators will
+care about, and the strongest argument anyone will make against adopting this.
+
+Worth noting that NIP-59 is already expensive for its own reasons: a *classic* two-character
+"hi" costs 1,533 bytes. Gift wrap has a ~1.5 KB floor no matter what. Post-quantum raises
+that floor; it does not create it.
+
+### Where the layering saves 16-28%
+
+NIP-59 base64-encodes at every layer, so anything placed in the rumor is expanded by 4/3
+three times over. Putting the envelope at the **seal** layer instead of inside the rumor
+removes an entire expansion of the 1568-byte ML-KEM ciphertext:
+
+| message | envelope in rumor | envelope at seal | saved |
+|---|---|---|---|
+| "hi" | 5,969 B | 4,605 B | 1,364 B (22.9%) |
+| a tweet (280) | 7,333 B | 5,285 B | 2,048 B (27.9%) |
+| 1 KB | 8,701 B | 7,333 B | 1,368 B (15.7%) |
+| 4 KB | 16,893 B | 14,161 B | 2,732 B (16.2%) |
+
+This is a framing optimisation, not a cryptographic compromise — nothing is weakened, and
+it is arguably the more natural placement, since the seal is already where NIP-59 puts the
+rumor's confidentiality. The envelope replaces that layer's encryption rather than nesting
+inside it.
+
+### Speed
+
 **1.27 ms to encrypt, 1.60 ms to decrypt** a 280-byte message (Node 20, Apple silicon,
 average of 100).
 
