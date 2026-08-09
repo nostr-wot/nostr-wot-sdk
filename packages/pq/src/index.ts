@@ -358,3 +358,18 @@ export {
   ENVELOPE_OVERHEAD_BYTES,
   type EnvelopeParties,
 } from './envelope.js';
+
+// ── Direct messages (NIP-17 + NIP-59 composition) ───────────────────────────
+
+export {
+  createPqDirectMessage,
+  openPqDirectMessage,
+  inboxFilter,
+  KIND_RUMOR,
+  KIND_SEAL,
+  KIND_GIFT_WRAP,
+  PQ_TAG,
+  type CreatePqDmInput,
+  type OpenPqDmInput,
+  type OpenedPqDm,
+} from './dm.js';
