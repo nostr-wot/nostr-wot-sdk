@@ -3,6 +3,9 @@ name: Release
 on:
   push:
     branches: [main]
+  # So a release can be retried without pushing an empty commit — useful when a
+  # publish fails for a reason outside the repo, such as an npm 2FA setting.
+  workflow_dispatch:
 
 # Only one release run at a time, so a queued workflow cannot race an earlier
 # one that is midway through versioning and publishing.
