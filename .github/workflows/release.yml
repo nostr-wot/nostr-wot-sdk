@@ -64,8 +64,10 @@ jobs:
 
       # `changeset publish` skips anything already on npm at its current
       # version, so re-running this is safe.
+      # Always runs. `changeset publish` skips any version already on npm, so this
+      # is idempotent — and gating it on changesets being present would mean a run
+      # that consumed them (or a re-run after one did) never publishes at all.
       - name: Publish to npm
-        if: steps.changesets.outputs.present == 'true'
         run: npm run release
         env:
           # setup-node writes .npmrc from NODE_AUTH_TOKEN, not NPM_TOKEN.
