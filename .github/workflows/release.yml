@@ -54,6 +54,10 @@ jobs:
           git add -A
           git commit -m "chore: release [skip ci]"
           git push origin HEAD:main
+        env:
+          # @changesets/changelog-github calls the GitHub API to attribute each
+          # entry, and errors out without a token.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build all packages
         run: npm run build
