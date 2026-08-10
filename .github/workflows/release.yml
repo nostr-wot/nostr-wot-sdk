@@ -4,24 +4,23 @@ on:
   push:
     branches: [main]
 
-# Only one release run at a time so a queued workflow doesn't race the
-# version PR open by an earlier run.
+# Only one release run at a time, so a queued workflow cannot race an earlier
+# one that is midway through versioning and publishing.
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 
 permissions:
-  contents: write       # changesets writes version commits + tags
-  pull-requests: write  # opens / updates the "version packages" PR
-  id-token: write       # required for npm provenance attestation
+  contents: write   # version commits + tags pushed straight to main
+  id-token: write   # npm provenance attestation
 
 jobs:
   release:
-    name: Version PR or Publish
+    name: Version and Publish
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # changesets needs full history for changelog
+          fetch-depth: 0 # changesets needs full history for the changelog
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -32,24 +31,41 @@ jobs:
       - name: Install
         run: npm ci
 
+      - name: Check for changesets
+        id: changesets
+        run: |
+          if compgen -G ".changeset/*.md" > /dev/null && \
+             [ "$(ls .changeset/*.md | grep -v README | wc -l)" -gt 0 ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Version directly on main rather than opening a "version packages" PR.
+      # changesets/action's PR flow cannot work here: this repo does not allow
+      # GitHub Actions to create pull requests, so every release run failed at
+      # "GitHub Actions is not permitted to create or approve pull requests".
+      - name: Apply versions
+        if: steps.changesets.outputs.present == 'true'
+        run: |
+          npm run version-packages
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "chore: release [skip ci]"
+          git push origin HEAD:main
+
       - name: Build all packages
         run: npm run build
 
-      # Two paths:
-      #   - Changesets present → opens / updates a "release" PR with bumped
-      #     versions + CHANGELOG entries. Nothing publishes yet.
-      #   - No changesets present (e.g. the release PR just merged) →
-      #     publishes everything that doesn't yet exist on npm at its
-      #     current version.
-      - name: Release PR or Publish
-        uses: changesets/action@v1
-        with:
-          publish: npm run release
-          version: npm run version-packages
-          commit: "chore: release"
-          title: "chore: release"
-          createGithubReleases: true
+      # `changeset publish` skips anything already on npm at its current
+      # version, so re-running this is safe.
+      - name: Publish to npm
+        if: steps.changesets.outputs.present == 'true'
+        run: npm run release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # setup-node writes .npmrc from NODE_AUTH_TOKEN, not NPM_TOKEN.
+          # The old workflow only set NPM_TOKEN, so publish was unauthenticated.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: "true"
