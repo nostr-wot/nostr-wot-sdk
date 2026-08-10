@@ -22,7 +22,8 @@
     "packages/graph",
     "packages/ui",
     "packages/auth",
-    "packages/sdk"
+    "packages/sdk",
+    "packages/pq"
   ],
   "scripts": {
     "build": "npm run build -w @nostr-wot/data && npm run build -w @nostr-wot/relay && npm run build -w @nostr-wot/signers && npm run build -w @nostr-wot/blossom && npm run build -w @nostr-wot/dm && npm run build -w @nostr-wot/wallet && npm run build -w @nostr-wot/wot && npm run build -w @nostr-wot/graph && npm run build -w @nostr-wot/ui && npm run build -w @nostr-wot/auth && npm run build -w nostr-wot-sdk",
@@ -44,7 +45,7 @@
     "@types/react-dom": "^18.3.7",
     "esbuild-plugin-solid": "^0.6.0",
     "eslint": "^9.39.2",
-    "nostr-tools": "^2.23.3",
+    "nostr-tools": "^2.24.1",
     "react": "^18.2.0",
     "react-dom": "^18.3.1",
     "solid-js": "^1.9.0",
