@@ -1,6 +1,6 @@
 {
   "name": "@nostr-wot/pq",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Post-quantum identity keys for Nostr: derive ML-KEM-1024 and ML-DSA-87 keys from a NIP-06 seed, and build, parse and verify the kind:10203 attestation.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "MIT",
