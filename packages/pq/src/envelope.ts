@@ -70,10 +70,36 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 export interface EnvelopeParties {
-  /** Sender's secp256k1 x-only pubkey, hex. */
+  /** Sender's secp256k1 x-only pubkey, 64 lowercase hex characters. */
   sender: string;
-  /** Recipient's secp256k1 x-only pubkey, hex. */
+  /** Recipient's secp256k1 x-only pubkey, 64 lowercase hex characters. */
   recipient: string;
+}
+
+/** An x-only pubkey as it appears on the wire: 64 lowercase hex characters. */
+const XONLY_HEX = /^[0-9a-f]{64}$/;
+
+/**
+ * Reject party pubkeys that are not exactly 64 lowercase hex characters.
+ *
+ * The associated data joins both pubkeys with `:`, so a party string containing a
+ * colon makes distinct conversations produce *identical* associated data: a payload
+ * sealed as `{ sender: 'aaaa:bbbb', recipient: 'cccc' }` opens cleanly under
+ * `{ sender: 'aaaa', recipient: 'bbbb:cccc' }`. That defeats precisely the binding
+ * this envelope advertises — that a ciphertext cannot be replayed into another
+ * conversation or have its direction swapped.
+ *
+ * Real x-only pubkeys are colon-free, so validating rejects nothing a conforming
+ * implementation would ever send, and it does not change a single wire byte.
+ *
+ * Case is checked for a second reason: uppercase hex produces different associated
+ * data, so it would interoperate with nothing. Rejecting it turns a message no other
+ * client can read into a loud failure at the boundary rather than a silent one.
+ */
+function assertParties(parties: EnvelopeParties): void {
+  if (!XONLY_HEX.test(parties.sender) || !XONLY_HEX.test(parties.recipient)) {
+    throw new Error('Invalid party pubkey: expected 64 lowercase hex characters');
+  }
 }
 
 // ── Padding (NIP-44 scheme) ─────────────────────────────────────────────────
@@ -145,6 +171,7 @@ export function encryptPq(
     throw new Error('Invalid ML-KEM public key length');
   }
   if (conversationKey.length !== 32) throw new Error('Invalid conversation key');
+  assertParties(parties);
 
   const bytes = typeof plaintext === 'string' ? encoder.encode(plaintext) : plaintext;
   const { cipherText: kemCt, sharedSecret } = encapsulate(recipientKemKey);
@@ -183,6 +210,7 @@ export function decryptPq(
 ): string {
   try {
     if (conversationKey.length !== 32) throw new Error('Invalid conversation key');
+    assertParties(parties);
 
     const bytes = fromBase64(payload);
     if (bytes.length < HEADER_BYTES + TAG_BYTES) throw new Error('short');

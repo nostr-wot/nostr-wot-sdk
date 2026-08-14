@@ -217,3 +217,41 @@ describe('envelope input validation', () => {
     expect(messages[0]).toBe('Decryption failed');
   });
 });
+
+describe('party validation', () => {
+  it('rejects a colon in a party pubkey, which would collapse distinct conversations', () => {
+    // Same length as a real pubkey, so only the charset check catches it. Without this,
+    // sealing as (A + ':' + B, C) produces associated data identical to (A, B + ':' + C).
+    const injected = 'a'.repeat(31) + ':' + 'a'.repeat(32);
+    expect(injected.length).toBe(64);
+    const bob = bobKeys();
+    expect(() =>
+      encryptPq('hi', bob.kem.publicKey, convKey(), { ...parties, sender: injected }),
+    ).toThrow();
+    expect(() =>
+      encryptPq('hi', bob.kem.publicKey, convKey(), { ...parties, recipient: injected }),
+    ).toThrow();
+  });
+
+  it('rejects uppercase hex, which would interoperate with nothing', () => {
+    const bob = bobKeys();
+    expect(() =>
+      encryptPq('hi', bob.kem.publicKey, convKey(), { ...parties, sender: 'A'.repeat(64) }),
+    ).toThrow();
+  });
+
+  it('rejects wrong-length pubkeys', () => {
+    const bob = bobKeys();
+    expect(() =>
+      encryptPq('hi', bob.kem.publicKey, convKey(), { ...parties, sender: 'abc' }),
+    ).toThrow();
+    expect(() =>
+      encryptPq('hi', bob.kem.publicKey, convKey(), { ...parties, sender: '' }),
+    ).toThrow();
+  });
+
+  it('still accepts well-formed pubkeys', () => {
+    const bob = bobKeys();
+    expect(() => encryptPq('hi', bob.kem.publicKey, convKey(), parties)).not.toThrow();
+  });
+});
