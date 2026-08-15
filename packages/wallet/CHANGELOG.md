@@ -1,5 +1,12 @@
 # @nostr-wot/wallet
 
+## 0.3.3
+
+### Patch Changes
+
+- Updated dependencies [[`7ecf9cb`](https://github.com/nostr-wot/nostr-wot-sdk/commit/7ecf9cbc4312f9b2d635ed2b5c1caf8fd3d237ab)]:
+  - @nostr-wot/signers@1.1.0
+
 ## 0.3.2
 
 ### Patch Changes
