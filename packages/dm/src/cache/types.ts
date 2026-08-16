@@ -1,5 +1,6 @@
 import type { Event as NostrEvent } from "nostr-tools";
 import type { NostrSigner } from "@nostr-wot/signers";
+import type { PqSealOptions } from "../index";
 
 export type DMMessage = {
   /** Source event id (kind 4 for NIP-04, kind 14 inner for NIP-17). */
@@ -62,4 +63,18 @@ export interface DMStorage {
 export type SendDMOptions = {
   /** "nip17" (default) for sealed messages, "nip04" for legacy. */
   scheme?: "nip04" | "nip17";
+  /**
+   * Seal with a post-quantum envelope instead of plain NIP-44 (nip17 scheme only —
+   * nip04 has no post-quantum path and this is ignored there). Threaded straight
+   * through to `sealAndGiftWrap`'s `pq` option, and from there to
+   * `session.signer.nip44Encrypt` — `sendDM` never touches key material.
+   *
+   * The caller supplies the recipient's ML-KEM-1024 public key (base64), normally
+   * read from their `kind:10203` attestation. `sendDM` does not fetch attestations
+   * itself; that stays with the application, which has already decided the peer
+   * supports post-quantum before setting this. The signer must support it
+   * (`PrivateKeySigner` and a post-quantum-aware `Nip07Signer` extension do;
+   * `Nip46Signer` currently does not — see its class doc).
+   */
+  pq?: PqSealOptions;
 };

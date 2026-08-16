@@ -31,6 +31,37 @@ interface NostrSigner {
 
 Encryption methods are optional — not every backend supports both NIP-04 and NIP-44. Check `typeof signer.nip44Encrypt === "function"` before calling.
 
+## Post-quantum sealing
+
+This is the layer that performs post-quantum sealing, because it's the layer that already owns
+key material for every other scheme. `@nostr-wot/pq` supplies the pure ML-KEM-1024 + NIP-44
+hybrid envelope; `@nostr-wot/dm` only does transport, passing an opaque `pq` option through to
+`nip44Encrypt` without ever seeing a key. `PrivateKeySigner` implements it directly — configure
+its ML-KEM keypair with the `pqKem` constructor option, derived via `@nostr-wot/pq`'s
+`derivePqKeys` — and `Nip07Signer` forwards the option to `window.nostr.nip44.encrypt` as a
+third argument, omitting it entirely for extensions that don't expect one.
+
+```ts
+import { PrivateKeySigner } from "@nostr-wot/signers";
+import { derivePqKeys } from "@nostr-wot/pq";
+
+const { kem: pqKem } = derivePqKeys(seed, 0);
+const signer = new PrivateKeySigner(sk, { pqKem });
+
+const sealed = await signer.nip44Encrypt(recipientPubkey, plaintext, {
+  scheme: "pq",
+  recipientKemKey, // recipient's ML-KEM-1024 key, base64, from their kind:10203 attestation
+});
+```
+
+`Nip46Signer` cannot do this, and that's deliberate rather than a gap to fill: `nostr-tools`'
+`BunkerSigner.nip44Encrypt` sends NIP-46's `nip44_encrypt` request over the wire as
+`[pubkey, plaintext]`, with no channel for a third parameter, so there is nowhere to put
+`recipientKemKey`. Asked for `{ scheme: 'pq' }`, it throws instead of quietly sealing with plain
+NIP-44 — a signer that can't honor a post-quantum request must fail loudly, because a silent
+downgrade of a message the caller explicitly asked to protect post-quantum is exactly the
+failure this scheme exists to prevent.
+
 ## NIP-07 (browser extension)
 
 ```ts

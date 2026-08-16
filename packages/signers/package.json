@@ -1,6 +1,6 @@
 {
   "name": "@nostr-wot/signers",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Nostr signer abstractions: NIP-07 (extension), NIP-46 (Nostr Connect / bunker), NIP-55 (Amber), and in-memory private key.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "MIT",
@@ -49,13 +49,21 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:run": "vitest run",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@noble/hashes": "^1.5.0"
+    "@noble/hashes": "^1.5.0",
+    "@nostr-wot/pq": "^0.2.2"
   },
   "peerDependencies": {
     "nostr-tools": ">=2.0.0"
+  },
+  "devDependencies": {
+    "nostr-tools": "^2.24.1",
+    "typescript": "^5.3.0",
+    "vitest": "^4.0.18"
   },
   "sideEffects": false
 }

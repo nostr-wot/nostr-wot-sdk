@@ -32,7 +32,9 @@ export async function sendDM(
     event = await encryptNip04(session.signer, partnerPubkey, content);
   } else {
     const inner = buildChatMessage(session.myPubkey, partnerPubkey, content);
-    event = await sealAndGiftWrap(session.signer, partnerPubkey, inner);
+    event = await sealAndGiftWrap(session.signer, partnerPubkey, inner, {
+      pq: options.pq,
+    });
   }
 
   // Local-echo: drop the plaintext into our own cache so the UI updates
