@@ -18,7 +18,11 @@ export interface Nip07Window {
       decrypt(pubkey: string, ciphertext: string): Promise<string>;
     };
     nip44?: {
-      encrypt(pubkey: string, plaintext: string): Promise<string>;
+      encrypt(
+        pubkey: string,
+        plaintext: string,
+        opts?: { scheme: "pq"; recipientKemKey: string },
+      ): Promise<string>;
       decrypt(pubkey: string, ciphertext: string): Promise<string>;
     };
     getRelays?(): Promise<Record<string, { read: boolean; write: boolean }>>;
@@ -61,9 +65,18 @@ export class Nip07Signer implements NostrSigner {
     return this.#ext.nip04.decrypt(senderPubkey, ciphertext);
   }
 
-  async nip44Encrypt(recipientPubkey: string, plaintext: string): Promise<string> {
+  async nip44Encrypt(
+    recipientPubkey: string,
+    plaintext: string,
+    opts?: { scheme: "pq"; recipientKemKey: string },
+  ): Promise<string> {
     if (!this.#ext.nip44) throw new Error("NIP-44 not supported by this extension");
-    return this.#ext.nip44.encrypt(recipientPubkey, plaintext);
+    // Forward `opts` only when present, so extensions that predate post-quantum
+    // support see the exact two-argument call they have always seen — a third
+    // argument (even `undefined`) is observable to some implementations.
+    return opts
+      ? this.#ext.nip44.encrypt(recipientPubkey, plaintext, opts)
+      : this.#ext.nip44.encrypt(recipientPubkey, plaintext);
   }
 
   async nip44Decrypt(senderPubkey: string, ciphertext: string): Promise<string> {

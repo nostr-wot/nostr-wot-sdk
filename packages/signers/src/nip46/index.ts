@@ -196,7 +196,25 @@ export class Nip46Signer implements NostrSigner {
     return this.#inner.nip04Decrypt(senderPubkey, ciphertext);
   }
 
-  async nip44Encrypt(recipientPubkey: string, plaintext: string): Promise<string> {
+  /**
+   * Post-quantum sealing (`opts.scheme === 'pq'`) is not supported: `nostr-tools`'
+   * `BunkerSigner.nip44Encrypt` sends the underlying `nip44_encrypt` NIP-46 request
+   * as `[pubkey, plaintext]` with no channel for extra parameters, so there is
+   * nowhere to put `opts.recipientKemKey`. Throws rather than silently falling back
+   * to plain NIP-44 for a message the caller explicitly asked to protect
+   * post-quantum. A bunker-side protocol extension would be needed to close this
+   * gap.
+   */
+  async nip44Encrypt(
+    recipientPubkey: string,
+    plaintext: string,
+    opts?: { scheme: "pq"; recipientKemKey: string },
+  ): Promise<string> {
+    if (opts) {
+      throw new Error(
+        "Nip46Signer does not support post-quantum sealing: NIP-46's nip44_encrypt request has no channel for it",
+      );
+    }
     return this.#inner.nip44Encrypt(recipientPubkey, plaintext);
   }
 

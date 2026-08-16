@@ -6,7 +6,27 @@ import {
   type EventTemplate,
 } from "nostr-tools";
 import { hexToBytes } from "@noble/hashes/utils";
+import {
+  decryptPq,
+  encryptPq,
+  fromBase64,
+  isPqEnvelope,
+  type PqKeyPair,
+} from "@nostr-wot/pq";
 import type { NostrSigner } from "../types";
+
+export interface PrivateKeySignerOptions {
+  /**
+   * This account's ML-KEM-1024 keypair, enabling post-quantum sealing
+   * (`nip44Encrypt(..., { scheme: 'pq', ... })`) and auto-routed decryption of
+   * post-quantum payloads. Derive it with `@nostr-wot/pq`'s `derivePqKeys` from
+   * the account's BIP-39 seed — deliberately NOT from `sk` itself: deriving
+   * post-quantum keys from the secp256k1 key would be circular (see
+   * `@nostr-wot/pq`'s module doc). Without this, `nip44Encrypt` with a `pq` scheme
+   * and `nip44Decrypt` of a post-quantum payload both throw.
+   */
+  pqKem?: PqKeyPair;
+}
 
 /**
  * Sign with a private key held in memory. Useful for tests, CLIs, and
@@ -18,13 +38,15 @@ import type { NostrSigner } from "../types";
 export class PrivateKeySigner implements NostrSigner {
   readonly #sk: Uint8Array;
   readonly #pk: string;
+  readonly #pqKem?: PqKeyPair;
 
-  constructor(sk: Uint8Array | string) {
+  constructor(sk: Uint8Array | string, options: PrivateKeySignerOptions = {}) {
     this.#sk = typeof sk === "string" ? hexToBytes(sk) : sk;
     if (this.#sk.length !== 32) {
       throw new Error("Private key must be 32 bytes");
     }
     this.#pk = getPublicKey(this.#sk);
+    this.#pqKem = options.pqKem;
   }
 
   async getPublicKey(): Promise<string> {
@@ -43,13 +65,37 @@ export class PrivateKeySigner implements NostrSigner {
     return nip04.decrypt(this.#sk, senderPubkey, ciphertext);
   }
 
-  async nip44Encrypt(recipientPubkey: string, plaintext: string): Promise<string> {
+  async nip44Encrypt(
+    recipientPubkey: string,
+    plaintext: string,
+    opts?: { scheme: "pq"; recipientKemKey: string },
+  ): Promise<string> {
+    // Same conversation key either way — post-quantum mode feeds it into the
+    // hybrid KDF instead of using it directly, exactly the layering
+    // `@nostr-wot/pq`'s envelope was designed around.
     const conv = nip44.v2.utils.getConversationKey(this.#sk, recipientPubkey);
+    if (opts?.scheme === "pq") {
+      return encryptPq(plaintext, fromBase64(opts.recipientKemKey), conv, {
+        sender: this.#pk,
+        recipient: recipientPubkey,
+      });
+    }
     return nip44.v2.encrypt(plaintext, conv);
   }
 
   async nip44Decrypt(senderPubkey: string, ciphertext: string): Promise<string> {
     const conv = nip44.v2.utils.getConversationKey(this.#sk, senderPubkey);
+    if (isPqEnvelope(ciphertext)) {
+      if (!this.#pqKem) {
+        throw new Error(
+          "PrivateKeySigner has no ML-KEM keypair configured; cannot decrypt a post-quantum payload",
+        );
+      }
+      return decryptPq(ciphertext, this.#pqKem.secretKey, conv, {
+        sender: senderPubkey,
+        recipient: this.#pk,
+      });
+    }
     return nip44.v2.decrypt(ciphertext, conv);
   }
 }

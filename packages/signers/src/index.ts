@@ -1,5 +1,5 @@
 export type { NostrSigner } from "./types";
-export { PrivateKeySigner } from "./private-key";
+export { PrivateKeySigner, type PrivateKeySignerOptions } from "./private-key";
 export { Nip07Signer, isNip07Available, type Nip07Window } from "./nip07";
 export {
   Nip46Signer,
