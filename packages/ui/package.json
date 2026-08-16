@@ -1,7 +1,7 @@
 {
   "name": "@nostr-wot/ui",
   "version": "0.7.1",
-  "description": "Headless React UI for Nostr — login modal/widget, session provider, themable via CSS variables.",
+  "description": "Headless React UI for Nostr \u2014 login modal/widget, session provider, themable via CSS variables.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "MIT",
   "keywords": [
@@ -50,8 +50,7 @@
   "scripts": {
     "build": "tsup && cp src/styles.css dist/styles.css",
     "dev": "tsup --watch",
-    "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run build"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@nostr-wot/data": "^0.5.0",

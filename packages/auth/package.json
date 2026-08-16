@@ -1,7 +1,7 @@
 {
   "name": "@nostr-wot/auth",
   "version": "3.0.0",
-  "description": "Nostr authentication for HTTP servers — challenge / signed-event verify (NIP-98) / JWT. Framework-agnostic Web-standard handlers + Next.js App Router shim + client helper.",
+  "description": "Nostr authentication for HTTP servers \u2014 challenge / signed-event verify (NIP-98) / JWT. Framework-agnostic Web-standard handlers + Next.js App Router shim + client helper.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "MIT",
   "keywords": [
@@ -68,8 +68,7 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
-    "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run build"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "jose": "^5.9.6"

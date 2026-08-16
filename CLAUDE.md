@@ -9,5 +9,6 @@ To publish a package (use the npmrc approach — env var alone does not work):
 ```bash
 cd /Users/dandelionlabs/development/personal/nostr-wot-sdk
 source .env && npm config set //registry.npmjs.org/:_authToken $NPM_TOKEN
+npm run build -w @nostr-wot/<name>   # required: packages no longer self-build on publish
 cd packages/<name> && npm publish --access public
 ```
