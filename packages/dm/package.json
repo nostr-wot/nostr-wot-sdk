@@ -70,8 +70,7 @@
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:run": "vitest run",
-    "prepublishOnly": "npm run build"
+    "test:run": "vitest run"
   },
   "dependencies": {
     "@nostr-wot/data": "^0.5.0",
