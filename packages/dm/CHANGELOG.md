@@ -1,5 +1,26 @@
 # @nostr-wot/dm
 
+## 0.6.0
+
+### Minor Changes
+
+- [#7](https://github.com/nostr-wot/nostr-wot-sdk/pull/7) [`596646b`](https://github.com/nostr-wot/nostr-wot-sdk/commit/596646bcc1e881b671df80abb6239ef8cf6eb9df) Thanks [@leonacostaok](https://github.com/leonacostaok)! - `sealAndGiftWrap` gains an optional `pq` option (`{ scheme: 'pq'; recipientKemKey: string }`), which it passes straight through to the signer's `nip44Encrypt` to seal with `@nostr-wot/pq`'s hybrid ML-KEM-1024 + NIP-44 envelope instead of plain NIP-44 ciphertext. Nothing outside the seal changes — a relay or a client that hasn't implemented this still sees an ordinary kind-1059 gift wrap. `sendDM` gains a matching `pq` option on `SendDMOptions`, threaded straight through.
+
+  `unwrapGiftWrap` needs no new option at all: `signer.nip44Decrypt` auto-routes on its own, since the post-quantum envelope is self-describing. A single conversation can freely mix classic and post-quantum messages, and existing callers of `unwrapGiftWrap` (`cache/inbox.ts`, `cache/backfill.ts`) get post-quantum support with no changes on their part, as long as the signer supports it (requires `@nostr-wot/signers` >=1.2.0).
+
+  This package does not depend on `@nostr-wot/pq` and never touches post-quantum key material — the signer owns that, by design, since it's the layer that already owns key material for every other scheme. A post-quantum message sealed by `@nostr-wot/dm` is byte-compatible with `@nostr-wot/pq`'s `openPqDirectMessage`, and vice versa, verified by cross-package round-trip tests.
+
+### Patch Changes
+
+- [#7](https://github.com/nostr-wot/nostr-wot-sdk/pull/7) [`a01cd21`](https://github.com/nostr-wot/nostr-wot-sdk/commit/a01cd21008603e58ccd0d53165de593fe604b796) Thanks [@leonacostaok](https://github.com/leonacostaok)! - Verify the seal's signature and cross-check rumor authorship in `unwrapGiftWrap`.
+
+  Previously the seal's `sig` was never checked, and the inner rumor's `pubkey` was returned to the caller without validation against the seal's signer. The NIP-44 conversation-key binding already made this safe in practice, but the returned `message.pubkey` was unvalidated and attacker-influenced: a sender could honestly seal with their own key while setting the rumor's author field to anyone, and any consumer reading `message.pubkey` — the natural author field on a Nostr event — would get a forged identity.
+
+  `unwrapGiftWrap` now verifies the seal's signature and rejects a rumor whose `pubkey` (when present) does not match the seal's signer, mirroring `@nostr-wot/pq`'s `openPqDirectMessage`. Both new checks fail the same way the function's existing decrypt failures do, so callers cannot use the error to distinguish which check failed. No wire format change.
+
+- Updated dependencies [[`bdddcd6`](https://github.com/nostr-wot/nostr-wot-sdk/commit/bdddcd63e0181c8ee4d9906a31c93b02ca64ac9a)]:
+  - @nostr-wot/signers@1.2.0
+
 ## 0.5.2
 
 ### Patch Changes

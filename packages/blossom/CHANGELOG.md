@@ -1,5 +1,12 @@
 # @nostr-wot/blossom
 
+## 0.1.7
+
+### Patch Changes
+
+- Updated dependencies [[`bdddcd6`](https://github.com/nostr-wot/nostr-wot-sdk/commit/bdddcd63e0181c8ee4d9906a31c93b02ca64ac9a)]:
+  - @nostr-wot/signers@1.2.0
+
 ## 0.1.6
 
 ### Patch Changes
