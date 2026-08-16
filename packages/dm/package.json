@@ -1,6 +1,6 @@
 {
   "name": "@nostr-wot/dm",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Direct messages for Nostr: NIP-04 legacy, NIP-44 v2, and NIP-17 sealed messages with gift-wrap.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "MIT",
