@@ -75,6 +75,7 @@
   },
   "dependencies": {
     "@nostr-wot/data": "^0.5.0",
+    "@nostr-wot/pq": "^0.2.1",
     "@nostr-wot/signers": "1.1.0"
   },
   "peerDependencies": {
