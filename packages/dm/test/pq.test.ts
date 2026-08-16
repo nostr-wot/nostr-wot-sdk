@@ -12,6 +12,7 @@ import {
   createPqDirectMessage,
   openPqDirectMessage,
   encryptPq,
+  toBase64,
 } from "@nostr-wot/pq";
 import {
   buildChatMessage,
@@ -19,35 +20,19 @@ import {
   unwrapGiftWrap,
   KIND_SEALED,
   KIND_GIFT_WRAP,
-  type PqSealOptions,
-  type PqUnwrapOptions,
 } from "../src/index.js";
 
-/** A full identity: secp256k1 key + signer + post-quantum keys. */
+/** A full identity: secp256k1 key + post-quantum-aware signer + raw pq keys. */
 function identity() {
   const sk = generateSecretKey();
+  const pqKem = derivePqKeys(crypto.getRandomValues(new Uint8Array(64)), 0).kem;
   return {
     sk,
     pk: getPublicKey(sk),
-    signer: new PrivateKeySigner(sk),
-    pq: derivePqKeys(crypto.getRandomValues(new Uint8Array(64)), 0),
-  };
-}
-
-/** Build the `pq` seal option for `sealAndGiftWrap`/`sendDM` from raw identities. */
-function sealOptionsFor(sender: ReturnType<typeof identity>, recipientPk: string, recipientKem: Uint8Array): PqSealOptions {
-  return {
-    kemPublicKey: recipientKem,
-    conversationKey: nip44.v2.utils.getConversationKey(sender.sk, recipientPk),
-  };
-}
-
-/** Build the `pq` unwrap option for `unwrapGiftWrap` from a raw recipient identity. */
-function unwrapOptionsFor(recipient: ReturnType<typeof identity>): PqUnwrapOptions {
-  return {
-    kemSecretKey: recipient.pq.kem.secretKey,
-    conversationKey: (counterparty) =>
-      nip44.v2.utils.getConversationKey(recipient.sk, counterparty),
+    pqKem,
+    // Configured with our own ML-KEM keypair so this signer can also *receive*
+    // post-quantum messages (nip44Decrypt auto-routes); sending never needs it.
+    signer: new PrivateKeySigner(sk, { pqKem }),
   };
 }
 
@@ -58,12 +43,11 @@ describe("post-quantum sealing in @nostr-wot/dm", () => {
 
     const chatMessage = buildChatMessage(alice.pk, bob.pk, "hello, post-quantum bob");
     const wrap = await sealAndGiftWrap(alice.signer, bob.pk, chatMessage, {
-      pq: sealOptionsFor(alice, bob.pk, bob.pq.kem.publicKey),
+      pq: { scheme: "pq", recipientKemKey: toBase64(bob.pqKem.publicKey) },
     });
 
-    const { message, senderPubkey } = await unwrapGiftWrap(bob.signer, wrap, {
-      pq: unwrapOptionsFor(bob),
-    });
+    // No pq option here — unwrapGiftWrap takes none; the signer auto-routes.
+    const { message, senderPubkey } = await unwrapGiftWrap(bob.signer, wrap);
 
     expect(senderPubkey).toBe(alice.pk);
     expect(message.content).toBe("hello, post-quantum bob");
@@ -76,13 +60,13 @@ describe("post-quantum sealing in @nostr-wot/dm", () => {
 
     const chatMessage = buildChatMessage(alice.pk, bob.pk, "opened by the other package");
     const wrap = await sealAndGiftWrap(alice.signer, bob.pk, chatMessage, {
-      pq: sealOptionsFor(alice, bob.pk, bob.pq.kem.publicKey),
+      pq: { scheme: "pq", recipientKemKey: toBase64(bob.pqKem.publicKey) },
     });
 
     const opened = openPqDirectMessage({
       wrap,
       recipientSecretKey: bob.sk,
-      recipientKemSecretKey: bob.pq.kem.secretKey,
+      recipientKemSecretKey: bob.pqKem.secretKey,
     });
 
     expect(opened).not.toBeNull();
@@ -98,12 +82,10 @@ describe("post-quantum sealing in @nostr-wot/dm", () => {
       content: "sealed by the other package",
       senderSecretKey: alice.sk,
       recipientPubkey: bob.pk,
-      recipientKemKey: bob.pq.kem.publicKey,
+      recipientKemKey: bob.pqKem.publicKey,
     });
 
-    const { message, senderPubkey } = await unwrapGiftWrap(bob.signer, wrap, {
-      pq: unwrapOptionsFor(bob),
-    });
+    const { message, senderPubkey } = await unwrapGiftWrap(bob.signer, wrap);
 
     expect(senderPubkey).toBe(alice.pk);
     expect(message.content).toBe("sealed by the other package");
@@ -122,13 +104,13 @@ describe("post-quantum sealing in @nostr-wot/dm", () => {
       alice.signer,
       bob.pk,
       buildChatMessage(alice.pk, bob.pk, "post-quantum message"),
-      { pq: sealOptionsFor(alice, bob.pk, bob.pq.kem.publicKey) },
+      { pq: { scheme: "pq", recipientKemKey: toBase64(bob.pqKem.publicKey) } },
     );
 
-    // Same options object, no per-call flag distinguishing which is which.
-    const bobOptions = { pq: unwrapOptionsFor(bob) };
-    const opened1 = await unwrapGiftWrap(bob.signer, classicWrap, bobOptions);
-    const opened2 = await unwrapGiftWrap(bob.signer, pqWrap, bobOptions);
+    // Same signer, same call shape — unwrapGiftWrap takes no option that could
+    // distinguish these.
+    const opened1 = await unwrapGiftWrap(bob.signer, classicWrap);
+    const opened2 = await unwrapGiftWrap(bob.signer, pqWrap);
 
     expect(opened1.message.content).toBe("classic message");
     expect(opened1.senderPubkey).toBe(alice.pk);
@@ -144,7 +126,7 @@ describe("post-quantum sealing in @nostr-wot/dm", () => {
       alice.signer,
       bob.pk,
       buildChatMessage(alice.pk, bob.pk, "hello bob"),
-      { pq: sealOptionsFor(alice, bob.pk, bob.pq.kem.publicKey) },
+      { pq: { scheme: "pq", recipientKemKey: toBase64(bob.pqKem.publicKey) } },
     );
 
     const wrapPlaintext = await bob.signer.nip44Decrypt!(wrap.pubkey, wrap.content);
@@ -166,9 +148,7 @@ describe("post-quantum sealing in @nostr-wot/dm", () => {
       eph,
     );
 
-    await expect(
-      unwrapGiftWrap(bob.signer, retamperedWrap, { pq: unwrapOptionsFor(bob) }),
-    ).rejects.toThrow();
+    await expect(unwrapGiftWrap(bob.signer, retamperedWrap)).rejects.toThrow();
   });
 
   it("rejects a post-quantum rumor whose pubkey does not match the seal's signer", async () => {
@@ -180,7 +160,7 @@ describe("post-quantum sealing in @nostr-wot/dm", () => {
 
     const rumor = buildChatMessage(alice.pk, bob.pk, "trust me, this is from alice");
     const conv = nip44.v2.utils.getConversationKey(mallory.sk, bob.pk);
-    const payload = encryptPq(JSON.stringify(rumor), bob.pq.kem.publicKey, conv, {
+    const payload = encryptPq(JSON.stringify(rumor), bob.pqKem.publicKey, conv, {
       sender: mallory.pk,
       recipient: bob.pk,
     });
@@ -199,22 +179,21 @@ describe("post-quantum sealing in @nostr-wot/dm", () => {
       eph,
     );
 
-    await expect(
-      unwrapGiftWrap(bob.signer, wrap, { pq: unwrapOptionsFor(bob) }),
-    ).rejects.toThrow();
+    await expect(unwrapGiftWrap(bob.signer, wrap)).rejects.toThrow();
   });
 
-  it("fails closed when a post-quantum seal arrives but no pq options were supplied", async () => {
+  it("fails closed when a post-quantum seal arrives but the signer has no ML-KEM key configured", async () => {
     const alice = identity();
     const bob = identity();
+    const bobSignerNoKem = new PrivateKeySigner(bob.sk); // no pqKem option
 
     const wrap = await sealAndGiftWrap(
       alice.signer,
       bob.pk,
-      buildChatMessage(alice.pk, bob.pk, "needs pq options to open"),
-      { pq: sealOptionsFor(alice, bob.pk, bob.pq.kem.publicKey) },
+      buildChatMessage(alice.pk, bob.pk, "needs bob's KEM key to open"),
+      { pq: { scheme: "pq", recipientKemKey: toBase64(bob.pqKem.publicKey) } },
     );
 
-    await expect(unwrapGiftWrap(bob.signer, wrap)).rejects.toThrow();
+    await expect(unwrapGiftWrap(bobSignerNoKem, wrap)).rejects.toThrow();
   });
 });
