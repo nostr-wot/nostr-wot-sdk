@@ -17,6 +17,27 @@ npm i @nostr-wot/dm @nostr-wot/signers nostr-tools
 
 ---
 
+## Layering
+
+Three packages, three jobs: `@nostr-wot/pq` holds the post-quantum primitives (ML-KEM-1024 +
+NIP-44 hybrid envelope), `@nostr-wot/signers` owns key material and is therefore the layer that
+performs post-quantum sealing, and `@nostr-wot/dm` (this package) only does transport — it
+builds the gift wrap and hands the plaintext to the signer, never touching a key. To send a
+post-quantum DM, pass the recipient's ML-KEM key through `sealAndGiftWrap`'s `pq` option; the
+signer does the rest, and `unwrapGiftWrap` needs no matching option because `nip44Decrypt`
+auto-routes on the self-describing envelope.
+
+```ts
+import { buildChatMessage, sealAndGiftWrap } from "@nostr-wot/dm";
+
+const inner = buildChatMessage(me, recipientPubkey, "hello, post-quantum");
+const giftWrap = await sealAndGiftWrap(signer, recipientPubkey, inner, {
+  pq: { scheme: "pq", recipientKemKey }, // from the recipient's kind:10203 attestation
+});
+```
+
+---
+
 ## Layer 1 — Crypto primitives
 
 `@nostr-wot/dm` (the root entry) exposes pure, signer-driven encryption/decryption. No subscriptions, no cache.

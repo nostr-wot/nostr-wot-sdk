@@ -65,6 +65,14 @@ export interface CreatePqDmInput {
 /**
  * Build a gift-wrapped post-quantum direct message.
  *
+ * @deprecated Use `@nostr-wot/dm`'s `sealAndGiftWrap` with the signer's `{ scheme: 'pq',
+ * recipientKemKey }` option instead. Transport (gift-wrapping, relay filters) belongs in
+ * `@nostr-wot/dm`, not here, and key material belongs in the signer layer
+ * (`@nostr-wot/signers`), not in a function that takes a raw secret key — this pair forces a
+ * consumer to hand-compose two packages instead of going through the signer that already owns
+ * the key. Kept for backward compatibility: it is published public API and its wire format is
+ * pinned by a cross-implementation vector test against the Rust port in the Dart NDK, so it is
+ * not being removed or changed.
  * @returns the kind:1059 event to publish. Publish it to the recipient's inbox relays.
  */
 export function createPqDirectMessage(input: CreatePqDmInput): Event {
@@ -138,6 +146,14 @@ export interface OpenPqDmInput {
  * having: without it, anyone could wrap a rumor claiming to be from someone else, and the
  * recipient would display it as genuine.
  *
+ * @deprecated Use `@nostr-wot/dm`'s `unwrapGiftWrap` instead — `signer.nip44Decrypt` auto-routes
+ * to post-quantum decryption on its own, so a signer-based caller needs no separate function
+ * for this. Transport belongs in `@nostr-wot/dm`, not here, and key material belongs in the
+ * signer layer (`@nostr-wot/signers`), not in a function that takes raw secret keys directly —
+ * this pair forces a consumer to hand-compose two packages instead of going through the signer
+ * that already owns the key. Kept for backward compatibility: it is published public API and
+ * its wire format is pinned by a cross-implementation vector test against the Rust port in the
+ * Dart NDK, so it is not being removed or changed.
  * @returns the message, or null if this wrap is not a post-quantum message for us.
  * @throws on a wrap that is malformed or fails authentication.
  */
