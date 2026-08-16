@@ -4,6 +4,7 @@ import {
   getEventHash,
   getPublicKey,
   nip44,
+  verifyEvent,
   type Event,
   type EventTemplate,
   type UnsignedEvent,
@@ -170,9 +171,23 @@ export async function unwrapGiftWrap(
   if (seal.kind !== KIND_SEALED) {
     throw new Error(`Expected sealed kind ${KIND_SEALED}, got ${seal.kind}`);
   }
+  // The seal's signature is checked alongside its decryption below, both folded into
+  // the same generic failure: a caller must not be able to tell, from the error alone,
+  // whether the seal failed to decrypt or merely failed to verify.
+  if (!verifyEvent(seal)) {
+    throw new Error("Failed to decrypt seal");
+  }
   // Decrypt the seal (sender is seal.pubkey)
   const sealPlaintext = await signer.nip44Decrypt(seal.pubkey, seal.content);
   const message = JSON.parse(sealPlaintext) as UnsignedEvent & { id: string };
+  // The rumor is unsigned, so its `pubkey` is only a claim — the seal's signature is
+  // the only authenticated statement of authorship. A rumor claiming a different author
+  // than the key that signed the seal is rejected with the same generic failure as
+  // above, for the same reason: the mismatch must not be distinguishable from a plain
+  // decrypt failure.
+  if (message.pubkey && message.pubkey !== seal.pubkey) {
+    throw new Error("Failed to decrypt seal");
+  }
   return { message, senderPubkey: seal.pubkey };
 }
 

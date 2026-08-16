@@ -69,6 +69,8 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:run": "vitest run",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
@@ -83,6 +85,12 @@
     "react": {
       "optional": true
     }
+  },
+  "devDependencies": {
+    "nostr-tools": "^2.24.1",
+    "tsup": "^8.0.1",
+    "typescript": "^5.3.0",
+    "vitest": "^4.0.18"
   },
   "sideEffects": false
 }
