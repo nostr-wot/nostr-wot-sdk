@@ -3,6 +3,7 @@ import {
   generateSecretKey,
   getPublicKey,
   finalizeEvent,
+  getEventHash,
   nip44,
   type Event,
 } from "nostr-tools";
@@ -55,6 +56,107 @@ describe("unwrapGiftWrap", () => {
       ...rumor,
       id: "0".repeat(64),
     });
+    const sealContent = await alice.signer.nip44Encrypt!(bob.pk, sealPlaintext);
+    const seal = await alice.signer.signEvent({
+      kind: KIND_SEALED,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [],
+      content: sealContent,
+    });
+
+    const eph = generateSecretKey();
+    const conv = nip44.v2.utils.getConversationKey(eph, bob.pk);
+    const wrap = finalizeEvent(
+      {
+        kind: KIND_GIFT_WRAP,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [["p", bob.pk]],
+        content: nip44.v2.encrypt(JSON.stringify(seal), conv),
+      },
+      eph,
+    );
+
+    await expect(unwrapGiftWrap(bob.signer, wrap)).rejects.toThrow();
+  });
+
+  it("rejects a rumor whose id does not match its content", async () => {
+    // The rumor is unsigned, so nothing but this check stops a sealer from writing
+    // an arbitrary id. Consumers dedupe on id, so a mismatch must be rejected outright
+    // rather than silently accepted or silently corrected.
+    const alice = identity();
+    const bob = identity();
+
+    const rumor = buildChatMessage(alice.pk, bob.pk, "hello bob");
+    const sealPlaintext = JSON.stringify({ ...rumor, id: "0".repeat(64) });
+    const sealContent = await alice.signer.nip44Encrypt!(bob.pk, sealPlaintext);
+    const seal = await alice.signer.signEvent({
+      kind: KIND_SEALED,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [],
+      content: sealContent,
+    });
+
+    const eph = generateSecretKey();
+    const conv = nip44.v2.utils.getConversationKey(eph, bob.pk);
+    const wrap = finalizeEvent(
+      {
+        kind: KIND_GIFT_WRAP,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [["p", bob.pk]],
+        content: nip44.v2.encrypt(JSON.stringify(seal), conv),
+      },
+      eph,
+    );
+
+    await expect(unwrapGiftWrap(bob.signer, wrap)).rejects.toThrow();
+  });
+
+  it("fills in id for a rumor that never had one, instead of rejecting", async () => {
+    // @nostr-wot/pq's deprecated createPqDirectMessage never sets `id` on the rumor
+    // (exercised end to end in pq.test.ts's cross-compat test). id is not part of the
+    // unsigned-event shape per NIP-59, so an absent id is a legitimate rumor, not a
+    // forgery attempt — there's nothing to forge when we compute the value ourselves.
+    const alice = identity();
+    const bob = identity();
+
+    const rumor = buildChatMessage(alice.pk, bob.pk, "hello bob"); // no id field
+    const sealPlaintext = JSON.stringify(rumor);
+    const sealContent = await alice.signer.nip44Encrypt!(bob.pk, sealPlaintext);
+    const seal = await alice.signer.signEvent({
+      kind: KIND_SEALED,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [],
+      content: sealContent,
+    });
+
+    const eph = generateSecretKey();
+    const conv = nip44.v2.utils.getConversationKey(eph, bob.pk);
+    const wrap = finalizeEvent(
+      {
+        kind: KIND_GIFT_WRAP,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [["p", bob.pk]],
+        content: nip44.v2.encrypt(JSON.stringify(seal), conv),
+      },
+      eph,
+    );
+
+    const { message } = await unwrapGiftWrap(bob.signer, wrap);
+    expect(message.id).toBe(getEventHash(rumor));
+  });
+
+  it("rejects a rumor with no pubkey field", async () => {
+    // The authorship check used to only reject a *mismatched* pubkey, not an absent
+    // one — a rumor with no pubkey claim at all slipped through unauthenticated.
+    const alice = identity();
+    const bob = identity();
+
+    const { pubkey: _omitted, ...rumorWithoutPubkey } = buildChatMessage(
+      alice.pk,
+      bob.pk,
+      "hello bob",
+    );
+    const sealPlaintext = JSON.stringify(rumorWithoutPubkey);
     const sealContent = await alice.signer.nip44Encrypt!(bob.pk, sealPlaintext);
     const seal = await alice.signer.signEvent({
       kind: KIND_SEALED,
