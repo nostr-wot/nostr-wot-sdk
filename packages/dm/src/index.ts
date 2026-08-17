@@ -247,8 +247,32 @@ export async function unwrapGiftWrap(
   // the only authenticated statement of authorship. A rumor claiming a different author
   // than the key that signed the seal is rejected with the same generic failure as
   // above, for the same reason: the mismatch must not be distinguishable from a plain
-  // decrypt failure.
-  if (message.pubkey && message.pubkey !== seal.pubkey) {
+  // decrypt failure. `pubkey` is required, not merely checked when present: the type
+  // says it's a string, but a sealer controls the JSON on the wire and could omit it,
+  // and an absent claim is not an authenticated one either.
+  if (!message.pubkey || message.pubkey !== seal.pubkey) {
+    throw new Error("Failed to decrypt seal");
+  }
+  // The rumor is unsigned, so nothing stops a sealer from writing an arbitrary `id`
+  // that doesn't hash its own content. Consumers (e.g. Obelisk's DM store and its
+  // optimistic-send reconciliation) dedupe on `id`, so it needs to mean what it says.
+  // Hash only the canonical unsigned-event fields — `message` may carry `id` itself
+  // plus whatever else the sealer included, none of which are part of the hash input.
+  const canonical: UnsignedEvent = {
+    pubkey: message.pubkey,
+    created_at: message.created_at,
+    kind: message.kind,
+    tags: message.tags,
+    content: message.content,
+  };
+  const computedId = getEventHash(canonical);
+  if (message.id === undefined) {
+    // `@nostr-wot/pq`'s deprecated `createPqDirectMessage` never set one — the rumor
+    // per NIP-59 is unsigned and `id` isn't a required part of that shape. There's
+    // nothing to forge here (we compute it ourselves from already-authenticated
+    // fields), so fill it in rather than reject a legitimate sender for an omission.
+    message.id = computedId;
+  } else if (message.id !== computedId) {
     throw new Error("Failed to decrypt seal");
   }
   return { message, senderPubkey: seal.pubkey };
