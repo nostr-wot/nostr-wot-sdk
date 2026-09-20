@@ -1,5 +1,11 @@
 # @nostr-wot/graph
 
+## 0.3.1
+
+### Patch Changes
+
+- [#11](https://github.com/nostr-wot/nostr-wot-sdk/pull/11) [`b0bea82`](https://github.com/nostr-wot/nostr-wot-sdk/commit/b0bea82dfa89e43d71eb995de10f1c1cdb6d65ee) Thanks [@leonacostaok](https://github.com/leonacostaok)! - Simplify the README around usage, crawl depth, persistence and upgrade compatibility. Move synthetic performance comparisons into the changelog. No runtime changes.
+
 ## 0.3.0
 
 ### Minor Changes
