@@ -48,7 +48,7 @@ export interface WotGraphStats {
 }
 
 const DEFAULT_MAX_HOPS = 2;
-const STORAGE_VERSION = 1;
+const STORAGE_VERSION = 2;
 
 export class WotGraph {
   readonly namespace: string;
@@ -96,10 +96,12 @@ export class WotGraph {
     // returns the same promise (idempotent — React strict-mode safe).
     if (this.inFlight) return this.inFlight;
 
-    this.controller = new AbortController();
+    const controller = new AbortController();
+    this.controller = controller;
+    const onAbort = () => controller.abort();
     if (opts.signal) {
-      if (opts.signal.aborted) this.controller.abort();
-      else opts.signal.addEventListener('abort', () => this.controller?.abort(), { once: true });
+      if (opts.signal.aborted) controller.abort();
+      else opts.signal.addEventListener('abort', onAbort, { once: true });
     }
     this.root = rootPubkey;
 
@@ -110,20 +112,24 @@ export class WotGraph {
         this.crawler = new GraphCrawler({ pool, storage: this.storage, relays: this.relays });
         const result = await this.crawler.crawl(rootPubkey, {
           maxDepth: opts.maxDepth,
+          maxHops: opts.maxHops,
           onProgress: opts.onProgress,
           signal: this.controller!.signal,
         });
-        await this.storage.setMeta('root', rootPubkey);
-        await this.storage.setMeta('lastCrawl', Date.now());
-        await this.storage.setMeta('maxDepth', opts.maxDepth ?? DEFAULT_MAX_HOPS);
-        await this.storage.setMeta('version', STORAGE_VERSION);
-        this.graph.invalidateCache();
-        this.notify();
+        await this.storage.setMetaBatch({
+          root: rootPubkey,
+          lastCrawl: result.stoppedEarly ? null : Date.now(),
+          maxDepth: opts.maxHops === undefined ? opts.maxDepth ?? DEFAULT_MAX_HOPS : Math.max(0, opts.maxHops - 1),
+          version: STORAGE_VERSION,
+        });
         return result;
       } finally {
+        opts.signal?.removeEventListener('abort', onAbort);
+        this.graph.invalidateCache();
         this.inFlight = null;
         this.crawler = null;
         this.controller = null;
+        this.notify();
       }
     })();
 
@@ -132,9 +138,14 @@ export class WotGraph {
   }
 
   /** Distance info from the crawled root, or `null` if unreached/unknown. */
-  getDistance(pubkey: string): DistanceInfo | null {
+  getDistance(pubkey: string, maxHops: number = 6): DistanceInfo | null {
     if (!this.root) return null;
-    return this.graph.getDistance(this.root, pubkey);
+    return this.graph.getDistance(this.root, pubkey, maxHops);
+  }
+
+  /** Batch distances; all lookups share one numeric traversal. */
+  getDistances(pubkeys: string[], maxHops: number = 6): Map<string, DistanceInfo | null> {
+    return new Map(pubkeys.map(pubkey => [pubkey, this.getDistance(pubkey, maxHops)]));
   }
 
   /** Trust score 0..1 via {@link calculateScore}. */
@@ -145,7 +156,7 @@ export class WotGraph {
 
   /** Whether `pubkey` is within `maxHops` of the root. */
   isInWoT(pubkey: string, maxHops: number = DEFAULT_MAX_HOPS): boolean {
-    const info = this.getDistance(pubkey);
+    const info = this.getDistance(pubkey, maxHops);
     return info !== null && info.hops <= maxHops;
   }
 
@@ -154,7 +165,7 @@ export class WotGraph {
     const maxHops = opts?.maxHops ?? DEFAULT_MAX_HOPS;
     const scored: Array<{ pubkey: string; score: number }> = [];
     for (const pubkey of pubkeys) {
-      const info = this.getDistance(pubkey);
+      const info = this.getDistance(pubkey, maxHops);
       if (info !== null && info.hops <= maxHops) {
         scored.push({ pubkey, score: calculateScore(info.hops, info.paths, this.scoring) });
       }
@@ -190,6 +201,9 @@ export class WotGraph {
 
   /** Wipe this namespace. */
   async clear(): Promise<void> {
+    this.stop();
+    await this.inFlight?.catch(() => {});
+    await this.storage.open();
     await this.storage.clear();
     this.root = null;
     this.graph.invalidateCache();
@@ -220,10 +234,13 @@ export class WotGraph {
 
   /** Release the pool/storage this instance owns. */
   destroy(): void {
-    this.storage.close();
+    this.stop();
+    if (this.inFlight) void this.inFlight.then(() => this.storage.close(), () => this.storage.close());
+    else this.storage.close();
     if (this.ownPool) {
       this.ownPool.destroy();
       this.ownPool = null;
+      this.pool = null;
     }
   }
 

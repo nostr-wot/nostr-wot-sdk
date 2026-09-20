@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- `@nostr-wot/graph`: batch relay crawls (100 authors per request), add explicit
+  `maxHops` crawl bounds while retaining inclusive `maxDepth`, persist deterministic
+  replaceable-event versions, and retain cached follows when refreshes are missing.
+- Deduplicate adjacency, maintain constant-time graph stats, and reuse numeric
+  traversal by graph revision/depth; prevent distance/path overflow and expose
+  bounded `getDistances` batch queries.
+- Upgrade graph IndexedDB to schema 2 with delta-varint follow rows and legacy-row
+  reads. Flush failures retain pending writes; concurrent flushes serialize.
+  Older SDKs cannot reopen upgraded namespaces. Metadata commits separately from
+  graph rows; partial crawls remain usable and stopped crawls remain stale.
+- Add migration, abort/retry, version-ordering, request-count and traversal regression
+  tests plus `npm run benchmark -w @nostr-wot/graph`.
+
 ## [0.7.1] - 2026-02-23
 
 ### Fixed

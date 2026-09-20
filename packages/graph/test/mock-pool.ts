@@ -20,17 +20,19 @@ export function makeEvent(created_at: number, follows: string[]): CrawlEvent {
 export function makeMockPool(
   data: Record<string, CrawlEvent[]>,
   opts: { connected?: number } = {},
-): CrawlPool & { calls: string[] } {
+): CrawlPool & { calls: string[]; requests: string[][] } {
   const calls: string[] = [];
+  const requests: string[][] = [];
   return {
-    calls,
+    calls, requests,
     getConnectedCount() {
       return opts.connected ?? 1;
     },
     subscribe(filter, handlers) {
-      const author = (filter.authors && filter.authors[0]) || '';
-      calls.push(author);
-      const events = data[author] ?? [];
+      const authors = filter.authors ?? [];
+      requests.push(authors);
+      calls.push(...authors);
+      const events = authors.flatMap(author => (data[author] ?? []).map(event => ({ ...event, pubkey: author })));
       let closed = false;
       queueMicrotask(() => {
         if (closed) return;

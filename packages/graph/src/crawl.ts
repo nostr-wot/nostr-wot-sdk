@@ -16,7 +16,7 @@
  *   usable and reports `stoppedEarly: true`.
  */
 
-import type { GraphStorage } from './storage';
+import { newerVersion, type GraphStorage } from './storage';
 import type { CrawlOptions, CrawlResult } from './types';
 
 // Minimal relay-pool surface the crawler needs. `@nostr-wot/relay`'s `RelayPool`
@@ -47,6 +47,8 @@ export interface GraphCrawlerOptions {
   relays: string[];
   /** Base delay (ms) between fetch dispatches. Default 50. */
   baseDelayMs?: number;
+  /** Authors per relay subscription. Default 100. */
+  batchSize?: number;
   /** Max concurrent in-flight fetches. Default 5. */
   maxConcurrent?: number;
   /** Per-pubkey response timeout (ms). Default 10000. */
@@ -70,8 +72,14 @@ export class GraphCrawler {
   private maxConcurrent: number;
   private requestTimeoutMs: number;
   private aborted = false;
+  private batchSize: number;
+  private pending = new Set<() => void>();
 
   constructor(options: GraphCrawlerOptions) {
+    this.batchSize = options.batchSize ?? 100;
+    for (const [name, value] of Object.entries({ batchSize: this.batchSize, maxConcurrent: options.maxConcurrent ?? 5 })) {
+      if (!Number.isSafeInteger(value) || value < 1) throw new RangeError(`${name} must be a positive safe integer`);
+    }
     this.pool = options.pool;
     this.storage = options.storage;
     this.relays = options.relays;
@@ -83,6 +91,7 @@ export class GraphCrawler {
   /** Abort an in-flight crawl. */
   stop(): void {
     this.aborted = true;
+    for (const finish of this.pending) finish();
   }
 
   async crawl(rootPubkey: string, opts: CrawlOptions = {}): Promise<CrawlResult> {
@@ -90,7 +99,9 @@ export class GraphCrawler {
       throw new CrawlError('no relays connected');
     }
 
-    const maxDepth = opts.maxDepth ?? DEFAULT_MAX_DEPTH;
+    const maxDepth = opts.maxHops === undefined ? opts.maxDepth ?? DEFAULT_MAX_DEPTH : opts.maxHops - 1;
+    const bound = opts.maxHops ?? maxDepth;
+    if (!Number.isSafeInteger(bound) || bound < 0) throw new RangeError("crawl depth must be a non-negative safe integer");
     const start = Date.now();
     this.aborted = false;
 
@@ -118,28 +129,29 @@ export class GraphCrawler {
 
         const nextSet = new Set<string>();
 
-        await this.mapLimited(currentLevel, async (pubkey) => {
+        const batches: string[][] = [];
+        for (let i = 0; i < currentLevel.length; i += this.batchSize) batches.push(currentLevel.slice(i, i + this.batchSize));
+        await this.mapLimited(batches, async (authors) => {
+          const events = await this.fetchNewest(authors);
           if (this.aborted) return;
-          const follows = await this.fetchNewest(pubkey);
-          if (this.aborted) return;
-
-          if (follows === null) {
-            failed.add(pubkey);
-          } else {
-            fetched.add(pubkey);
-            reachedDepth = Math.max(reachedDepth, depth);
-            this.storage.saveFollows(pubkey, follows);
+          for (const pubkey of authors) {
+            const event = events.get(pubkey);
+            if (!event) failed.add(pubkey);
+            else {
+              fetched.add(pubkey);
+              reachedDepth = Math.max(reachedDepth, depth);
+              const follows = (event.tags || []).filter(tag => tag[0] === 'p' && typeof tag[1] === 'string' && tag[1]).map(tag => tag[1]);
+              this.storage.saveFollows(pubkey, follows, { createdAt: event.created_at, id: String(event.id ?? '') });
+            }
+            // A missing or older relay response must not erase the cached list.
             if (depth < maxDepth) {
-              for (const f of follows) {
-                if (!seen.has(f)) {
-                  seen.add(f);
-                  nextSet.add(f);
-                }
+              for (const follow of this.storage.getFollows(pubkey)) {
+                if (!seen.has(follow)) { seen.add(follow); nextSet.add(follow); }
               }
             }
+            opts.onProgress?.({ depth, fetched: fetched.size, queued: nextSet.size });
+            if (this.aborted) break;
           }
-
-          opts.onProgress?.({ depth, fetched: fetched.size, queued: nextSet.size });
         });
 
         if (this.aborted) {
@@ -166,52 +178,41 @@ export class GraphCrawler {
   }
 
   /**
-   * Fetch a single pubkey's newest kind:3 follow list across relays.
-   * Resolves to the follow pubkeys, or `null` if no event arrived.
+   * Fetch one author batch, retaining the deterministic newest kind:3 per author.
+   * No global limit: a prolific author must not displace another author's list.
    */
-  private fetchNewest(pubkey: string): Promise<string[] | null> {
-    return new Promise((resolve) => {
-      let newestAt = 0;
-      let follows: string[] | null = null;
+  private fetchNewest(authors: string[]): Promise<Map<string, CrawlEvent>> {
+    return new Promise((resolve, reject) => {
+      const newest = new Map<string, CrawlEvent>();
+      const allowed = new Set(authors);
       let settled = false;
       let sub: CrawlSubCloser | null = null;
-
       const finish = () => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        try {
-          sub?.close();
-        } catch {
-          /* ignore */
-        }
-        resolve(follows);
+        this.pending.delete(finish);
+        try { sub?.close(); } catch { /* transport already closed */ }
+        resolve(newest);
       };
-
       const timer = setTimeout(finish, this.requestTimeoutMs);
-
-      sub = this.pool.subscribe(
-        { kinds: [3], authors: [pubkey], limit: 1 },
-        {
-          onEvent: (ev: CrawlEvent) => {
-            if (ev && ev.created_at > newestAt) {
-              newestAt = ev.created_at;
-              follows = (ev.tags || [])
-                .filter((tag) => tag[0] === 'p' && tag[1])
-                .map((tag) => tag[1]);
-            }
+      this.pending.add(finish);
+      try {
+        sub = this.pool.subscribe({ kinds: [3], authors }, {
+          onEvent: ev => {
+            if (settled || !ev || ev.kind !== 3 || typeof ev.pubkey !== 'string' || !allowed.has(ev.pubkey) ||
+              !Number.isSafeInteger(ev.created_at) || ev.created_at < 0 || ev.created_at > Date.now() / 1000 + 60) return;
+            const prior = newest.get(ev.pubkey);
+            if (!prior || newerVersion({ createdAt: ev.created_at, id: String(ev.id ?? '') }, { createdAt: prior.created_at, id: String(prior.id ?? '') })) newest.set(ev.pubkey, ev);
           },
           onEose: finish,
-        },
-      );
-
-      // Guard: a synchronous mock that resolved before assigning `sub` above.
-      if (settled) {
-        try {
-          sub?.close();
-        } catch {
-          /* ignore */
-        }
+        });
+        if (settled) sub.close();
+      } catch (error) {
+        clearTimeout(timer);
+        this.pending.delete(finish);
+        settled = true;
+        reject(error);
       }
     });
   }
@@ -236,6 +237,10 @@ export class GraphCrawler {
     };
 
     const lanes = Math.min(this.maxConcurrent, Math.max(1, items.length));
-    await Promise.all(Array.from({ length: lanes }, () => runNext()));
+    const outcomes = await Promise.allSettled(Array.from({ length: lanes }, async () => {
+      try { await runNext(); } catch (error) { this.stop(); throw error; }
+    }));
+    const failure = outcomes.find((outcome): outcome is PromiseRejectedResult => outcome.status === "rejected");
+    if (failure) throw failure.reason;
   }
 }

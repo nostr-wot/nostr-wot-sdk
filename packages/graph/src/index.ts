@@ -7,7 +7,8 @@ export { calculateScore, DEFAULT_SCORING } from './scoring';
 
 // Layers (exported for advanced usage / custom wiring)
 export { LocalGraph } from './graph';
-export { GraphStorage, encodeFollows, decodeFollows } from './storage';
+export { GraphStorage, encodeFollows, decodeFollows, encodeCompactFollows, decodeCompactFollows } from './storage';
+export type { FollowVersion } from './storage';
 export { GraphCrawler, CrawlError } from './crawl';
 export type {
   CrawlPool,

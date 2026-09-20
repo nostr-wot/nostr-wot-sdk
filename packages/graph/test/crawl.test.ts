@@ -137,3 +137,64 @@ describe('GraphCrawler', () => {
     expect(result.stoppedEarly).toBe(true);
   });
 });
+
+it('batches 250 authors into four total requests and stops at the hop boundary', async () => {
+  const authors = Array.from({ length: 250 }, (_, i) => `author${i}`);
+  const data = Object.fromEntries(authors.map(a => [a, [makeEvent(1, [`leaf-${a}`])]]));
+  data.root = [makeEvent(1, authors)];
+  const pool = makeMockPool(data);
+  const storage = await freshStorage();
+  const crawler = new GraphCrawler({ pool, storage, relays, baseDelayMs: 0 });
+  const result = await crawler.crawl('root', { maxHops: 2 });
+  expect(result.fetched).toBe(251);
+  expect(pool.requests.map(r => r.length)).toEqual([1, 100, 100, 50]);
+  expect(pool.calls.some(a => a.startsWith('leaf-'))).toBe(false);
+  expect(storage.stats().edges).toBe(500);
+});
+
+it('uses persisted event versions and deterministic equal-timestamp ids', async () => {
+  const storage = await freshStorage();
+  const pool = makeMockPool({ root: [{ ...makeEvent(0, ['winner']), id: 'a' }, { ...makeEvent(0, ['loser']), id: 'z' }] });
+  await new GraphCrawler({ pool, storage, relays, baseDelayMs: 0 }).crawl('root', { maxHops: 1 });
+  expect(storage.getFollows('root')).toEqual(['winner']);
+  storage.close();
+  const reopened = new GraphStorage(storage.namespace);
+  await reopened.open();
+  await new GraphCrawler({ pool: makeMockPool({ root: [{ ...makeEvent(0, ['stale']), id: 'b' }] }), storage: reopened, relays, baseDelayMs: 0 }).crawl('root', { maxHops: 1 });
+  expect(reopened.getFollows('root')).toEqual(['winner']);
+});
+
+it('cancels a silent relay immediately and closes its subscription', async () => {
+  let closed = false;
+  const storage = await freshStorage();
+  const crawler = new GraphCrawler({ pool: { subscribe: () => ({ close: () => { closed = true; } }) }, storage, relays, baseDelayMs: 0, requestTimeoutMs: 60_000 });
+  const run = crawler.crawl('root');
+  crawler.stop();
+  expect((await run).stoppedEarly).toBe(true);
+  expect(closed).toBe(true);
+});
+
+it('a zero-hop crawl makes no requests and rejects invalid bounds', async () => {
+  const pool = makeMockPool({});
+  const crawler = new GraphCrawler({ pool, storage: await freshStorage(), relays, baseDelayMs: 0 });
+  expect((await crawler.crawl('root', { maxHops: 0 })).fetched).toBe(0);
+  expect(pool.requests).toHaveLength(0);
+  await expect(crawler.crawl('root', { maxHops: NaN })).rejects.toThrow(RangeError);
+});
+
+it('drains concurrent lanes before propagating a transport error', async () => {
+  let closed = 0;
+  const storage = await freshStorage();
+  const pool = {
+    subscribe(filter: { authors?: string[] }, handlers: { onEvent: (e: ReturnType<typeof makeEvent>) => void; onEose?: () => void }) {
+      const author = filter.authors![0];
+      if (author === 'bad') throw new Error('transport failed');
+      if (author === 'root') queueMicrotask(() => { handlers.onEvent({ ...makeEvent(1, ['slow', 'bad']), pubkey: 'root' }); handlers.onEose?.(); });
+      return { close() { closed++; } };
+    },
+  };
+  const crawler = new GraphCrawler({ pool, storage, relays, batchSize: 1, maxConcurrent: 2, baseDelayMs: 0 });
+  await expect(crawler.crawl('root')).rejects.toThrow('transport failed');
+  expect(closed).toBe(2);
+  expect(storage.stats().nodes).toBe(1);
+});
