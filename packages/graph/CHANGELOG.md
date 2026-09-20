@@ -10,6 +10,19 @@
   writes; stopped crawls remain stale. Upgraded namespaces require schema-2-aware
   SDKs; old SDKs cannot reopen them. Add regression tests and a synthetic benchmark.
 
+### Performance notes
+
+Compared with 0.2.0, the 251-author regression fixture uses 4 relay subscriptions
+instead of 251. A dense list of 1,000 consecutive follow IDs encodes to 1,000 bytes
+instead of 4,000. These are synthetic fixtures, excluding network latency and
+IndexedDB record overhead; they are not whole-database or production measurements.
+
+Traversal caching already existed in 0.2.0. The updated tests check correct reuse
+across hop limits and invalidation after graph changes, rather than establishing
+a new caching speedup. Run `npm run benchmark -w @nostr-wot/graph` from the repository
+root for current construction and query timings; those timings do not include a
+before-and-after baseline.
+
 ## 0.2.0
 
 ### Minor Changes
