@@ -55,16 +55,16 @@ wg.filterByWoT(pubkeys);  // trusted subset, sorted by score desc
 
 ### `crawl` options
 
-```ts
-crawl(rootPubkey, {
-  maxDepth?: number;            // inclusive fetched author depth, default 2
-  maxHops?: number;             // optional hop boundary; overrides maxDepth
-  onProgress?: (p) => void;     // { depth, fetched, queued }
-  signal?: AbortSignal;         // cancel
-}): Promise<CrawlResult>;       // { fetched, nodes, edges, depth, durationMs, stoppedEarly }
-```
+| Option | Description |
+|---|---|
+| `maxHops` | Maximum follow distance to discover. Overrides `maxDepth`. |
+| `maxDepth` | Maximum depth of authors to fetch, including that depth. Defaults to `2`. |
+| `onProgress` | Callback receiving `{ depth, fetched, queued }`. |
+| `signal` | An `AbortSignal` to cancel the crawl. |
 
-Crawls tolerate missing relay responses. Zero configured relays throw `CrawlError`; invalid options, transport exceptions and persistence failures propagate. In Node without an IndexedDB polyfill the store runs memory-only (crawl/query work, nothing persists).
+Returns a promise with `{ fetched, nodes, edges, depth, durationMs, stoppedEarly }`.
+Zero configured relays throw `CrawlError`; invalid options, transport errors and
+storage errors also reject the promise.
 
 ### Choosing a crawl depth
 
