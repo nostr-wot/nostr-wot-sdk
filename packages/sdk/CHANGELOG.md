@@ -1,5 +1,12 @@
 # nostr-wot-sdk
 
+## 1.0.2
+
+### Patch Changes
+
+- Updated dependencies [[`50db2e2`](https://github.com/nostr-wot/nostr-wot-sdk/commit/50db2e28f5a1d5069f720b7e4c1aff3cdd9f3cb5)]:
+  - @nostr-wot/graph@0.3.0
+
 ## 1.0.1
 
 ### Patch Changes
