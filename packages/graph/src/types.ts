@@ -64,8 +64,10 @@ export interface CrawlProgress {
  * Options for {@link GraphCrawler.crawl} / {@link WotGraph.crawl}.
  */
 export interface CrawlOptions {
-  /** Max BFS depth. Default 2. */
+  /** Maximum fetched author depth (inclusive). Default 2; root is depth 0. */
   maxDepth?: number;
+  /** Hop-bounded crawl: fetch authors strictly below this distance. Overrides maxDepth. */
+  maxHops?: number;
   /** Progress callback. */
   onProgress?: (p: CrawlProgress) => void;
   /** Abort signal to cancel the crawl. */

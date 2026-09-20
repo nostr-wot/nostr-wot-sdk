@@ -87,3 +87,42 @@ describe('LocalGraph BFS', () => {
 beforeEach(() => {
   // nothing shared; each buildGraph uses a fresh namespace
 });
+
+it('keys traversal reuse by depth and graph revision, without duplicate paths', async () => {
+  const { graph, storage } = await buildGraph({ root: ['a', 'a'], a: ['b'] });
+  expect(graph.getDistance('root', 'b', 1)).toBeNull();
+  expect(graph.getDistance('root', 'b', 2)).toEqual({ hops: 2, paths: 1 });
+  expect(graph.getDistance('root', 'b', 1)).toBeNull();
+  storage.saveFollows('root', ['b']);
+  expect(graph.getDistance('root', 'b', 1)).toEqual({ hops: 1, paths: 1 });
+  expect(storage.stats().edges).toBe(2);
+});
+
+it('does not wrap path counts at uint32 or distances at uint8 limits', async () => {
+  const map: Record<string, string[]> = { root: ['a0', 'b0'] };
+  for (let i = 0; i < 55; i++) {
+    map[`a${i}`] = [`a${i + 1}`, `b${i + 1}`];
+    map[`b${i}`] = [`a${i + 1}`, `b${i + 1}`];
+  }
+  const { graph } = await buildGraph(map);
+  expect(graph.getDistance('root', 'a32', 60)?.paths).toBe(2 ** 32);
+  expect(graph.getDistance('root', 'a55', 60)?.paths).toBe(Number.MAX_SAFE_INTEGER);
+  const chain = Object.fromEntries(Array.from({ length: 300 }, (_, i) => [`n${i}`, [`n${i + 1}`]]));
+  const long = await buildGraph(chain);
+  expect(long.graph.getDistance('n0', 'n300', 300)).toEqual({ hops: 300, paths: 1 });
+});
+
+it('reuses a single traversal for repeated queries until a real edge change', async () => {
+  const { graph, storage } = await buildGraph({ root: ['a'], a: ['b'] });
+  let reads = 0;
+  const read = storage.getFollowIdsSync.bind(storage);
+  storage.getFollowIdsSync = id => { reads++; return read(id); };
+  for (let i = 0; i < 1000; i++) graph.getDistance('root', 'b');
+  expect(reads).toBe(3);
+  graph.getDistance('root', 'b', 2);
+  graph.getDistance('root', 'b', 6);
+  expect(reads).toBe(3);
+  storage.saveFollows('root', ['a']);
+  graph.getDistance('root', 'b');
+  expect(reads).toBe(3);
+});

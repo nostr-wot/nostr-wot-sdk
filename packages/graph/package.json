@@ -50,7 +50,8 @@
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:run": "vitest run"
+    "test:run": "vitest run",
+    "benchmark": "npm run build && node bench/efficiency.mjs"
   },
   "dependencies": {
     "@nostr-wot/relay": "*"

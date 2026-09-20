@@ -7,9 +7,9 @@
  *
  * - **Interning**: pubkeys (64-hex) are mapped to small integer ids, so the
  *   graph is stored/traversed as numbers instead of strings.
- * - **Delta encoding**: each node's sorted follow-id list is stored as a
- *   `Uint32Array` of deltas, which compresses well and keeps memory bounded for
- *   the 100k+ nodes a 2-hop crawl can yield.
+ * - **Compact persistence**: sorted follow ids are delta-varint encoded on disk;
+ *   hydrated adjacency remains Uint32Array for numeric traversal. Legacy fixed-
+ *   width delta rows remain readable.
  *
  * When `indexedDB` is unavailable (Node without a polyfill) the store operates
  * in memory-only mode: crawl/query still work, nothing is persisted.
@@ -18,10 +18,15 @@
 import type { GraphMeta, StorageStats } from './types';
 
 const DB_PREFIX = 'nostr-wot-graph';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_PUBKEYS = 'pubkeys';
 const STORE_FOLLOWS = 'follows';
 const STORE_META = 'meta';
+const EMPTY_IDS = new Uint32Array(0);
+export interface FollowVersion { createdAt: number; id: string }
+export function newerVersion(candidate: FollowVersion, prior: FollowVersion): boolean {
+  return candidate.createdAt > prior.createdAt || candidate.createdAt === prior.createdAt && candidate.id < prior.id;
+}
 
 // Encode follow ids for storage (sort + delta encode into a Uint32Array).
 export function encodeFollows(followIds: ArrayLike<number>): ArrayBuffer {
@@ -53,6 +58,41 @@ export function decodeFollows(buffer: ArrayBuffer | null | undefined): Uint32Arr
   return result;
 }
 
+// Versioned disk rows use unsigned delta varints; the exported fixed-width
+// helpers remain compatible with existing callers and legacy database rows.
+export function encodeCompactFollows(ids: ArrayLike<number>): ArrayBuffer {
+  const sorted = Array.from(new Set(Array.from(ids))).sort((a, b) => a - b);
+  const bytes: number[] = [];
+  let prior = 0;
+  for (const id of sorted) {
+    if (!Number.isInteger(id) || id < 0 || id > 0xffffffff) {
+      throw new RangeError("Follow IDs must be unsigned 32-bit integers");
+    }
+    let delta = id - prior;
+    prior = id;
+    while (delta >= 128) { bytes.push((delta % 128) | 128); delta = Math.floor(delta / 128); }
+    bytes.push(delta);
+  }
+  return Uint8Array.from(bytes).buffer;
+}
+
+export function decodeCompactFollows(buffer: ArrayBuffer): Uint32Array {
+  const values: number[] = [];
+  let prior = 0, delta = 0, factor = 1;
+  for (const byte of new Uint8Array(buffer)) {
+    delta += (byte & 127) * factor;
+    if (delta > 0xffffffff || factor > 0x10000000) throw new Error('Invalid follow varint');
+    if (byte & 128) factor *= 128;
+    else {
+      prior += delta;
+      if (prior > 0xffffffff) throw new Error('Follow id overflow');
+      values.push(prior); delta = 0; factor = 1;
+    }
+  }
+  if (factor !== 1) throw new Error('Truncated follow varint');
+  return Uint32Array.from(values);
+}
+
 function hasIndexedDB(): boolean {
   return typeof indexedDB !== 'undefined' && indexedDB !== null;
 }
@@ -62,6 +102,11 @@ export class GraphStorage {
   private db: IDBDatabase | null = null;
   private memoryOnly = false;
   private opened = false;
+  private opening: Promise<void> | null = null;
+  private revision = 0;
+  private edges = 0;
+  private versions = new Map<number, FollowVersion>();
+  private flushing: Promise<void> = Promise.resolve();
 
   // In-memory caches (source of truth for reads/BFS).
   private pubkeyToId = new Map<string, number>();
@@ -85,7 +130,13 @@ export class GraphStorage {
 
   /** Open (or create) the namespace DB and hydrate in-memory caches. */
   async open(): Promise<void> {
+    if (this.opening) return this.opening;
     if (this.opened) return;
+    this.opening = this.openDatabase();
+    try { await this.opening; } finally { this.opening = null; }
+  }
+
+  private async openDatabase(): Promise<void> {
 
     if (!hasIndexedDB()) {
       this.memoryOnly = true;
@@ -115,8 +166,8 @@ export class GraphStorage {
       };
     });
 
-    this.opened = true;
     await this.loadAll();
+    this.opened = true;
   }
 
   /** Hydrate the in-memory interning + follow maps + meta from the DB. */
@@ -126,31 +177,40 @@ export class GraphStorage {
     this.graphCache.clear();
     this.metaCache.clear();
     this.nextId = 1;
+    this.versions.clear();
+    this.edges = 0;
+    this.revision++;
 
     if (this.memoryOnly || !this.db) return;
     const db = this.db;
 
-    const pubkeys = await this.getAll<{ id: number; pubkey: string }>(db, STORE_PUBKEYS);
+    const tx = db.transaction([STORE_PUBKEYS, STORE_FOLLOWS, STORE_META], 'readonly');
+    const [pubkeys, follows, meta] = await Promise.all([
+      this.getAll<{ id: number; pubkey: string }>(tx, STORE_PUBKEYS),
+      this.getAll<{ id: number; follows: ArrayBuffer; encoding?: string; version?: FollowVersion }>(tx, STORE_FOLLOWS),
+      this.getAll<{ key: string; value: unknown }>(tx, STORE_META),
+    ]);
     for (const record of pubkeys) {
       this.pubkeyToId.set(record.pubkey, record.id);
       this.idToPubkey.set(record.id, record.pubkey);
       if (record.id >= this.nextId) this.nextId = record.id + 1;
     }
 
-    const follows = await this.getAll<{ id: number; follows: ArrayBuffer }>(db, STORE_FOLLOWS);
     for (const record of follows) {
-      this.graphCache.set(record.id, decodeFollows(record.follows));
+      if (record.encoding && record.encoding !== 'delta-varint-v1') throw new Error('Unknown follow encoding');
+      const row = record.encoding === 'delta-varint-v1' ? decodeCompactFollows(record.follows) : Uint32Array.from(new Set(decodeFollows(record.follows)));
+      this.graphCache.set(record.id, row);
+      this.edges += row.length;
+      if (record.version) this.versions.set(record.id, record.version);
     }
 
-    const meta = await this.getAll<{ key: string; value: unknown }>(db, STORE_META);
     for (const record of meta) {
       this.metaCache.set(record.key, record.value);
     }
   }
 
-  private getAll<T>(db: IDBDatabase, store: string): Promise<T[]> {
+  private getAll<T>(tx: IDBTransaction, store: string): Promise<T[]> {
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(store, 'readonly');
       const request = tx.objectStore(store).getAll();
       request.onsuccess = () => resolve(request.result as T[]);
       request.onerror = () => reject(request.error);
@@ -198,22 +258,40 @@ export class GraphStorage {
   // ── Follows ──
 
   /** Store `pubkey`'s follow list. Interns everything and updates the cache. */
-  saveFollows(pubkey: string, follows: string[]): void {
+  saveFollows(pubkey: string, follows: string[], version?: FollowVersion): boolean {
     const id = this.getOrCreateId(pubkey);
-    const followIds = this.getOrCreateIds(follows);
-    this.graphCache.set(id, new Uint32Array(followIds));
-    this.dirtyFollows.set(id, followIds);
+    const priorVersion = this.versions.get(id);
+    if (version && priorVersion && !newerVersion(version, priorVersion)) return false;
+    const followIds = this.getOrCreateIds([...new Set(follows)]).sort((a, b) => a - b);
+    const prior = this.graphCache.get(id);
+    const changed = !prior || prior.length !== followIds.length || followIds.some((v, i) => prior[i] !== v);
+    if (version) this.versions.set(id, { ...version });
+    else this.versions.delete(id);
+    if (changed) {
+      this.edges += followIds.length - (prior?.length ?? 0);
+      this.graphCache.set(id, new Uint32Array(followIds));
+      this.revision++;
+    }
+    if (changed || version || priorVersion) this.dirtyFollows.set(id, followIds);
+    return true;
+  }
+
+  getRevision(): number { return this.revision; }
+  getFollowVersion(pubkey: string): FollowVersion | undefined {
+    const id = this.getId(pubkey);
+    const version = id === null ? undefined : this.versions.get(id);
+    return version ? { ...version } : undefined;
   }
 
   /** Follow ids for a node id — sync, from the in-memory cache. */
   getFollowIdsSync(id: number): Uint32Array {
-    return this.graphCache.get(id) ?? new Uint32Array(0);
+    return this.graphCache.get(id) ?? EMPTY_IDS;
   }
 
   /** Follow ids for a pubkey (interned). Empty if unknown. */
   getFollowIds(pubkey: string): Uint32Array {
     const id = this.getId(pubkey);
-    if (id === null) return new Uint32Array(0);
+    if (id === null) return EMPTY_IDS;
     return this.getFollowIdsSync(id);
   }
 
@@ -231,15 +309,23 @@ export class GraphStorage {
   // ── Meta ──
 
   async setMeta(key: string, value: unknown): Promise<void> {
-    this.metaCache.set(key, value);
-    if (this.memoryOnly || !this.db) return;
+    await this.setMetaBatch({ [key]: value });
+  }
+
+  async setMetaBatch(values: Record<string, unknown>): Promise<void> {
+    if (this.memoryOnly || !this.db) {
+      for (const [key, value] of Object.entries(values)) this.metaCache.set(key, value);
+      return;
+    }
     const db = this.db;
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(STORE_META, 'readwrite');
-      tx.objectStore(STORE_META).put({ key, value });
+      for (const [key, value] of Object.entries(values)) tx.objectStore(STORE_META).put({ key, value });
       tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
+      tx.onerror = () => reject(tx.error ?? new Error("Graph transaction failed"));
+      tx.onabort = () => reject(tx.error ?? new Error("Metadata write aborted"));
     });
+    for (const [key, value] of Object.entries(values)) this.metaCache.set(key, value);
   }
 
   getMeta<T = unknown>(key: string): T | undefined {
@@ -259,7 +345,13 @@ export class GraphStorage {
   // ── Persistence ──
 
   /** Flush buffered pubkey + follow writes to IndexedDB. No-op in memory mode. */
-  async flush(): Promise<void> {
+  flush(): Promise<void> {
+    const run = this.flushing.then(() => this.flushPending());
+    this.flushing = run.catch(() => {});
+    return run;
+  }
+
+  private async flushPending(): Promise<void> {
     if (this.memoryOnly || !this.db) {
       this.dirtyPubkeys.length = 0;
       this.dirtyFollows.clear();
@@ -267,9 +359,9 @@ export class GraphStorage {
     }
     const db = this.db;
 
-    const pubkeys = this.dirtyPubkeys.splice(0, this.dirtyPubkeys.length);
+    const pubkeys = this.dirtyPubkeys.slice();
     const follows = Array.from(this.dirtyFollows.entries());
-    this.dirtyFollows.clear();
+    const versions = new Map(follows.map(([id]) => [id, this.versions.get(id)]));
 
     if (pubkeys.length === 0 && follows.length === 0) return;
 
@@ -286,38 +378,34 @@ export class GraphStorage {
       if (follows.length) {
         const store = tx.objectStore(STORE_FOLLOWS);
         for (const [id, followIds] of follows) {
-          store.put({ id, follows: encodeFollows(followIds), updated_at: Date.now() });
+          store.put({ id, follows: encodeCompactFollows(followIds), encoding: 'delta-varint-v1', updated_at: Date.now(), version: versions.get(id) });
         }
       }
 
       tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
+      tx.onerror = () => reject(tx.error ?? new Error("Graph transaction failed"));
+      tx.onabort = () => reject(tx.error ?? new Error("Graph flush aborted"));
     });
+    this.dirtyPubkeys.splice(0, pubkeys.length);
+    for (const [id, row] of follows) {
+      if (this.dirtyFollows.get(id) === row) this.dirtyFollows.delete(id);
+    }
   }
 
   // ── Stats / clear ──
 
   stats(): StorageStats {
-    let edges = 0;
-    for (const follows of this.graphCache.values()) edges += follows.length;
     return {
       nodes: this.graphCache.size,
-      edges,
+      edges: this.edges,
       uniquePubkeys: this.pubkeyToId.size,
     };
   }
 
   /** Wipe this namespace: memory caches + persisted stores. */
   async clear(): Promise<void> {
-    this.pubkeyToId.clear();
-    this.idToPubkey.clear();
-    this.graphCache.clear();
-    this.metaCache.clear();
-    this.dirtyFollows.clear();
-    this.dirtyPubkeys.length = 0;
-    this.nextId = 1;
-
-    if (this.memoryOnly || !this.db) return;
+    await this.flushing;
+    if (!this.memoryOnly && this.db) {
     const db = this.db;
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction([STORE_FOLLOWS, STORE_PUBKEYS, STORE_META], 'readwrite');
@@ -325,8 +413,21 @@ export class GraphStorage {
       tx.objectStore(STORE_PUBKEYS).clear();
       tx.objectStore(STORE_META).clear();
       tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
+      tx.onerror = () => reject(tx.error ?? new Error("Graph transaction failed"));
+      tx.onabort = () => reject(tx.error ?? new Error("Graph clear aborted"));
     });
+    }
+    this.pubkeyToId.clear();
+    this.idToPubkey.clear();
+    this.graphCache.clear();
+    this.metaCache.clear();
+    this.dirtyFollows.clear();
+    this.dirtyPubkeys.length = 0;
+    this.nextId = 1;
+    this.versions.clear();
+    this.edges = 0;
+    this.revision++;
+
   }
 
   /** Close the underlying DB connection. */

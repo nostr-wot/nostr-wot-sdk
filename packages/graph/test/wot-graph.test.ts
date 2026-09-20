@@ -101,3 +101,25 @@ describe('WotGraph facade', () => {
     await p1;
   });
 });
+
+
+it('supports explicit query bounds beyond six hops and batch lookup', async () => {
+  const data = Object.fromEntries(Array.from({ length: 8 }, (_, i) => [`n${i}`, [makeEvent(1, [`n${i + 1}`])]]));
+  const wg = makeGraph(makeMockPool(data));
+  await wg.crawl('n0', { maxHops: 7 });
+  expect(wg.getDistance('n7')).toBeNull();
+  expect(wg.isInWoT('n7', 7)).toBe(true);
+  expect(wg.filterByWoT(['n7', 'n8'], { maxHops: 7 })).toEqual(['n7']);
+  expect(wg.getDistances(['n1', 'n7'], 7).get('n7')).toEqual({ hops: 7, paths: 1 });
+});
+
+it('marks stopped crawls stale and clear waits for pending work', async () => {
+  const wg = makeGraph();
+  await wg.crawl('root', { onProgress: () => wg.stop() });
+  expect(wg.isStale(100000)).toBe(true);
+  const run = wg.crawl('root');
+  await wg.clear();
+  await run;
+  expect(wg.stats().nodes).toBe(0);
+  expect(wg.getRoot()).toBeNull();
+});

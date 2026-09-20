@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { GraphStorage, encodeFollows, decodeFollows } from '../src/storage';
+import { GraphStorage, encodeFollows, decodeFollows, encodeCompactFollows, decodeCompactFollows } from '../src/storage';
 
 let ns = 0;
 const nextNs = () => `storage-test-${ns++}`;
@@ -115,4 +115,121 @@ describe('stats and clear', () => {
     await s2.open();
     expect(s2.stats().nodes).toBe(0);
   });
+});
+
+it('single-flights hydration and preserves version guards after reopening', async () => {
+  const s = new GraphStorage(nextNs());
+  await Promise.all([s.open(), s.open(), s.open()]);
+  s.saveFollows('root', ['a', 'a'], { createdAt: 10, id: 'a' });
+  await s.flush();
+  s.close();
+  const reopened = new GraphStorage(s.namespace);
+  await reopened.open();
+  expect(reopened.saveFollows('root', ['bad'], { createdAt: 9, id: '0' })).toBe(false);
+  expect(reopened.stats().edges).toBe(1);
+  expect(reopened.getFollows('root')).toEqual(['a']);
+});
+
+it('retains pending rows after an aborted transaction and retries them', async () => {
+  const s = new GraphStorage(nextNs());
+  await s.open();
+  s.saveFollows('root', ['a']);
+  const db = (s as unknown as { db: IDBDatabase }).db;
+  const transaction = db.transaction.bind(db);
+  let fail = true;
+  db.transaction = ((...args: Parameters<IDBDatabase['transaction']>) => {
+    const tx = transaction(...args);
+    if (fail) { fail = false; queueMicrotask(() => tx.abort()); }
+    return tx;
+  }) as IDBDatabase['transaction'];
+  await expect(s.flush()).rejects.toBeTruthy();
+  await s.flush();
+  s.close();
+  const reopened = new GraphStorage(s.namespace);
+  await reopened.open();
+  expect(reopened.getFollows('root')).toEqual(['a']);
+});
+
+it('serializes concurrent flushes without losing intervening writes', async () => {
+  const s = new GraphStorage(nextNs());
+  await s.open();
+  s.saveFollows('root', ['a']);
+  const first = s.flush();
+  await Promise.resolve();
+  s.saveFollows('root', ['b']);
+  await Promise.all([first, s.flush()]);
+  s.close();
+  const reopened = new GraphStorage(s.namespace);
+  await reopened.open();
+  expect(reopened.getFollows('root')).toEqual(['b']);
+});
+
+
+it('stores dense follows in one byte per edge and decodes large uint32 deltas', () => {
+  const dense = Array.from({ length: 1000 }, (_, i) => i + 1);
+  expect(encodeCompactFollows(dense).byteLength).toBe(1000);
+  expect(encodeFollows(dense).byteLength).toBe(4000);
+  const ids = [1, 127, 128, 16384, 0xffffffff];
+  expect(Array.from(decodeCompactFollows(encodeCompactFollows(ids)))).toEqual(ids);
+  expect(() => decodeCompactFollows(Uint8Array.from([128]).buffer)).toThrow('Truncated');
+});
+
+it('reads legacy fixed-width rows and deduplicates legacy follows', async () => {
+  const s = new GraphStorage(nextNs());
+  await s.open();
+  s.saveFollows('root', ['a']);
+  await s.flush();
+  const root = s.getId('root')!, a = s.getId('a')!;
+  const db = (s as unknown as { db: IDBDatabase }).db;
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction('follows', 'readwrite');
+    tx.objectStore('follows').put({ id: root, follows: encodeFollows([a, a]) });
+    tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error);
+  });
+  s.close();
+  const reopened = new GraphStorage(s.namespace);
+  await reopened.open();
+  expect(reopened.getFollows('root')).toEqual(['a']);
+  expect(reopened.stats().edges).toBe(1);
+});
+
+it('upgrades a real version-1 database without rewriting its legacy rows', async () => {
+  const namespace = nextNs();
+  await new Promise<void>((resolve, reject) => {
+    const request = indexedDB.open(`nostr-wot-graph:${namespace}`, 1);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      db.createObjectStore('pubkeys', { keyPath: 'id' });
+      db.createObjectStore('follows', { keyPath: 'id' });
+      db.createObjectStore('meta', { keyPath: 'key' });
+    };
+    request.onsuccess = () => {
+      const db = request.result;
+      const tx = db.transaction(['pubkeys', 'follows'], 'readwrite');
+      tx.objectStore('pubkeys').put({ id: 1, pubkey: 'root' });
+      tx.objectStore('pubkeys').put({ id: 2, pubkey: 'a' });
+      tx.objectStore('follows').put({ id: 1, follows: encodeFollows([2]) });
+      tx.oncomplete = () => { db.close(); resolve(); };
+      tx.onerror = () => reject(tx.error);
+    };
+    request.onerror = () => reject(request.error);
+  });
+  const s = new GraphStorage(namespace);
+  await s.open();
+  expect(s.getFollows('root')).toEqual(['a']);
+  expect((s as unknown as { db: IDBDatabase }).db.version).toBe(2);
+  s.saveFollows('a', ['root']);
+  await s.flush();
+  s.close();
+  const reopened = new GraphStorage(namespace);
+  await reopened.open();
+  expect(reopened.getFollows('root')).toEqual(['a']);
+  expect(reopened.getFollows('a')).toEqual(['root']);
+});
+
+
+it('rejects invalid compact IDs rather than overflowing or looping forever', () => {
+  for (const id of [Infinity, NaN, -1, 1.5, 0x100000000]) {
+    expect(() => encodeCompactFollows([id])).toThrow(RangeError);
+  }
 });
