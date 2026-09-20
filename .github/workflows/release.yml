@@ -21,14 +21,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0 # changesets needs full history for the changelog
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 24
           registry-url: https://registry.npmjs.org/
 
       - name: Install
@@ -64,6 +64,9 @@ jobs:
 
       - name: Build all packages
         run: npm run build
+
+      - name: Verify release
+        run: npm run typecheck && npm run test:run
 
       # `changeset publish` skips anything already on npm at its current
       # version, so re-running this is safe.
