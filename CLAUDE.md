@@ -1,14 +1,5 @@
-# CLAUDE.md
+# nostr-wot-sdk
 
-## NPM Publishing
+Instructions for every agent live in `AGENTS.md`. Edit that file, not this one.
 
-An `NPM_TOKEN` credential is stored in `.env` (gitignored) and mirrored as the `NPM_TOKEN` GitHub Actions secret on `nostr-wot/nostr-wot-sdk` (used by `.github/workflows/release.yml`). Last rotated **2026-05-10**.
-
-To publish a package (use the npmrc approach — env var alone does not work):
-
-```bash
-cd /Users/dandelionlabs/development/personal/nostr-wot-sdk
-source .env && npm config set //registry.npmjs.org/:_authToken $NPM_TOKEN
-npm run build -w @nostr-wot/<name>   # required: packages no longer self-build on publish
-cd packages/<name> && npm publish --access public
-```
+@AGENTS.md
