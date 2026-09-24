@@ -14,8 +14,11 @@ import {
   toMemoryAccount,
   toStorageAccount,
   toStoragePayload,
+  zeroMemoryAccount,
   bytesToBase64,
   base64ToBytes,
+  bytesToHexBytes,
+  hexBytesToBytes,
 } from '../src/serialization.js';
 
 const seeded: Account = {
@@ -42,6 +45,29 @@ const withPq: Account = {
     dsa: { public: bytesToBase64(new Uint8Array(8).fill(3)), secret: bytesToBase64(new Uint8Array(8).fill(4)) },
     importedAt: 1727136000000,
   },
+};
+
+/**
+ * A remote-signer account. `secret` is the bunker's connect token and `localPrivkey` is the
+ * client keypair the extension stores after the first connect, spelled exactly as it writes
+ * them: the token verbatim, the key as lowercase hex.
+ */
+const remote: Account = {
+  id: 'acct_bunker',
+  name: 'Bunker',
+  type: 'nip46',
+  pubkey: '12'.repeat(32),
+  privkey: null,
+  mnemonic: null,
+  nip46Config: {
+    bunkerUrl: `bunker://${'12'.repeat(32)}?relay=wss%3A%2F%2Frelay.example`,
+    relay: 'wss://relay.example',
+    secret: 'topsecret-token',
+    localPrivkey: '5a'.repeat(32),
+    localPubkey: '6b'.repeat(32),
+  },
+  readOnly: false,
+  createdAt: 3,
 };
 
 const watchOnly: Account = {
@@ -137,6 +163,74 @@ describe('memory account conversion', () => {
     const out = toStorageAccount(toMemoryAccount(explicitNull));
     expect(Object.hasOwn(out, 'pqKeys')).toBe(true);
     expect(out.pqKeys).toBeNull();
+  });
+});
+
+describe('NIP-46 credentials', () => {
+  test('the connect secret and the local private key become zeroable bytes, and no string copy stays', () => {
+    const mem = toMemoryAccount(remote);
+    expect(Object.hasOwn(mem, 'nip46Config')).toBe(false);
+    expect(mem.nip46?.secretBytes).toBeInstanceOf(Uint8Array);
+    expect(mem.nip46?.localPrivkeyBytes).toBeInstanceOf(Uint8Array);
+    // The public halves stay strings, the secrets do not appear as strings anywhere on it.
+    expect(mem.nip46?.relay).toBe('wss://relay.example');
+    expect(mem.nip46?.localPubkey).toBe('6b'.repeat(32));
+    const asText = JSON.stringify(mem, (_key, value: unknown) => (value instanceof Uint8Array ? '<bytes>' : value));
+    expect(asText).not.toContain('topsecret-token');
+    expect(asText).not.toContain('5a'.repeat(32));
+  });
+
+  test('a NIP-46 account round trips losslessly, and the config keeps the extension\'s key order', () => {
+    const back = toStorageAccount(toMemoryAccount(remote));
+    expect(back).toEqual(remote);
+    // Field order inside the config is what the extension writes (`{ ...config, localPrivkey,
+    // localPubkey }`), so a record saved here is byte for byte what it would have saved.
+    expect(JSON.stringify(back.nip46Config)).toBe(JSON.stringify(remote.nip46Config));
+  });
+
+  test('a config without the local keypair round trips without gaining the fields', () => {
+    const fresh: Account = {
+      ...remote,
+      nip46Config: { bunkerUrl: remote.nip46Config!.bunkerUrl, relay: null, secret: null },
+    };
+    const back = toStorageAccount(toMemoryAccount(fresh));
+    expect(back).toEqual(fresh);
+    expect(JSON.stringify(back.nip46Config)).toBe(JSON.stringify(fresh.nip46Config));
+    expect(Object.hasOwn(back.nip46Config!, 'localPrivkey')).toBe(false);
+    expect(Object.hasOwn(back.nip46Config!, 'localPubkey')).toBe(false);
+  });
+
+  test('a null nip46Config stays an explicit null', () => {
+    const back = toStorageAccount(toMemoryAccount(seeded));
+    expect(Object.hasOwn(back, 'nip46Config')).toBe(true);
+    expect(back.nip46Config).toBeNull();
+  });
+
+  test('zeroing the memory account destroys both NIP-46 secrets', () => {
+    const mem = toMemoryAccount(remote);
+    zeroMemoryAccount(mem);
+    expect(Array.from(mem.nip46!.secretBytes!)).toEqual(new Array('topsecret-token'.length).fill(0));
+    expect(Array.from(mem.nip46!.localPrivkeyBytes!)).toEqual(new Array(64).fill(0));
+    const back = toStorageAccount(mem);
+    expect(back.nip46Config!.secret).not.toContain('topsecret');
+    expect(back.nip46Config!.localPrivkey).not.toContain('5a5a');
+  });
+});
+
+describe('hex as bytes', () => {
+  // A hex string is what the record stores; a hex *byte array* is what memory holds, so the
+  // conversion in either direction never has to pass through a string.
+  test('encodes to the ASCII of lowercase hex and decodes back', () => {
+    const raw = Uint8Array.from([0x00, 0x5a, 0xff, 0x10]);
+    const hex = bytesToHexBytes(raw);
+    expect(new TextDecoder().decode(hex)).toBe('005aff10');
+    expect(hexBytesToBytes(hex)).toEqual(raw);
+    expect(hexBytesToBytes(new TextEncoder().encode('005AFF10'))).toEqual(raw);
+  });
+
+  test('refuses an odd length and a non-hex byte', () => {
+    expect(() => hexBytesToBytes(new TextEncoder().encode('abc'))).toThrow(/hex/i);
+    expect(() => hexBytesToBytes(new TextEncoder().encode('zz'))).toThrow(/hex/i);
   });
 });
 

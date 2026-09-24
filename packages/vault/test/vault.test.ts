@@ -17,6 +17,7 @@ import { randomBytes } from '@noble/ciphers/utils.js';
 import type { Account } from '@nostr-wot/accounts';
 import { MemoryStore, type KeyValueStore } from '@nostr-wot/storage';
 import { Vault } from '../src/vault.js';
+import * as serialization from '../src/serialization.js';
 import { openRecord } from '../src/record.js';
 import { encrypt, noblePbkdf2, type Pbkdf2Port } from '../src/crypto.js';
 import { bytesToBase64, bytesToHex, toMemoryPayload, zeroMemoryPayload } from '../src/serialization.js';
@@ -29,7 +30,7 @@ import {
   VAULT_VERSION,
 } from '../src/constants.js';
 import type { UnlockGuardState } from '../src/guard.js';
-import type { VaultPayload, VaultRecord } from '../src/types.js';
+import type { MemoryVaultPayload, VaultPayload, VaultRecord } from '../src/types.js';
 
 const account: Account = {
   id: 'acct_1',
@@ -174,6 +175,53 @@ describe('the vault lifecycle', () => {
 });
 
 describe('key material', () => {
+  /**
+   * Nothing in `src/` exposes the live payload, by ruling. The test intercepts it where it is
+   * born instead: `toMemoryPayload` is what `create`/`unlock` install, so a spy on that export
+   * hands the test the very object the vault holds. Every string still on it after `lock()`
+   * is a string the collector, not the vault, decides the fate of.
+   */
+  test('nothing the vault holds after lock() still spells a NIP-46 secret', async () => {
+    const remote: Account = {
+      ...watcher,
+      id: 'acct_bunker',
+      type: 'nip46',
+      nip46Config: {
+        bunkerUrl: `bunker://${'12'.repeat(32)}?relay=wss%3A%2F%2Frelay.example`,
+        relay: 'wss://relay.example',
+        secret: 'topsecret-token',
+        localPrivkey: '5a'.repeat(32),
+        localPubkey: '6b'.repeat(32),
+      },
+    };
+    const installed: MemoryVaultPayload[] = [];
+    const real = serialization.toMemoryPayload;
+    const spy = vi.spyOn(serialization, 'toMemoryPayload').mockImplementation((payload) => {
+      const mem = real(payload);
+      installed.push(mem);
+      return mem;
+    });
+    try {
+      const vault = new Vault({ store: new MemoryStore(), kdf: fastKdf });
+      await vault.create('hunter22', [account, remote]);
+      expect(installed).toHaveLength(1);
+      vault.lock();
+
+      const strings: string[] = [];
+      JSON.stringify(installed[0], (_key, value: unknown) => {
+        if (typeof value === 'string') strings.push(value);
+        return value instanceof Uint8Array ? Array.from(value) : value;
+      });
+      expect(strings.some((text) => text.includes('topsecret-token'))).toBe(false);
+      expect(strings.some((text) => text.includes('5a'.repeat(32)))).toBe(false);
+      const bunker = installed[0]!.accounts.find((candidate) => candidate.id === 'acct_bunker')!;
+      expect(Array.from(bunker.nip46!.secretBytes!)).toEqual(new Array('topsecret-token'.length).fill(0));
+      expect(Array.from(bunker.nip46!.localPrivkeyBytes!)).toEqual(new Array(64).fill(0));
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   test('locking zeroes the key bytes rather than dropping the reference', async () => {
     const vault = new Vault({ store: new MemoryStore(), kdf: fastKdf });
     await vault.create('hunter22', [account]);

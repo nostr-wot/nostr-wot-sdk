@@ -12,8 +12,8 @@
  */
 import { base64 } from '@scure/base';
 import { bytesToHex as nobleBytesToHex, hexToBytes as nobleHexToBytes } from '@noble/hashes/utils.js';
-import type { Account } from '@nostr-wot/accounts';
-import type { MemoryAccount, MemoryVaultPayload, VaultPayload } from './types.js';
+import type { Account, Nip46Config } from '@nostr-wot/accounts';
+import type { MemoryAccount, MemoryNip46Config, MemoryVaultPayload, VaultPayload } from './types.js';
 
 /**
  * Standard base64, with padding — the alphabet `btoa` emits and `atob` accepts.
@@ -41,6 +41,67 @@ export function hexToBytes(hex: string): Uint8Array {
   return nobleHexToBytes(hex);
 }
 
+const HEX_DIGITS = new TextEncoder().encode('0123456789abcdef');
+
+/**
+ * Lowercase hex as ASCII bytes rather than as a string, so the result can be zeroed.
+ *
+ * A NIP-46 local private key is stored as a hex string and held in memory as the bytes of that
+ * string. Converting between the raw key and that form through {@link bytesToHex} would put
+ * the key in a string on the way, which is the one thing the memory shape exists to avoid.
+ */
+export function bytesToHexBytes(bytes: Uint8Array): Uint8Array {
+  const out = new Uint8Array(bytes.length * 2);
+  for (let i = 0; i < bytes.length; i++) {
+    out[i * 2] = HEX_DIGITS[bytes[i]! >> 4]!;
+    out[i * 2 + 1] = HEX_DIGITS[bytes[i]! & 0x0f]!;
+  }
+  return out;
+}
+
+function hexNibble(code: number): number {
+  if (code >= 0x30 && code <= 0x39) return code - 0x30;
+  if (code >= 0x61 && code <= 0x66) return code - 0x61 + 10;
+  if (code >= 0x41 && code <= 0x46) return code - 0x41 + 10;
+  throw new Error('Not a hex digit');
+}
+
+/** Inverse of {@link bytesToHexBytes}; either case is accepted. Throws on anything else. */
+export function hexBytesToBytes(text: Uint8Array): Uint8Array {
+  if (text.length % 2 !== 0) throw new Error('Hex text has an odd length');
+  const out = new Uint8Array(text.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = (hexNibble(text[i * 2]!) << 4) | hexNibble(text[i * 2 + 1]!);
+  }
+  return out;
+}
+
+/** Stored NIP-46 config -> in-memory, with the two secrets as bytes. Null stays null. */
+function toMemoryNip46(config: Nip46Config | null): MemoryNip46Config | null {
+  if (config === null) return null;
+  const { secret, localPrivkey, ...rest } = config;
+  return {
+    ...rest,
+    ...(secret !== undefined ? { secretBytes: secret === null ? null : new TextEncoder().encode(secret) } : {}),
+    ...(localPrivkey !== undefined ? { localPrivkeyBytes: new TextEncoder().encode(localPrivkey) } : {}),
+  };
+}
+
+/**
+ * In-memory NIP-46 config -> stored. Inverse of {@link toMemoryNip46}, losslessly, and in the
+ * field order the extension writes (`{ ...config, localPrivkey, localPubkey }`).
+ */
+function toStorageNip46(config: MemoryNip46Config | null): Nip46Config | null {
+  if (config === null) return null;
+  const { secretBytes, localPrivkeyBytes, localPubkey, ...rest } = config;
+  return {
+    ...rest,
+    ...(secretBytes !== undefined ? { secret: secretBytes === null ? null : new TextDecoder().decode(secretBytes) } : {}),
+    ...(localPrivkeyBytes !== undefined ? { localPrivkey: new TextDecoder().decode(localPrivkeyBytes) } : {}),
+    ...(localPubkey !== undefined ? { localPubkey } : {}),
+  } as Nip46Config;
+}
+
 /**
  * Stored account -> in-memory account.
  *
@@ -50,11 +111,14 @@ export function hexToBytes(hex: string): Uint8Array {
  * unknown fields are carried, never filtered.
  */
 export function toMemoryAccount(acct: Account): MemoryAccount {
-  const { privkey, mnemonic, pqKeys, ...rest } = acct;
+  const { privkey, mnemonic, pqKeys, nip46Config, ...rest } = acct;
   return {
     ...rest,
     privkeyBytes: privkey ? hexToBytes(privkey) : null,
     mnemonicBytes: mnemonic ? new TextEncoder().encode(mnemonic) : null,
+    // The NIP-46 connect token and local private key get the same treatment. `undefined`
+    // means the stored account had no `nip46Config` field, and stays absent on the way back.
+    ...(nip46Config !== undefined ? { nip46: toMemoryNip46(nip46Config) } : {}),
     // Imported post-quantum secrets get the same treatment as the nsec: held as bytes so
     // lock() can zero them, rather than as strings that linger until GC.
     //
@@ -82,11 +146,14 @@ export function toMemoryAccount(acct: Account): MemoryAccount {
 
 /** In-memory account -> stored account. Inverse of {@link toMemoryAccount}, losslessly. */
 export function toStorageAccount(acct: MemoryAccount): Account {
-  const { privkeyBytes, mnemonicBytes, pqPublic, pqKemSecretBytes, pqDsaSecretBytes, ...rest } = acct;
+  const { privkeyBytes, mnemonicBytes, pqPublic, pqKemSecretBytes, pqDsaSecretBytes, nip46, ...rest } = acct;
+  // Cast because `nip46Config` is required on `Account` and optional here, for the same
+  // lossless reason as `pqKeys`: an account stored without the field stays without it.
   return {
     ...rest,
     privkey: privkeyBytes ? bytesToHex(privkeyBytes) : null,
     mnemonic: mnemonicBytes ? new TextDecoder().decode(mnemonicBytes) : null,
+    ...(nip46 !== undefined ? { nip46Config: toStorageNip46(nip46) } : {}),
     // See the note in toMemoryAccount: `undefined` means absent, and `Object.hasOwn` would call
     // a hand-built `{ pqPublic: undefined }` present and write back an explicit `pqKeys: null`.
     ...(acct.pqPublic !== undefined
@@ -102,7 +169,7 @@ export function toStorageAccount(acct: MemoryAccount): Account {
               : null,
         }
       : {}),
-  };
+  } as Account;
 }
 
 /** In-memory vault -> the JSON shape that gets encrypted into a {@link VaultRecord}. */
@@ -134,6 +201,8 @@ export function zeroMemoryAccount(acct: MemoryAccount): void {
   acct.mnemonicBytes?.fill(0);
   acct.pqKemSecretBytes?.fill(0);
   acct.pqDsaSecretBytes?.fill(0);
+  acct.nip46?.secretBytes?.fill(0);
+  acct.nip46?.localPrivkeyBytes?.fill(0);
 }
 
 /**

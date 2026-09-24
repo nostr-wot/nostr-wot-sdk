@@ -58,18 +58,45 @@ export interface OpenedRecord {
 }
 
 /**
+ * A remote-signer account's NIP-46 configuration while the vault is unlocked.
+ *
+ * The stored `Nip46Config` holds two secrets as strings: `secret`, the bunker's connect
+ * token, and `localPrivkey`, the client keypair the host generates on first connect and
+ * stores so a restart reconnects as the same identity. Both are held here as bytes so that
+ * `lock()` can zero them. The extension keeps them as strings, and they outlive its lock.
+ *
+ * `localPrivkeyBytes` is the ASCII of the stored hex, not the decoded key, so that whatever
+ * the record held round trips unchanged; `Vault.withRemoteSignerCredentials` decodes a copy
+ * for the caller without a string in between. `secretBytes` is the UTF-8 of the token.
+ * `undefined` on either means the stored config had no such field, `null` means it held null.
+ *
+ * `bunkerUrl` stays a string. It is the address the host connects to, and a `bunker://` URL
+ * pasted by the user can carry the connect token in its query, so a host should treat it as
+ * configuration rather than as something to display.
+ */
+export interface MemoryNip46Config {
+  bunkerUrl: string;
+  relay: string | null;
+  /** Zeroed on lock. */
+  secretBytes?: Uint8Array | null;
+  /** Zeroed on lock. Lowercase hex as ASCII bytes. */
+  localPrivkeyBytes?: Uint8Array;
+  localPubkey?: string;
+}
+
+/**
  * An account while the vault is unlocked.
  *
  * Every secret is a `Uint8Array` rather than a string so that `lock()` can zero it. A
  * JavaScript string cannot be overwritten: it stays readable in the heap until the collector
  * happens to reclaim it, which is not a guarantee anyone can make about an nsec.
  *
- * `pqPublic` is optional here where the extension's copy is not, so that an account stored
- * without a `pqKeys` field round trips back to one without it, rather than gaining an explicit
- * `pqKeys: null`. The two are indistinguishable to every reader, but a lossless round trip is
+ * `pqPublic` and `nip46` are optional here where the extension's copies are not, so that an
+ * account stored without the field round trips back to one without it, rather than gaining an
+ * explicit null. The two are indistinguishable to every reader, but a lossless round trip is
  * worth more than a byte-identical type.
  */
-export interface MemoryAccount extends Omit<Account, 'privkey' | 'mnemonic' | 'pqKeys'> {
+export interface MemoryAccount extends Omit<Account, 'privkey' | 'mnemonic' | 'pqKeys' | 'nip46Config'> {
   /** Zeroed on lock. */
   privkeyBytes: Uint8Array | null;
   /** Zeroed on lock. */
@@ -80,6 +107,8 @@ export interface MemoryAccount extends Omit<Account, 'privkey' | 'mnemonic' | 'p
   pqKemSecretBytes: Uint8Array | null;
   /** Zeroed on lock. */
   pqDsaSecretBytes: Uint8Array | null;
+  /** The NIP-46 configuration with its secrets as zeroable bytes. See {@link MemoryNip46Config}. */
+  nip46?: MemoryNip46Config | null;
 }
 
 /** The decrypted vault while it is unlocked, with every secret held as zeroable bytes. */
