@@ -1,0 +1,45 @@
+name: Packages
+
+# The gate on every pull request: every package builds, type checks, lints and passes its
+# suite. The lint step is where the platform boundary of the shared packages is enforced
+# (see eslint.config.js); the test step runs the matching boundary scan alongside every
+# package's own tests. Unlike ci.yml, nothing here is allowed to fail.
+
+on:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  packages:
+    name: Build, lint and test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm run test:run
