@@ -40,8 +40,13 @@ interface Tracked {
   fail(code: SignerErrorCode, reason: string): void;
 }
 
-function key(id: string, kind: PendingKind): string {
-  return `${kind}:${id}`;
+/**
+ * Namespaced by origin. A NIP-46 request id is chosen by the client, so two origins can hold
+ * the same id at once; keying by id alone would let one caller's id collide with, or cancel,
+ * another's.
+ */
+function key(origin: string, id: string, kind: PendingKind): string {
+  return `${origin}\u0000${kind}\u0000${id}`;
 }
 
 export class ApprovalQueue {
@@ -90,7 +95,7 @@ export class ApprovalQueue {
    */
   track<T>(input: TrackInput, work: (signal: AbortSignal) => Promise<T>): Promise<T> {
     if (this.#disposed) return Promise.reject(new SignerError('shutdown', 'Signer shut down'));
-    const id = key(input.id, input.kind);
+    const id = key(input.origin, input.id, input.kind);
     if (this.#entries.has(id)) {
       return Promise.reject(new SignerError('invalid_request', 'Request is already pending'));
     }
@@ -142,9 +147,14 @@ export class ApprovalQueue {
     });
   }
 
-  /** Settle one request's entries, every kind, as rejected. `false` when nothing was pending. */
-  reject(requestId: string, reason: string): boolean {
-    return this.#rejectWhere((entry) => entry.id === requestId, 'rejected', reason) > 0;
+  /**
+   * Settle one request's entries, every kind, as rejected. `false` when nothing was pending.
+   * Scoped to the origin, since request ids are only unique within one.
+   */
+  reject(origin: string, requestId: string, reason: string): boolean {
+    return (
+      this.#rejectWhere((entry) => entry.origin === origin && entry.id === requestId, 'rejected', reason) > 0
+    );
   }
 
   /**

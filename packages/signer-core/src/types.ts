@@ -150,12 +150,14 @@ export interface ActivityPort {
 // ── Optional ports ──
 
 /**
- * Names the active account while the vault is locked.
+ * Names the active account, locked or not.
  *
- * The vault cannot: a locked vault has no account list. Without this port a locked vault
- * refuses every request outright, because the permission check needs the account and runs
- * before any unlock. The extension keeps the active account id outside the vault for
- * exactly this reason, and this is where a host plugs that in.
+ * Required, not optional. The permission check needs the account and runs before lock state
+ * is consulted; the vault cannot name its account while locked. Were this port optional, a
+ * host that left it out would turn "permissions before vault state" into "permissions when
+ * unlocked", and a denied origin would learn the lock state instead of being denied. The
+ * extension keeps the active account id outside the vault for exactly this reason, and this
+ * is where a host plugs that in.
  */
 export interface IdentityPort {
   getActiveAccount(): Promise<SafeAccount | null>;
@@ -167,6 +169,10 @@ export interface IdentityPort {
  * Called after the permission gate and after any approval, only for a method that needs the
  * key, only while the vault is locked. Resolve once the user has unlocked; reject when they
  * cancel. The pipeline re-checks the lock afterwards and does not trust the resolution alone.
+ *
+ * Reject with a `SignerError` (code `rejected`, for instance) to tell the caller why. Any
+ * other error is reported to the logger and reaches the caller as a fixed-text internal
+ * error, so a storage path or a system message cannot travel off the device.
  */
 export interface UnlockPort {
   requestUnlock(request: SignerRequest, account: SafeAccount): Promise<void>;
@@ -225,7 +231,7 @@ export interface SignerCoreDeps {
   permissions: Permissions;
   approval: ApprovalPort;
   activity: ActivityPort;
-  identity?: IdentityPort;
+  identity: IdentityPort;
   unlock?: UnlockPort;
   remote?: RemoteSignerPort;
   relays?: RelayListPort;

@@ -118,6 +118,22 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+/**
+ * The host's source of truth for the active account, as the extension keeps one outside the
+ * vault: follows the vault while it is open, and still answers while it is locked.
+ */
+function vaultIdentity(vault: Vault, accounts: Account[]): IdentityPort & { active: string } {
+  const port = {
+    active: accounts[0]!.id,
+    async getActiveAccount() {
+      const id = vault.isLocked() ? port.active : await vault.getActiveAccountId();
+      const found = accounts.find((candidate) => candidate.id === id);
+      return found ? toSafeAccount({ ...found, readOnly: found.readOnly || !found.privkey }) : null;
+    },
+  };
+  return port;
+}
+
 async function fixture(approve: Mode, options: FixtureOptions = {}) {
   const vault = new Vault({ store: new MemoryStore(), kdf: fastKdf });
   const accounts = options.accounts ?? [account('acct_1', PRIVKEY_1)];
@@ -126,18 +142,19 @@ async function fixture(approve: Mode, options: FixtureOptions = {}) {
   const permissions = new Permissions(new MemoryStore());
   const approval = recordingApproval(approve);
   const activity = recordingActivity();
+  const identity = options.identity ?? vaultIdentity(vault, accounts);
   const core = new SignerCore({
     vault,
     permissions,
     approval,
     activity,
+    identity,
     unlock: options.unlock,
-    identity: options.identity,
     remote: options.remote,
     logger: options.logger,
   });
   cores.push(core);
-  return { core, vault, permissions, approval, activity, accounts };
+  return { core, vault, permissions, approval, activity, accounts, identity };
 }
 
 let counter = 0;
@@ -155,18 +172,6 @@ function req(method: SignerMethod, params: Record<string, unknown> = {}): Signer
     params: wrapped,
     receivedAt: Date.now(),
   };
-}
-
-/** An identity port that answers from the vault's account list even after it locks. */
-function identityFor(...accounts: Account[]): IdentityPort & { active: string } {
-  const port = {
-    active: accounts[0]!.id,
-    async getActiveAccount() {
-      const found = accounts.find((candidate) => candidate.id === port.active);
-      return found ? toSafeAccount(found) : null;
-    },
-  };
-  return port;
 }
 
 /** Lets the pipeline run up to its first await on the host, without a real clock. */
@@ -211,6 +216,59 @@ describe('permissions come before everything', () => {
     await permissions.save('example.com', 'getPublicKey', null, 'deny');
     await expect(core.handle(req('getPublicKey'))).rejects.toThrow(/denied/i);
     expect(approval.presented).toHaveLength(1);
+  });
+
+  test('a deny holds while the vault is locked, and permissions are consulted before the lock', async () => {
+    const { core, permissions, approval } = await fixture(true, { locked: true });
+    await permissions.save('example.com', 'signEvent', 1, 'deny');
+    const check = vi.spyOn(permissions, 'check');
+    await expect(core.handle(req('signEvent', { kind: 1 }))).rejects.toMatchObject({
+      code: 'permission_denied',
+    });
+    expect(check).toHaveBeenCalledTimes(1);
+    expect(approval.presented).toHaveLength(0);
+  });
+
+  test('a deny for a read-only account is a deny, not a hint about the account', async () => {
+    const { core, permissions } = await fixture(true, { accounts: [account('acct_ro', null)] });
+    await permissions.save('example.com', 'signEvent', 1, 'deny');
+    await expect(core.handle(req('signEvent', { kind: 1 }))).rejects.toThrow(/denied/i);
+  });
+
+  test('a deny for example.com holds for EXAMPLE.COM', async () => {
+    const { core, permissions, approval } = await fixture(true);
+    await permissions.save('example.com', 'signEvent', 1, 'deny');
+    const shouting = { ...req('signEvent', { kind: 1 }), origin: { kind: 'web' as const, identifier: 'EXAMPLE.COM' } };
+    await expect(core.handle(shouting)).rejects.toThrow(/denied/i);
+    expect(approval.presented).toHaveLength(0);
+  });
+
+  test('a deny for example.com holds for example.com. with a trailing dot', async () => {
+    const { core, permissions, approval } = await fixture(true);
+    await permissions.save('example.com', 'signEvent', 1, 'deny');
+    const dotted = { ...req('signEvent', { kind: 1 }), origin: { kind: 'web' as const, identifier: 'example.com.' } };
+    await expect(core.handle(dotted)).rejects.toThrow(/denied/i);
+    expect(approval.presented).toHaveLength(0);
+  });
+
+  test('a web caller cannot spell another transport\'s namespace to borrow its grant', async () => {
+    const { core, permissions, approval } = await fixture(true);
+    await permissions.save('nip55:com.evil.app', 'signEvent', 1, 'allow');
+    const forged = { ...req('signEvent', { kind: 1 }), origin: { kind: 'web' as const, identifier: 'nip55:com.evil.app' } };
+    await expect(core.handle(forged)).rejects.toMatchObject({ code: 'invalid_request' });
+    expect(approval.presented).toHaveLength(0);
+  });
+
+  test('a grant to a hostname is not a grant to the Android package spelled the same', async () => {
+    const { core, permissions, approval } = await fixture(true);
+    await permissions.save('com.example.app', 'signEvent', 1, 'allow');
+    const web = { ...req('signEvent', { kind: 1 }), origin: { kind: 'web' as const, identifier: 'com.example.app' } };
+    await core.handle(web);
+    expect(approval.presented).toHaveLength(0);
+    const android = { ...req('signEvent', { kind: 1 }), origin: { kind: 'nip55' as const, identifier: 'com.example.app' } };
+    await core.handle(android);
+    expect(approval.presented).toHaveLength(1);
+    expect(await permissions.check('nip55:com.example.app', 'signEvent', 1, 'acct_1')).toBe('ask');
   });
 
   test('a wildcard deny blocks a kind that was allowed', async () => {
@@ -262,6 +320,21 @@ describe('allow and ask', () => {
     await expect(core.handle(req('signEvent', { kind: 1 }))).rejects.toThrow('Nope, said the user');
   });
 
+  test('an allowed request is refused if the account switches during the permission check', async () => {
+    const two = [account('acct_1', PRIVKEY_1), account('acct_2', PRIVKEY_2)];
+    const { core, permissions, vault } = await fixture(true, { accounts: two });
+    await permissions.save('example.com', 'signEvent', 1, 'allow');
+    const original = permissions.check.bind(permissions);
+    vi.spyOn(permissions, 'check').mockImplementation(async (...args) => {
+      const decision = await original(...args);
+      await vault.setActiveAccountId('acct_2');
+      return decision;
+    });
+    await expect(core.handle(req('signEvent', { kind: 1 }))).rejects.toMatchObject({
+      code: 'account_switched',
+    });
+  });
+
   test('a read-only account is refused before anyone is asked', async () => {
     const { core, approval } = await fixture(true, { accounts: [account('acct_ro', null)] });
     await expect(core.handle(req('signEvent', { kind: 1 }))).rejects.toThrow(/signing key/i);
@@ -310,13 +383,8 @@ describe('the approval queue', () => {
   });
 
   test('unlock markers do not count toward the cap', async () => {
-    const acct = account('acct_1', PRIVKEY_1);
     const unlock: UnlockPort = { requestUnlock: () => new Promise(() => {}) };
-    const { core, permissions } = await fixture('never', {
-      locked: true,
-      identity: identityFor(acct),
-      unlock,
-    });
+    const { core, permissions } = await fixture('never', { locked: true, unlock });
     await permissions.save('example.com', 'signEvent', 1, 'allow');
     for (let i = 0; i < MAX_PENDING_PER_ORIGIN + 2; i++) {
       core.handle(req('signEvent', { kind: 1 })).catch(() => {});
@@ -416,17 +484,17 @@ describe('switching accounts', () => {
   });
 
   test('getPublicKey answers the pubkey the user was shown, never a later one', async () => {
-    // The identity port names acct_1 while the request is resolved and re-checked after the
-    // prompt, then flips. Nothing awaits between that re-check and the answer, so the only way
-    // to see acct_2 here is to ask the port again at execution time instead of answering from
-    // the snapshot the user approved.
+    // The identity port names acct_1 while the request is resolved, re-checked after the
+    // prompt and re-checked before execution, then flips. Nothing awaits between that last
+    // re-check and the answer, so the only way to see acct_2 here is to ask the port again at
+    // execution time instead of answering from the snapshot the user approved.
     const one = account('acct_1', PRIVKEY_1);
     const two = account('acct_2', PRIVKEY_2);
     let calls = 0;
     const identity: IdentityPort = {
       async getActiveAccount() {
         calls += 1;
-        return toSafeAccount(calls <= 2 ? one : two);
+        return toSafeAccount(calls <= 3 ? one : two);
       },
     };
     const { core, approval } = await fixture(true, { accounts: [one, two], identity });
@@ -657,15 +725,8 @@ describe('execution', () => {
 // ── Lock state ──
 
 describe('the vault lock', () => {
-  test('a locked vault with no identity port refuses rather than prompts', async () => {
-    const { core, approval } = await fixture(true, { locked: true });
-    await expect(core.handle(req('signEvent', { kind: 1 }))).rejects.toThrow(/locked/i);
-    expect(approval.presented).toHaveLength(0);
-  });
-
   test('a locked vault with no unlock port refuses after the permission gate', async () => {
-    const acct = account('acct_1', PRIVKEY_1);
-    const { core, permissions } = await fixture(true, { locked: true, identity: identityFor(acct) });
+    const { core, permissions } = await fixture(true, { locked: true });
     await permissions.save('example.com', 'signEvent', 1, 'allow');
     await expect(core.handle(req('signEvent', { kind: 1 }))).rejects.toThrow(/locked/i);
     await permissions.save('example.com', 'signEvent', 1, 'deny');
@@ -673,14 +734,12 @@ describe('the vault lock', () => {
   });
 
   test('getPublicKey answers from the identity port while the vault is locked', async () => {
-    const acct = account('acct_1', PRIVKEY_1);
-    const { core, permissions } = await fixture(true, { locked: true, identity: identityFor(acct) });
+    const { core, permissions } = await fixture(true, { locked: true });
     await permissions.save('example.com', 'getPublicKey', null, 'allow');
     expect(await core.handle(req('getPublicKey'))).toBe(PUBKEY_1);
   });
 
   test('an unlock port is asked, and signing proceeds once the vault opens', async () => {
-    const acct = account('acct_1', PRIVKEY_1);
     const asked: string[] = [];
     let vaultRef: Vault | null = null;
     const unlock: UnlockPort = {
@@ -689,11 +748,7 @@ describe('the vault lock', () => {
         await vaultRef!.unlock(PASSWORD);
       },
     };
-    const { core, permissions, vault } = await fixture(true, {
-      locked: true,
-      identity: identityFor(acct),
-      unlock,
-    });
+    const { core, permissions, vault } = await fixture(true, { locked: true, unlock });
     vaultRef = vault;
     await permissions.save('example.com', 'signEvent', 1, 'allow');
     const request = req('signEvent', { kind: 1 });
@@ -703,32 +758,122 @@ describe('the vault lock', () => {
     expect(core.pending()).toHaveLength(0);
   });
 
-  test('an unlock the user cancels is an error to the caller', async () => {
-    const acct = account('acct_1', PRIVKEY_1);
+  test('an unlock the user cancels is an error to the caller, with the port\'s reason', async () => {
     const unlock: UnlockPort = {
       async requestUnlock() {
-        throw new Error('Cancelled by user');
+        throw new SignerError('rejected', 'Cancelled by user');
       },
     };
-    const { core, permissions } = await fixture(true, {
-      locked: true,
-      identity: identityFor(acct),
-      unlock,
-    });
+    const { core, permissions } = await fixture(true, { locked: true, unlock });
     await permissions.save('example.com', 'signEvent', 1, 'allow');
-    await expect(core.handle(req('signEvent', { kind: 1 }))).rejects.toThrow(/cancelled/i);
+    await expect(core.handle(req('signEvent', { kind: 1 }))).rejects.toMatchObject({
+      code: 'rejected',
+      message: 'Cancelled by user',
+    });
   });
 
   test('an unlock that does not actually open the vault is still locked', async () => {
-    const acct = account('acct_1', PRIVKEY_1);
     const unlock: UnlockPort = { async requestUnlock() {} };
-    const { core, permissions } = await fixture(true, {
-      locked: true,
-      identity: identityFor(acct),
-      unlock,
-    });
+    const { core, permissions } = await fixture(true, { locked: true, unlock });
     await permissions.save('example.com', 'signEvent', 1, 'allow');
     await expect(core.handle(req('signEvent', { kind: 1 }))).rejects.toThrow(/locked/i);
+  });
+});
+
+// ── Only fixed text leaves ──
+
+describe('foreign errors', () => {
+  const PATH = 'EACCES /Users/leon/Library/vault.db';
+
+  test('an unlock port that throws raw text reaches the caller as fixed text', async () => {
+    const warnings: Array<{ message: string; context?: Record<string, unknown> }> = [];
+    const unlock: UnlockPort = {
+      async requestUnlock() {
+        throw new Error(PATH);
+      },
+    };
+    const { core, permissions, activity } = await fixture(true, {
+      locked: true,
+      unlock,
+      logger: { warn: (message, context) => warnings.push({ message, context }) },
+    });
+    await permissions.save('example.com', 'signEvent', 1, 'allow');
+    let outcome: unknown;
+    try {
+      await core.handle(req('signEvent', { kind: 1 }));
+    } catch (error) {
+      outcome = error;
+    }
+    expect(outcome).toBeInstanceOf(SignerError);
+    expect(outcome).toMatchObject({ code: 'internal', message: 'Internal signer error', wireVisible: true });
+    expect(String((outcome as Error).message)).not.toContain('EACCES');
+    expect(JSON.stringify(warnings)).toContain(PATH);
+    expect(activity.entries[0]!.reason).toContain(PATH);
+    expect(activity.entries[0]!.code).toBe('internal');
+  });
+
+  test('a failing permissions store reaches the caller as fixed text', async () => {
+    const { core, permissions, approval } = await fixture(true);
+    vi.spyOn(permissions, 'check').mockRejectedValue(
+      new Error('IndexedDB quota exceeded at /private/var/mobile/Containers/x'),
+    );
+    await expect(core.handle(req('signEvent', { kind: 1 }))).rejects.toMatchObject({
+      code: 'internal',
+      message: 'Internal signer error',
+    });
+    expect(approval.presented).toHaveLength(0);
+  });
+
+  test('a cipher failure reaches the caller as a fixed-text operation failure', async () => {
+    const { core, permissions } = await fixture(true);
+    await permissions.saveDirect('example.com', '*', 'allow');
+    for (const method of ['nip04Decrypt', 'nip44Decrypt'] as const) {
+      await expect(core.handle(req(method, { pubkey: PUBKEY_2, ciphertext: 'garbage?iv=abc' }))).rejects.toMatchObject({
+        code: 'operation_failed',
+        message: 'Operation failed',
+      });
+    }
+  });
+
+  test('a remote port that throws raw text reaches the caller as fixed text', async () => {
+    const remote: RemoteSignerPort = {
+      async execute() {
+        throw new RangeError('offset is out of bounds');
+      },
+    };
+    const { core } = await fixture(true, {
+      accounts: [account('acct_1', null, { type: 'nip46', readOnly: false })],
+      remote,
+    });
+    await expect(core.handle(req('signEvent', { kind: 1 }))).rejects.toMatchObject({
+      code: 'operation_failed',
+      message: 'Operation failed',
+    });
+  });
+
+  test('a failing activity port on the allow path still answers', async () => {
+    const { core, permissions, activity } = await fixture(true);
+    await permissions.save('example.com', 'signEvent', 1, 'allow');
+    activity.record = async () => {
+      throw new Error('disk full');
+    };
+    const signed = (await core.handle(req('signEvent', { kind: 1 }))) as Event;
+    expect(verifyEvent(signed)).toBe(true);
+  });
+});
+
+describe('host-side cancel', () => {
+  test('cancel is scoped to the origin', async () => {
+    const { core, approval } = await fixture('never');
+    const request = req('signEvent', { kind: 1 });
+    const inflight = core.handle(request);
+    inflight.catch(() => {});
+    await settle();
+    expect(core.cancel('other.example', request.id)).toBe(false);
+    expect(core.pending()).toHaveLength(1);
+    expect(core.cancel('example.com', request.id)).toBe(true);
+    await expect(inflight).rejects.toMatchObject({ code: 'rejected', message: 'Cancelled by user' });
+    expect(approval.cancelled).toEqual([{ id: request.id, reason: 'Cancelled by user' }]);
   });
 });
 

@@ -34,6 +34,7 @@ import { SignerCore } from '@nostr-wot/signer-core';
 const core = new SignerCore({
   vault,        // @nostr-wot/vault
   permissions,  // @nostr-wot/permissions
+  identity,     // your source of truth for the active account, locked or not
   approval,     // your prompt: present(request, account) and cancel(requestId, reason)
   activity,     // your log: record(entry)
 });
@@ -48,7 +49,14 @@ const signed = await core.handle({
 ```
 
 `handle` resolves with the method's result and rejects with a `SignerError` carrying a stable
-`code` for every refusal. A refusal is never a `null` or an empty result.
+`code` for every refusal. A refusal is never a `null` or an empty result, and its message is
+always fixed text: whatever a port, a store, the vault or a cipher threw is given to the
+`logger` and to the activity entry's `reason`, never to the caller. `SignerError` carries
+`wireVisible: true`, which is what `@nostr-wot/bunker` checks before forwarding a message.
+
+`identity` is required. The permission check needs the account and runs before lock state is
+consulted, and a locked vault cannot name its account, so the host has to. Keep the active
+account id outside the vault, as the extension does.
 
 Whenever the active account changes, call `core.onActiveAccountChanged(previousId, nextId)`.
 It rejects everything queued for the previous account and clears the `getPublicKey`
@@ -66,14 +74,17 @@ old one.
 
 Everything is validated by `validateRequest` at the boundary and nowhere else: an integer
 `kind`, a string `content`, an array of string arrays as `tags`, pubkeys as 64 lowercase hex
-characters, and the extension's size limits. What comes out is a frozen deep copy: the prompt
-shows it and the signer signs it, so the two cannot drift.
+characters, and the extension's size limits, applied before anything large is copied or
+serialised. What comes out is a frozen deep copy: the prompt shows it and the signer signs it,
+so the two cannot drift.
+
+Origins are canonical: a `web` identifier is lower-cased, loses any trailing dot and may not
+contain `:`; a `nip46` identifier is a lowercase hex pubkey.
 
 ## Optional ports
 
 | Port | Without it |
 | --- | --- |
-| `identity` | A locked vault cannot name its active account, and the permission check needs one, so a locked vault refuses every request rather than prompting. |
 | `unlock` | A request that needs the key while the vault is locked is refused after the permission gate. |
 | `remote` | A NIP-46 account cannot sign or encrypt. |
 | `relays` | `getRelays` answers `{}`. |
@@ -84,7 +95,13 @@ shows it and the signer signs it, so the two cannot drift.
 `MAX_PENDING_PER_ORIGIN` (5) caps the prompts one origin may have open; unlock markers and
 in-flight remote work do not count toward it, and are bounded by the in-flight caps instead.
 `REQUEST_TIMEOUT_MS` (120 s) rejects anything unanswered. `core.pending()` lists what is
-waiting, for a badge or a list; `core.cancel(id)` settles one from the host's side.
+waiting, for a badge or a list; `core.cancel(origin, id)` settles one from the host's side,
+scoped to the origin because NIP-46 request ids are chosen by the client.
+
+## Wiring to `@nostr-wot/bunker`
+
+Pass `handlerTimeoutMs: 0` to the bunker. This pipeline owns the request timeout; two
+120-second clocks on one request race each other and leave one side holding a live entry.
 
 ## Permission keys
 

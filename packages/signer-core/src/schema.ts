@@ -96,15 +96,46 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
+/**
+ * One spelling per caller, so a permission stored for one cannot be dodged by another.
+ *
+ * A web host is case-insensitive and `example.com.` is `example.com`, so both are folded
+ * here; a stored deny for `example.com` would otherwise let `EXAMPLE.COM` through to a
+ * prompt. A `:` in a web identifier is refused outright, because the permission key for every
+ * other origin kind is `kind:identifier` and a web caller naming itself `nip55:com.evil.app`
+ * would read the grant a real Android package earned. A NIP-46 client is its hex pubkey and
+ * is folded to lowercase for the same reason.
+ */
+function canonicalIdentifier(kind: RequestOrigin['kind'], identifier: string): string {
+  switch (kind) {
+    case 'web': {
+      if (identifier.includes(':')) {
+        throw invalid('origin.identifier for a web origin must be a bare hostname');
+      }
+      const host = identifier.toLowerCase().replace(/\.+$/, '');
+      if (host.length === 0) throw invalid('origin.identifier must not be empty');
+      return host;
+    }
+    case 'nip46':
+      return requirePubkey(identifier.toLowerCase(), 'origin.identifier for a nip46 origin');
+    default:
+      return identifier;
+  }
+}
+
 function validateOrigin(value: unknown): RequestOrigin {
   if (!isRecord(value)) throw invalid('origin must be an object');
   const kind = value['kind'];
   if (typeof kind !== 'string' || !(ORIGIN_KINDS as readonly string[]).includes(kind)) {
     throw invalid(`origin.kind must be one of ${ORIGIN_KINDS.join(', ')}`);
   }
+  const originKind = kind as RequestOrigin['kind'];
   const origin: RequestOrigin = {
-    kind: kind as RequestOrigin['kind'],
-    identifier: requireNonEmptyString(value['identifier'], 'origin.identifier'),
+    kind: originKind,
+    identifier: canonicalIdentifier(
+      originKind,
+      requireNonEmptyString(value['identifier'], 'origin.identifier'),
+    ),
   };
   if (value['displayName'] !== undefined) {
     origin.displayName = requireString(value['displayName'], 'origin.displayName');
@@ -113,18 +144,40 @@ function validateOrigin(value: unknown): RequestOrigin {
   return origin;
 }
 
+const tooLarge = (): SignerError => invalid(`event is too large: at most ${MAX_EVENT_BYTES} bytes as JSON`);
+
+/**
+ * The limits bite BEFORE anything is walked in full, copied or serialised. A caller can hand
+ * over a template whose every part is inside its own limit and whose whole is a gigabyte; if
+ * the check ran after the copy and the `JSON.stringify`, the copy and the stringify would be
+ * the attack. So the content is bounded by its character count first (a character is at
+ * least one byte, so a count over the byte limit is already over), and tag bytes are
+ * accumulated while the tags are checked, stopping at the first tag that crosses the line.
+ * The exact byte measurement afterwards runs only over something already known to be small.
+ */
 function validateTemplate(value: unknown): EventTemplateInput {
   if (!isRecord(value)) throw invalid('signEvent needs an event template');
   const kind = requireNonNegativeInteger(value['kind'], 'event.kind', MAX_KIND);
   const content = requireString(value['content'], 'event.content');
+  if (content.length > MAX_EVENT_BYTES) throw tooLarge();
   const rawTags = value['tags'];
   if (!Array.isArray(rawTags)) throw invalid('event.tags must be an array');
   if (rawTags.length > MAX_EVENT_TAGS) throw invalid(`event.tags may hold at most ${MAX_EVENT_TAGS} tags`);
-  const tags: string[][] = rawTags.map((tag, index) => {
+  let tagBytes = 0;
+  for (let index = 0; index < rawTags.length; index++) {
+    const tag: unknown = rawTags[index];
     if (!Array.isArray(tag) || tag.length === 0) throw invalid(`event.tags[${index}] must be a non-empty array`);
     if (tag.length > MAX_TAG_VALUES) throw invalid(`event.tags[${index}] may hold at most ${MAX_TAG_VALUES} values`);
-    return tag.map((entry) => requireString(entry, `event.tags[${index}] values`));
-  });
+    // Brackets, then quotes and a comma per value, then the values themselves.
+    tagBytes += 2 + tag.length * 3;
+    if (tagBytes > MAX_EVENT_BYTES) throw tooLarge();
+    for (const entry of tag as unknown[]) {
+      tagBytes += requireString(entry, `event.tags[${index}] values`).length;
+      if (tagBytes > MAX_EVENT_BYTES) throw tooLarge();
+    }
+  }
+  // Bounded now, so copying is safe.
+  const tags: string[][] = (rawTags as string[][]).map((tag) => [...tag]);
   const event: EventTemplateInput = { kind, content, tags };
   if (value['created_at'] !== undefined) {
     event.created_at = requireNonNegativeInteger(value['created_at'], 'event.created_at');
@@ -132,9 +185,7 @@ function validateTemplate(value: unknown): EventTemplateInput {
   if (value['pubkey'] !== undefined) event.pubkey = requirePubkey(value['pubkey'], 'event.pubkey');
   // Measured as the JSON that will be hashed and stored, so the limit means the same thing
   // whatever mix of content and tags a caller chooses.
-  if (utf8ByteLength(JSON.stringify(event)) > MAX_EVENT_BYTES) {
-    throw invalid(`event is too large: at most ${MAX_EVENT_BYTES} bytes as JSON`);
-  }
+  if (utf8ByteLength(JSON.stringify(event)) > MAX_EVENT_BYTES) throw tooLarge();
   return event;
 }
 
@@ -149,7 +200,8 @@ function validateParams(method: SignerMethod, raw: Record<string, unknown>): Val
     case 'nip44Encrypt': {
       const pubkey = requirePubkey(raw['pubkey'], 'pubkey');
       const plaintext = requireString(raw['plaintext'], 'plaintext');
-      if (utf8ByteLength(plaintext) > MAX_CRYPTO_PLAINTEXT_BYTES) {
+      // Character count first: it is O(1) and a character is at least a byte.
+      if (plaintext.length > MAX_CRYPTO_PLAINTEXT_BYTES || utf8ByteLength(plaintext) > MAX_CRYPTO_PLAINTEXT_BYTES) {
         throw invalid(`plaintext may be at most ${MAX_CRYPTO_PLAINTEXT_BYTES} bytes`);
       }
       return { method, pubkey, plaintext };

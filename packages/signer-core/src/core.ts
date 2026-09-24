@@ -3,10 +3,10 @@
  * passes through {@link SignerCore.handle}, and this is the component that decides whether
  * the caller gets a signature. It is a security control, not glue.
  *
- * Ported from the extension's `services/signing/signer.ts`, with the same order and
- * the same reasons:
+ * Ported from the extension's `services/signing/signer.ts`, with the same order and the same
+ * reasons:
  *
- *   1. Resolve the active account.
+ *   1. Resolve the active account, through the identity port, locked or not.
  *   2. Check permissions. A deny at any consulted level short-circuits: the request never
  *      reaches a prompt and is never routed anywhere, remote signer included.
  *   3. An `ask` enqueues an approval and presents it through the approval port.
@@ -19,6 +19,10 @@
  * not the key is available, and whether the account is local or remote. Reordering these
  * steps is a regression, not a refactor.
  *
+ * **Only fixed text leaves.** Every rejection out of `handle` is a `SignerError`. Whatever a
+ * port, a store, the vault or a cipher threw is given to the logger and to the activity
+ * entry, and the caller gets a code and a sentence that names nothing on the device.
+ *
  * Nothing here externalizes anything. The signing backend runs inside the vault's
  * `withPrivkey`, which zeroes the key on every path and voids a result computed under a
  * session that was locked mid-callback; a callback that published would have already put
@@ -30,7 +34,7 @@ import type { Permissions } from '@nostr-wot/permissions';
 import { PrivateKeySigner } from '@nostr-wot/signers';
 import type { Vault } from '@nostr-wot/vault';
 import { GET_PUBLIC_KEY_COOLDOWN_MS, KEY_METHODS } from './constants.js';
-import { SignerError, errorMessage, type SignerErrorCode } from './errors.js';
+import { SignerError, errorMessage } from './errors.js';
 import { ApprovalQueue } from './queue.js';
 import { validateRequest } from './schema.js';
 import type {
@@ -55,10 +59,10 @@ import type {
 /**
  * The key a request's origin is stored under in permissions.
  *
- * A web origin is stored bare, so the keys the extension has already written keep
- * working. Everything else is prefixed with its kind, because an Android package name and a
- * hostname are both dotted strings and a permission granted to one must not be found by the
- * other.
+ * A web origin is stored bare, so the keys the extension has already written keep working.
+ * Everything else is prefixed with its kind, because an Android package name and a hostname
+ * are both dotted strings and a permission granted to one must not be found by the other.
+ * The boundary refuses a `:` in a web identifier, so a web caller cannot spell a prefix.
  */
 export function permissionOrigin(origin: RequestOrigin): string {
   return origin.kind === 'web' ? origin.identifier : `${origin.kind}:${origin.identifier}`;
@@ -69,9 +73,11 @@ interface Cooldown {
   accountId: string;
 }
 
-/** What `handle` knows about a request by the time it records the outcome. */
+/** What `handle` knows about a request by the time it reports the outcome. */
 interface RunContext {
   account: SafeAccount | null;
+  /** Which step a foreign error came out of, which decides the fixed text it becomes. */
+  phase: 'pipeline' | 'execute';
 }
 
 export class SignerCore {
@@ -79,7 +85,7 @@ export class SignerCore {
   readonly #permissions: Permissions;
   readonly #approval: ApprovalPort;
   readonly #activity: ActivityPort;
-  readonly #identity: IdentityPort | undefined;
+  readonly #identity: IdentityPort;
   readonly #unlock: UnlockPort | undefined;
   readonly #remote: RemoteSignerPort | undefined;
   readonly #relays: RelayListPort | undefined;
@@ -121,9 +127,13 @@ export class SignerCore {
     return this.#queue.pending();
   }
 
-  /** Settle a pending request as rejected from the host's side, for a user closing a prompt. */
-  cancel(requestId: string, reason = 'Cancelled by user'): boolean {
-    return this.#queue.reject(requestId, reason);
+  /**
+   * Settle a pending request as rejected from the host's side, for a user closing a prompt.
+   * `origin` is the entry's permission key as {@link pending} reports it: request ids are
+   * only unique within one origin.
+   */
+  cancel(origin: string, requestId: string, reason = 'Cancelled by user'): boolean {
+    return this.#queue.reject(origin, requestId, reason);
   }
 
   /** Reject everything pending and refuse further requests. */
@@ -154,26 +164,33 @@ export class SignerCore {
    *
    * Resolves with the method's result: a hex pubkey, a signed event, a relay map, a
    * ciphertext or a plaintext. Rejects with a {@link SignerError} for every refusal, with a
-   * stable `code`; a refusal is never a `null` or an empty result. Every request that passed
-   * the boundary is written to the activity log, whatever happened to it.
+   * stable `code` and fixed text; a refusal is never a `null` or an empty result. Every
+   * request that passed the boundary is written to the activity log, whatever happened to it.
    */
   async handle(request: SignerRequest): Promise<unknown> {
     if (this.#disposed) throw new SignerError('shutdown', 'Signer shut down');
     // Validated and copied here, and nowhere else. A malformed request is not an activity:
     // it never entered the pipeline.
-    const validated = validateRequest(request);
-    const context: RunContext = { account: null };
+    let validated: ValidatedRequest;
+    try {
+      validated = validateRequest(request);
+    } catch (error) {
+      throw this.#toSignerError(error, 'pipeline', typeof request === 'object' && request ? String((request as { id?: unknown }).id ?? '') : '');
+    }
+    const context: RunContext = { account: null, phase: 'pipeline' };
     try {
       const result = await this.#run(validated, context);
       await this.#record(validated, context.account, { decision: 'allow' });
       return result;
     } catch (error) {
+      const refusal = this.#toSignerError(error, context.phase, validated.request.id);
       await this.#record(validated, context.account, {
         decision: 'deny',
+        // The original text, for the log on the device. The caller gets `refusal.message`.
         reason: errorMessage(error),
-        code: error instanceof SignerError ? error.code : undefined,
+        code: refusal.code,
       });
-      throw error;
+      throw refusal;
     }
   }
 
@@ -183,13 +200,10 @@ export class SignerCore {
     const originKey = permissionOrigin(request.origin);
     const kind = params.method === 'signEvent' ? params.event.kind : undefined;
 
-    // 1. Resolve the active account.
-    const account = await this.#activeAccount();
-    if (!account) {
-      throw this.#vault.isLocked()
-        ? new SignerError('vault_locked', 'Vault is locked')
-        : new SignerError('no_account', 'No active account');
-    }
+    // 1. Resolve the active account. The identity port answers locked or not, which is what
+    //    lets the permission check come next whatever the vault's state.
+    const account = await this.#identity.getActiveAccount();
+    if (!account) throw new SignerError('no_account', 'No active account');
     context.account = account;
 
     // 2. Permissions, before lock state, before routing, before anything. A deny is the end.
@@ -223,7 +237,7 @@ export class SignerCore {
         throw new SignerError('rejected', outcome.reason || 'Request rejected by user');
       }
       // The user approved THIS identity. If the active account moved while the prompt was
-      // open, the answer is no, not the new account's key.
+      // open, the answer is no, not the new account's key, and nothing is remembered.
       await this.#assertStillActive(account);
       if (outcome.remember) await this.#remember(originKey, method, kind, outcome, 'allow', account);
       if (method === 'getPublicKey') {
@@ -244,10 +258,16 @@ export class SignerCore {
       );
       // The port said it unlocked; the vault is the authority on whether it did.
       if (this.#vault.isLocked()) throw new SignerError('vault_locked', 'Vault is locked');
-      await this.#assertStillActive(account);
     }
 
+    // On every path, prompted or not: the account this request was resolved against has to
+    // be the one that is active when it executes. The key is pinned to the snapshot below,
+    // so this is not about signing with the wrong key; it is that a request resolved for one
+    // account is not answered once the user has moved to another, as the extension refuses.
+    await this.#assertStillActive(account);
+
     // 5. Execute. 6. Zero: `withPrivkey` hands the backend a copy and zeroes it on every path.
+    context.phase = 'execute';
     switch (params.method) {
       case 'getPublicKey':
         return account.pubkey;
@@ -321,17 +341,9 @@ export class SignerCore {
     return true;
   }
 
-  async #activeAccount(): Promise<SafeAccount | null> {
-    if (this.#identity) return this.#identity.getActiveAccount();
-    const id = await this.#vault.getActiveAccountId();
-    if (!id) return null;
-    const accounts = await this.#vault.listAccounts();
-    return accounts.find((candidate) => candidate.id === id) ?? null;
-  }
-
-  /** The account a prompt was shown for has to be the one that is still active. */
+  /** The account a request was resolved for has to be the one that is still active. */
   async #assertStillActive(shown: SafeAccount): Promise<void> {
-    const current = await this.#activeAccount();
+    const current = await this.#identity.getActiveAccount();
     if (!current || current.id !== shown.id || current.pubkey !== shown.pubkey) {
       throw new SignerError('account_switched', 'Account switched');
     }
@@ -351,13 +363,32 @@ export class SignerCore {
   }
 
   /**
+   * What the caller is told.
+   *
+   * A `SignerError` is ours and carries fixed text, so it passes. Anything else came out of a
+   * port, a store, the vault or a cipher, and its message may name a file, a path, a quota or
+   * a buffer length: it goes to the logger, on the device, and the caller gets a sentence
+   * that names nothing. A failure inside the signing step while the vault turns out to be
+   * locked is reported as the lock, which is what it was.
+   */
+  #toSignerError(error: unknown, phase: RunContext['phase'], requestId: string): SignerError {
+    if (error instanceof SignerError) return error;
+    this.#logger?.warn('request failed', { requestId, phase, error: errorMessage(error) });
+    if (phase === 'execute') {
+      if (this.#vault.isLocked()) return new SignerError('vault_locked', 'Vault is locked');
+      return new SignerError('operation_failed', 'Operation failed');
+    }
+    return new SignerError('internal', 'Internal signer error');
+  }
+
+  /**
    * Write the outcome. A failing log must not hold a computed signature hostage, and must not
    * be silent either: the host hears about it through the logger, or not at all.
    */
   async #record(
     validated: ValidatedRequest,
     account: SafeAccount | null,
-    outcome: { decision: 'allow' | 'deny'; reason?: string; code?: SignerErrorCode },
+    outcome: { decision: 'allow' | 'deny'; reason?: string; code?: SignerError['code'] },
   ): Promise<void> {
     const { request, params } = validated;
     const entry: ActivityEntry = {

@@ -28,9 +28,22 @@ export type SignerErrorCode =
   /** The account cannot perform this: read-only, or remote with no remote port. */
   | 'unsupported'
   /** The core was disposed. */
-  | 'shutdown';
+  | 'shutdown'
+  /** The signing backend or a remote port failed. The detail went to the logger, not here. */
+  | 'operation_failed'
+  /** A port or a store failed. The detail went to the logger, not here. */
+  | 'internal';
 
+/**
+ * Every `SignerError` carries fixed text, so its message may cross a boundary. `wireVisible`
+ * is the marker `@nostr-wot/bunker` looks for before it forwards a message to a client; an
+ * error without it is sent as "request rejected". Anything thrown by a port, a store, the
+ * vault or a cipher is NOT one of these and never reaches a caller as itself: the pipeline
+ * wraps it into a fixed-text `SignerError` and gives the original text to the logger only.
+ */
 export class SignerError extends Error {
+  readonly wireVisible = true as const;
+
   constructor(
     readonly code: SignerErrorCode,
     message: string,

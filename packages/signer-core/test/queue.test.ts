@@ -166,8 +166,9 @@ describe('external rejection', () => {
     const one = entry();
     const promise = queue.track(one, never);
     promise.catch(() => {});
-    expect(queue.reject(one.id, 'Cancelled by user')).toBe(true);
-    expect(queue.reject(one.id, 'Cancelled by user')).toBe(false);
+    expect(queue.reject('other.example', one.id, 'Cancelled by user')).toBe(false);
+    expect(queue.reject(one.origin, one.id, 'Cancelled by user')).toBe(true);
+    expect(queue.reject(one.origin, one.id, 'Cancelled by user')).toBe(false);
     await expect(promise).rejects.toMatchObject({ code: 'rejected', message: 'Cancelled by user' });
   });
 
@@ -199,6 +200,20 @@ describe('external rejection', () => {
     for (const promise of [a, b]) promise.catch(() => {});
     expect(queue.pending()).toHaveLength(2);
     await expect(queue.track(one, never)).rejects.toThrow(/already pending/i);
+    queue.dispose();
+  });
+
+  test('two origins may hold the same request id, and one cannot cancel the other', async () => {
+    const { queue } = build();
+    const mine = entry('approval', 'example.com');
+    const theirs = { ...mine, origin: 'other.example' };
+    const a = queue.track(mine, never);
+    const b = queue.track(theirs, never);
+    for (const promise of [a, b]) promise.catch(() => {});
+    expect(queue.pending()).toHaveLength(2);
+    expect(queue.reject('other.example', mine.id, 'Cancelled by user')).toBe(true);
+    await expect(b).rejects.toMatchObject({ code: 'rejected' });
+    expect(queue.pending().map((e) => e.origin)).toEqual(['example.com']);
     queue.dispose();
   });
 });

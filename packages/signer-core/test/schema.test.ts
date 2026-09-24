@@ -46,6 +46,34 @@ describe('the envelope', () => {
     expect(request.origin).not.toBe(input.origin);
   });
 
+  test('folds a web host to lowercase and strips a trailing dot', () => {
+    const input = base('getPublicKey', {});
+    input.origin = { kind: 'web', identifier: 'EXAMPLE.COM.' };
+    expect(validateRequest(input).request.origin.identifier).toBe('example.com');
+    input.origin = { kind: 'web', identifier: 'Sub.Example.com...' };
+    expect(validateRequest(input).request.origin.identifier).toBe('sub.example.com');
+  });
+
+  test('refuses a colon in a web identifier, so a transport namespace cannot be forged', () => {
+    for (const identifier of ['nip55:com.evil.app', 'nip46:' + PUBKEY, 'example.com:443', 'https://example.com']) {
+      expect(invalid({ ...base('getPublicKey', {}), origin: { kind: 'web', identifier } })).toMatch(/hostname/i);
+    }
+    expect(invalid({ ...base('getPublicKey', {}), origin: { kind: 'web', identifier: '...' } })).toMatch(/empty/i);
+  });
+
+  test('a nip46 identifier is a lowercase hex pubkey', () => {
+    const input = base('getPublicKey', {});
+    input.origin = { kind: 'nip46', identifier: PUBKEY.toUpperCase() };
+    expect(validateRequest(input).request.origin.identifier).toBe(PUBKEY);
+    expect(invalid({ ...input, origin: { kind: 'nip46', identifier: 'npub1' + 'q'.repeat(58) } })).toMatch(/nip46/i);
+  });
+
+  test('leaves other identifiers as they are', () => {
+    const input = base('getPublicKey', {});
+    input.origin = { kind: 'nip55', identifier: 'com.Example.App' };
+    expect(validateRequest(input).request.origin.identifier).toBe('com.Example.App');
+  });
+
   test('keeps the optional origin fields', () => {
     const input = base('getPublicKey', {});
     input.origin = { kind: 'nip46', identifier: PUBKEY, displayName: 'Client', icon: 'https://x/i.png' };
@@ -142,6 +170,39 @@ describe('signEvent', () => {
   test('bounds the whole event', () => {
     const content = 'x'.repeat(MAX_EVENT_BYTES);
     expect(invalid(base('signEvent', { event: event({ content }) }))).toMatch(/large/i);
+  });
+
+  test('rejects an oversized content before walking it', () => {
+    const content = 'x'.repeat(200_000_000);
+    const started = performance.now();
+    expect(invalid(base('signEvent', { event: event({ content }) }))).toMatch(/large/i);
+    expect(performance.now() - started).toBeLessThan(200);
+  });
+
+  test('rejects tags whose whole is oversized before copying or serialising them', () => {
+    // Every part inside its own limit; the whole would be over a gigabyte. The arrays are
+    // shared so building the input is cheap, and the validator has to stop at the first tag
+    // that crosses the byte limit rather than materialise the lot.
+    const tag = Array.from({ length: MAX_TAG_VALUES }, () => 'v'.repeat(110));
+    const tags = Array.from({ length: MAX_EVENT_TAGS }, () => tag);
+    const started = performance.now();
+    let error: unknown;
+    try {
+      validateRequest(base('signEvent', { event: event({ tags }) }));
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(SignerError);
+    expect((error as SignerError).code).toBe('invalid_request');
+    expect((error as SignerError).message).toMatch(/large/i);
+    expect(performance.now() - started).toBeLessThan(200);
+  });
+
+  test('rejects an oversized plaintext before measuring it', () => {
+    const plaintext = 'x'.repeat(200_000_000);
+    const started = performance.now();
+    expect(invalid(base('nip44Encrypt', { pubkey: PUBKEY, plaintext }))).toMatch(/plaintext/i);
+    expect(performance.now() - started).toBeLessThan(200);
   });
 
   test('measures the event in bytes, not characters', () => {
