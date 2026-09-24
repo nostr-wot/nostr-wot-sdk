@@ -54,6 +54,10 @@ interface SecretState {
   clientPubkey?: string;
   /** True once the handler approved that client's `connect`. */
   confirmed: boolean;
+  /** Approvals in flight for the bound client. The binding is released only when this reaches zero unconfirmed. */
+  pending: number;
+  /** Who minted the secret: the host (`createBunkerUri`) or a client's `nostrconnect://` URI. */
+  origin: "bunker" | "nostrconnect";
 }
 
 interface RelaySubscription {
@@ -205,7 +209,7 @@ export class BunkerServer {
     if (existing) {
       existing.relays = relays;
     } else {
-      this.#secrets.set(secret, { relays, confirmed: false });
+      this.#secrets.set(secret, { relays, confirmed: false, pending: 0, origin: "bunker" });
     }
     return { uri: createBunkerUri({ pubkey: this.#pubkey, relays, secret }), secret };
   }
@@ -221,10 +225,10 @@ export class BunkerServer {
    */
   async acceptNostrConnect(uri: string): Promise<NostrConnectPairing> {
     const parsed = parseNostrConnectUri(uri);
-    const existing = this.#secrets.get(parsed.secret);
-    if (existing && existing.clientPubkey !== parsed.clientPubkey) {
-      throw new BunkerError("secret already in use");
-    }
+    // Bind the secret and register the client's relays before the handler runs,
+    // so a concurrent accept with the same secret is refused, and an auth_url
+    // sent during approval goes to the client's relays rather than the host's.
+    const record = this.#bind(parsed.secret, parsed.clientPubkey, parsed.relays, "secret already in use");
     const metadata: Record<string, string> = {};
     if (parsed.name) metadata.name = parsed.name;
     if (parsed.url) metadata.url = parsed.url;
@@ -235,9 +239,15 @@ export class BunkerServer {
       method: "connect",
       params: [this.#pubkey, parsed.secret, parsed.perms.join(","), JSON.stringify(metadata)],
     };
-    await this.#runHandler(request);
-
-    this.#secrets.set(parsed.secret, { relays: parsed.relays, clientPubkey: parsed.clientPubkey, confirmed: true });
+    try {
+      await this.#runHandler(request);
+    } catch (err) {
+      this.#unbind(record, parsed.secret);
+      throw err;
+    }
+    record.pending -= 1;
+    record.confirmed = true;
+    record.relays = parsed.relays;
     await this.#admit(parsed.clientPubkey, parsed.secret, parsed.relays);
     this.#log.info?.("nostrconnect: client paired", { clientPubkey: parsed.clientPubkey, relays: parsed.relays });
     await this.#send(parsed.clientPubkey, { id: request.id, result: parsed.secret }, parsed.relays);
@@ -445,6 +455,10 @@ export class BunkerServer {
   async #dispatch(clientPubkey: string, parsed: ParsedRequest, sourceRelay: string): Promise<void> {
     const request: BunkerRequest = { ...parsed, clientPubkey };
     this.#log.debug?.("request", { clientPubkey, id: request.id, method: request.method });
+    const wasConnected = this.#clients.has(clientPubkey);
+    // A client that logged out while this request was in flight has released
+    // its relays; answering now would re-open one of them for nobody.
+    const goneMeanwhile = () => wasConnected && !this.#clients.has(clientPubkey);
     let result: string;
     try {
       if (request.method === "ping") {
@@ -461,7 +475,15 @@ export class BunkerServer {
     } catch (err) {
       const error = this.#wireError(err, request);
       this.#log.info?.("request refused", { clientPubkey, id: request.id, method: request.method, error });
+      if (goneMeanwhile()) {
+        this.#log.debug?.("response dropped: client left while the request was in flight", { clientPubkey, id: request.id });
+        return;
+      }
       await this.#send(clientPubkey, { id: request.id, error }, this.#clients.get(clientPubkey)?.relays ?? [sourceRelay]);
+      return;
+    }
+    if (goneMeanwhile()) {
+      this.#log.debug?.("response dropped: client left while the request was in flight", { clientPubkey, id: request.id });
       return;
     }
     await this.#send(clientPubkey, { id: request.id, result }, this.#clients.get(clientPubkey)?.relays ?? [sourceRelay]);
@@ -472,25 +494,58 @@ export class BunkerServer {
 
   async #connect(request: BunkerRequest, sourceRelay: string): Promise<string> {
     const secret = request.params[1] ?? "";
-    let record = secret ? this.#secrets.get(secret) : undefined;
-    if (this.#opts.requireSecret && !record) throw new BunkerError("invalid secret");
-    if (record?.clientPubkey && record.clientPubkey !== request.clientPubkey) {
-      throw new BunkerError("secret already used by another client");
-    }
+    if (this.#opts.requireSecret && !(secret && this.#secrets.has(secret))) throw new BunkerError("invalid secret");
     // Bind before the approval await, so a second client presenting the same
-    // secret while this one is pending is refused rather than raced in.
-    const claimed = record !== undefined && record.clientPubkey === undefined;
-    if (record && claimed) record.clientPubkey = request.clientPubkey;
+    // secret while this one is pending is refused rather than raced in. The
+    // binding is refcounted: it is released only when the client's last pending
+    // approval is rejected and none was ever confirmed.
+    const record = secret && this.#secrets.has(secret)
+      ? this.#bind(secret, request.clientPubkey, undefined, "secret already used by another client")
+      : undefined;
     try {
       await this.#runHandler(request);
     } catch (err) {
-      if (record && claimed && !record.confirmed) delete record.clientPubkey;
+      if (record) this.#unbind(record, secret);
       throw err;
     }
-    if (record) record.confirmed = true;
+    if (record) {
+      record.pending -= 1;
+      record.confirmed = true;
+    }
     await this.#admit(request.clientPubkey, secret || undefined, record?.relays ?? [sourceRelay]);
     this.#log.info?.("client connected", { clientPubkey: request.clientPubkey });
     return "ack";
+  }
+
+  /**
+   * Bind `secret` to `clientPubkey` (creating the record when `relays` is given)
+   * and count one pending approval. Throws when the secret is held by another
+   * client, pending or confirmed.
+   */
+  #bind(secret: string, clientPubkey: string, relays: string[] | undefined, refusal: string): SecretState {
+    let record = this.#secrets.get(secret);
+    if (record?.clientPubkey && record.clientPubkey !== clientPubkey) throw new BunkerError(refusal);
+    if (!record) {
+      if (!relays) throw new BunkerError("invalid secret");
+      record = { relays, confirmed: false, pending: 0, origin: "nostrconnect" };
+      this.#secrets.set(secret, record);
+    } else if (relays && !record.confirmed && record.pending === 0) {
+      record.relays = relays;
+    }
+    record.clientPubkey = clientPubkey;
+    record.pending += 1;
+    return record;
+  }
+
+  /** Undo one pending approval; free the secret when nothing else holds it. */
+  #unbind(record: SecretState, secret: string): void {
+    record.pending -= 1;
+    if (record.pending <= 0 && !record.confirmed) {
+      record.pending = 0;
+      delete record.clientPubkey;
+      // A record that only ever existed for this rejected nostrconnect pairing goes away entirely.
+      if (record.origin === "nostrconnect" && this.#secrets.get(secret) === record) this.#secrets.delete(secret);
+    }
   }
 
   /** Mark a client connected, pinning its dedup window and its relay set. Resolves once its relays are subscribed. */
