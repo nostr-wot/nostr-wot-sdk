@@ -54,11 +54,62 @@ describe('the envelope', () => {
     expect(validateRequest(input).request.origin.identifier).toBe('sub.example.com');
   });
 
-  test('refuses a colon in a web identifier, so a transport namespace cannot be forged', () => {
-    for (const identifier of ['nip55:com.evil.app', 'nip46:' + PUBKEY, 'example.com:443', 'https://example.com']) {
-      expect(invalid({ ...base('getPublicKey', {}), origin: { kind: 'web', identifier } })).toMatch(/hostname/i);
+  test('accepts an exact http(s) origin, which is what a browser sends, as its own key', () => {
+    for (const identifier of [
+      'https://example.com',
+      'http://example.com',
+      'http://localhost:3000',
+      'http://[::1]:8080',
+      'https://example.com.',
+      'https://sub.example.com:8443',
+    ]) {
+      const input = { ...base('getPublicKey', {}), origin: { kind: 'web' as const, identifier } };
+      expect(validateRequest(input).request.origin.identifier).toBe(identifier);
+    }
+  });
+
+  test('an origin that is not exactly what the URL parser produces is refused', () => {
+    for (const identifier of [
+      'https://EXAMPLE.COM',
+      'https://example.com/',
+      'https://example.com:443',
+      'https://example.com/path',
+      'https://user@example.com',
+    ]) {
+      expect(invalid({ ...base('getPublicKey', {}), origin: { kind: 'web', identifier } })).toMatch(/origin|hostname/i);
+    }
+  });
+
+  test('refuses a colon in anything that is not an http(s) origin, so a transport namespace cannot be forged', () => {
+    for (const identifier of [
+      'nip55:com.evil.app',
+      'nip46:' + PUBKEY,
+      'example.com:443',
+      'localhost:3000',
+      '[::1]',
+      'ftp://example.com',
+      'file:///etc/passwd',
+      'nostr:example.com',
+    ]) {
+      expect(invalid({ ...base('getPublicKey', {}), origin: { kind: 'web', identifier } })).toMatch(/origin|hostname/i);
     }
     expect(invalid({ ...base('getPublicKey', {}), origin: { kind: 'web', identifier: '...' } })).toMatch(/empty/i);
+  });
+
+  test('a request whose fields throw when read is an invalid request, not a raw error', () => {
+    const booby = {
+      ...base('getPublicKey', {}),
+      get id(): string {
+        throw new Error('caller-controlled text');
+      },
+    };
+    expect(invalid(booby)).not.toMatch(/caller-controlled/);
+    const trapped = new Proxy(base('getPublicKey', {}), {
+      get() {
+        throw new Error('trap');
+      },
+    });
+    expect(invalid(trapped)).not.toMatch(/trap/);
   });
 
   test('a nip46 identifier is a lowercase hex pubkey', () => {
@@ -195,6 +246,15 @@ describe('signEvent', () => {
     expect(error).toBeInstanceOf(SignerError);
     expect((error as SignerError).code).toBe('invalid_request');
     expect((error as SignerError).message).toMatch(/large/i);
+    expect(performance.now() - started).toBeLessThan(200);
+  });
+
+  test('rejects a single oversized value in the last tag before copying or serialising it', () => {
+    // No per-value length cap exists, so the accumulated per-value check is the only thing
+    // between one huge value and the copy plus stringify. Isolated here: one tag, one value.
+    const tags = [['x'.repeat(200_000_000)]];
+    const started = performance.now();
+    expect(invalid(base('signEvent', { event: event({ tags }) }))).toMatch(/large/i);
     expect(performance.now() - started).toBeLessThan(200);
   });
 

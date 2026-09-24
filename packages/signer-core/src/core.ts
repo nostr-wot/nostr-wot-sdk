@@ -59,13 +59,26 @@ import type {
 /**
  * The key a request's origin is stored under in permissions.
  *
- * A web origin is stored bare, so the keys the extension has already written keep working.
- * Everything else is prefixed with its kind, because an Android package name and a hostname
- * are both dotted strings and a permission granted to one must not be found by the other.
- * The boundary refuses a `:` in a web identifier, so a web caller cannot spell a prefix.
+ * A web identifier is stored as itself: the exact http(s) origin the extension already keys
+ * on (`https://example.com`), or the bare hostname older stores used, which the boundary has
+ * already folded. Everything else is prefixed with its kind, because an Android package name
+ * and a hostname are both dotted strings and a permission granted to one must not be found
+ * by the other. The boundary refuses any web identifier with a `:` that is not an exact
+ * http(s) origin, so a web caller cannot spell a prefix.
  */
 export function permissionOrigin(origin: RequestOrigin): string {
   return origin.kind === 'web' ? origin.identifier : `${origin.kind}:${origin.identifier}`;
+}
+
+/** The id for a log line, from an object whose every read is untrusted and may throw. */
+function requestIdForLog(request: unknown): string {
+  try {
+    if (typeof request !== 'object' || request === null) return '';
+    const id: unknown = (request as { id?: unknown }).id;
+    return typeof id === 'string' ? id : '';
+  } catch {
+    return '';
+  }
 }
 
 interface Cooldown {
@@ -175,7 +188,7 @@ export class SignerCore {
     try {
       validated = validateRequest(request);
     } catch (error) {
-      throw this.#toSignerError(error, 'pipeline', typeof request === 'object' && request ? String((request as { id?: unknown }).id ?? '') : '');
+      throw this.#toSignerError(error, 'pipeline', requestIdForLog(request));
     }
     const context: RunContext = { account: null, phase: 'pipeline' };
     try {

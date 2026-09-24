@@ -96,21 +96,44 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
+/** Exactly what a page's `location.origin` is: an http(s) origin the parser hands back unchanged. */
+function isExactHttpOrigin(identifier: string): boolean {
+  try {
+    const url = new URL(identifier);
+    return (url.protocol === 'http:' || url.protocol === 'https:') && url.origin === identifier;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * One spelling per caller, so a permission stored for one cannot be dodged by another.
  *
- * A web host is case-insensitive and `example.com.` is `example.com`, so both are folded
- * here; a stored deny for `example.com` would otherwise let `EXAMPLE.COM` through to a
- * prompt. A `:` in a web identifier is refused outright, because the permission key for every
- * other origin kind is `kind:identifier` and a web caller naming itself `nip55:com.evil.app`
- * would read the grant a real Android package earned. A NIP-46 client is its hex pubkey and
- * is folded to lowercase for the same reason.
+ * A web identifier is one of two things. The first is an exact http(s) origin, which is what
+ * the extension sends (the page's `location.origin`) and what `@nostr-wot/permissions` keys on:
+ * its `siteScopes` reads the exact origin and, underneath it, the bare hostname that older
+ * stores used. That form is accepted only when the URL parser hands it back unchanged, so
+ * `https://EXAMPLE.COM`, a path, a default port or credentials are refused rather than
+ * silently re-spelled, and `http://` and `https://` stay two keys. Whatever the parser
+ * normalises is what is stored; it keeps a trailing dot, so `https://example.com.` is its
+ * own origin, exactly as a page would report it.
+ *
+ * The second is a bare hostname, the legacy key: folded to lowercase, trailing dots removed,
+ * because `EXAMPLE.COM` and `example.com.` would otherwise dodge a deny stored for
+ * `example.com`. Anything else containing a `:` is refused. The permission key for every
+ * other origin kind is `kind:identifier`, so a web caller naming itself `nip55:com.evil.app`
+ * would read the grant a real Android package earned; and `localhost:3000` or `[::1]` as bare
+ * forms are refused deliberately, since a local development page arrives as
+ * `http://localhost:3000` or `http://[::1]:8080`, which the origin form accepts.
+ *
+ * A NIP-46 client is its hex pubkey and is folded to lowercase for the same reason.
  */
 function canonicalIdentifier(kind: RequestOrigin['kind'], identifier: string): string {
   switch (kind) {
     case 'web': {
+      if (isExactHttpOrigin(identifier)) return identifier;
       if (identifier.includes(':')) {
-        throw invalid('origin.identifier for a web origin must be a bare hostname');
+        throw invalid('origin.identifier for a web origin must be an exact http(s) origin or a bare hostname');
       }
       const host = identifier.toLowerCase().replace(/\.+$/, '');
       if (host.length === 0) throw invalid('origin.identifier must not be empty');
@@ -243,6 +266,17 @@ function wireParams(params: ValidatedParams): Record<string, unknown> {
  *         string arrays as `tags`; a pubkey is 64 lowercase hex characters; sizes are bounded.
  */
 export function validateRequest(input: unknown): ValidatedRequest {
+  try {
+    return validate(input);
+  } catch (error) {
+    // Reading the input is itself untrusted: a getter or a Proxy trap can throw whatever it
+    // likes. That is a malformed request, and its text is the caller's, not ours to echo.
+    if (error instanceof SignerError) throw error;
+    throw invalid('request could not be read');
+  }
+}
+
+function validate(input: unknown): ValidatedRequest {
   if (!isRecord(input)) throw invalid('request must be an object');
   const id = requireNonEmptyString(input['id'], 'id');
   const origin = validateOrigin(input['origin']);

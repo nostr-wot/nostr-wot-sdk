@@ -78,8 +78,13 @@ characters, and the extension's size limits, applied before anything large is co
 serialised. What comes out is a frozen deep copy: the prompt shows it and the signer signs it,
 so the two cannot drift.
 
-Origins are canonical: a `web` identifier is lower-cased, loses any trailing dot and may not
-contain `:`; a `nip46` identifier is a lowercase hex pubkey.
+Origins are canonical. A `web` identifier is either an exact http(s) origin, which is what a
+browser's `location.origin` is and what `@nostr-wot/permissions` keys on (`http://` and
+`https://` are different keys, and the exact origin also reads the legacy bare-hostname rule
+underneath it), or a bare hostname, lower-cased with trailing dots removed. Anything else with
+a `:` is refused, so a web caller cannot spell another transport's namespace; that includes a
+bare `localhost:3000` or `[::1]`, which arrive as `http://localhost:3000` and `http://[::1]:8080`
+anyway. A `nip46` identifier is a lowercase hex pubkey.
 
 ## Optional ports
 
@@ -105,6 +110,6 @@ Pass `handlerTimeoutMs: 0` to the bunker. This pipeline owns the request timeout
 
 ## Permission keys
 
-A web origin is stored bare, as the browser extension already stores it. Every other origin
-kind is prefixed: `nip46:<pubkey>`, `nip55:<package>`, `lan:<device>`, `local:<id>`. See
-`permissionOrigin`.
+A web identifier is stored as itself: the exact origin (`https://example.com`), or the bare
+hostname older stores used. Every other origin kind is prefixed: `nip46:<pubkey>`,
+`nip55:<package>`, `lan:<device>`, `local:<id>`. See `permissionOrigin`.

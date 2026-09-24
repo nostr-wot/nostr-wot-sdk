@@ -251,6 +251,60 @@ describe('permissions come before everything', () => {
     expect(approval.presented).toHaveLength(0);
   });
 
+  test('a browser origin is accepted, and http and https are different keys', async () => {
+    const { core, permissions, approval } = await fixture(true);
+    await permissions.save('https://example.com', 'signEvent', 1, 'allow');
+    const secure = { ...req('signEvent', { kind: 1 }), origin: { kind: 'web' as const, identifier: 'https://example.com' } };
+    await core.handle(secure);
+    expect(approval.presented).toHaveLength(0);
+    const plain = { ...req('signEvent', { kind: 1 }), origin: { kind: 'web' as const, identifier: 'http://example.com' } };
+    await core.handle(plain);
+    expect(approval.presented).toHaveLength(1);
+    expect(approval.presented[0]!.request.origin.identifier).toBe('http://example.com');
+  });
+
+  test('an exact-origin deny is consulted for the origin form', async () => {
+    const { core, permissions, approval } = await fixture(true);
+    await permissions.save('https://example.com', 'signEvent', 1, 'deny');
+    const secure = { ...req('signEvent', { kind: 1 }), origin: { kind: 'web' as const, identifier: 'https://example.com' } };
+    await expect(core.handle(secure)).rejects.toThrow(/denied/i);
+    expect(approval.presented).toHaveLength(0);
+  });
+
+  test('the origin form also reads the legacy hostname rule, and the bare form reads only itself, as siteScopes intends', async () => {
+    const { core, permissions, approval } = await fixture(true);
+    // Legacy: stored under the bare hostname. The origin form still sees it.
+    await permissions.save('example.com', 'signEvent', 1, 'deny');
+    const secure = { ...req('signEvent', { kind: 1 }), origin: { kind: 'web' as const, identifier: 'https://example.com' } };
+    await expect(core.handle(secure)).rejects.toThrow(/denied/i);
+    // Exact: stored under the origin. The bare form is its own scope and does not see it.
+    await permissions.clear('example.com');
+    await permissions.save('https://example.com', 'signEvent', 7, 'deny');
+    await core.handle(req('signEvent', { kind: 7 }));
+    expect(approval.presented).toHaveLength(1);
+    const dotted = { ...req('signEvent', { kind: 7 }), origin: { kind: 'web' as const, identifier: 'https://example.com' } };
+    await expect(core.handle(dotted)).rejects.toThrow(/denied/i);
+  });
+
+  test('a request whose id throws when read is a SignerError, never a raw error', async () => {
+    const { core } = await fixture(true);
+    const booby = {
+      ...req('getPublicKey'),
+      get id(): string {
+        throw new Error('caller-controlled text');
+      },
+    };
+    let outcome: unknown;
+    try {
+      await core.handle(booby as SignerRequest);
+    } catch (error) {
+      outcome = error;
+    }
+    expect(outcome).toBeInstanceOf(SignerError);
+    expect(outcome).toMatchObject({ code: 'invalid_request' });
+    expect((outcome as Error).message).not.toContain('caller-controlled');
+  });
+
   test('a web caller cannot spell another transport\'s namespace to borrow its grant', async () => {
     const { core, permissions, approval } = await fixture(true);
     await permissions.save('nip55:com.evil.app', 'signEvent', 1, 'allow');
