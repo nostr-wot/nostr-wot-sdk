@@ -135,3 +135,20 @@ export function zeroMemoryAccount(acct: MemoryAccount): void {
   acct.pqKemSecretBytes?.fill(0);
   acct.pqDsaSecretBytes?.fill(0);
 }
+
+/**
+ * Zero every secret an unlocked vault holds: the cache key and each account's key material.
+ *
+ * What `lock()` runs. It deliberately zeroes rather than dropping the references, because
+ * dropping a reference only makes the bytes unreachable to this code, not to whatever else
+ * can read the heap — a crash dump, a debugger, a memory-scraping page, the swap file the
+ * process was paged out to. The buffers stay in place and readable until the collector
+ * happens to get to them, which is not a guarantee anyone can make about an nsec.
+ *
+ * The payload is left structurally intact, with its public metadata: it is the secrets that
+ * are destroyed, not the object.
+ */
+export function zeroMemoryPayload(payload: MemoryVaultPayload): void {
+  payload.cacheKeyBytes?.fill(0);
+  for (const account of payload.accounts) zeroMemoryAccount(account);
+}
