@@ -5,6 +5,21 @@
  * `src/lib/crypto/bip39.ts` and `src/constants/crypto/bip32.ts`. The extension's wrappers are
  * async for historical reasons; nothing underneath them is, so these are synchronous.
  *
+ * ## Sub-account convention
+ *
+ * Sub-account `n` lives at `m/44'/1237'/0'/0/{n}` — the **last** component varies, the account
+ * component stays at `0'`. Some other signers vary the account component instead, deriving
+ * `m/44'/1237'/{n}'/0/0`, which is the stricter reading of NIP-06.
+ *
+ * This package follows the extension, deliberately, because the extension has shipped. A user
+ * who created sub-accounts there and then restores the same seed phrase in the mobile app must
+ * get the same identities back. Deriving the other way would hand them a different set of keys
+ * with no error at all, and the only reasonable conclusion they could draw is that their
+ * accounts were lost. Protocol purity loses to not destroying identities that exist.
+ *
+ * Index 0 is `m/44'/1237'/0'/0/0` under either convention, so the published NIP-06 vector holds
+ * regardless; the two only diverge from index 1 onward.
+ *
  * @see https://github.com/nostr-protocol/nips/blob/master/06.md — NIP-06
  */
 import { HDKey } from '@scure/bip32';
@@ -14,7 +29,7 @@ import {
   validateMnemonic as bip39Validate,
 } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
-import { schnorr } from '@noble/curves/secp256k1.js';
+import { schnorr, secp256k1 } from '@noble/curves/secp256k1.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
 
 export const NIP06_PATH = "m/44'/1237'/0'/0/0";
@@ -57,12 +72,18 @@ export function standardDerivationIndex(path: string): number | null {
   return /^\d+$/.test(suffix) ? Number(suffix) : null;
 }
 
-/** The NIP-06 path for account `index`: m/44'/1237'/{index}'/0/0. */
+/**
+ * The path for sub-account `index`: `m/44'/1237'/0'/0/{index}`.
+ *
+ * Built from {@link NIP06_ACCOUNT_PREFIX} rather than by formatting a template, so this and
+ * {@link standardDerivationIndex} cannot drift apart: `standardDerivationIndex(derivationPath(n))`
+ * is `n` for every valid `n`, which is what lets a stored path recover its account index.
+ */
 export function derivationPath(index: number): string {
   if (!Number.isInteger(index) || index < 0 || index > MAX_BIP32_INDEX) {
     throw new Error('Invalid derivation index');
   }
-  return `m/44'/1237'/${index}'/0/0`;
+  return NIP06_ACCOUNT_PREFIX + index;
 }
 
 export function validateMnemonic(mnemonic: string): boolean {
@@ -104,6 +125,19 @@ export function derivePath(seed: Uint8Array, path: string): Uint8Array {
 /** The x-only (32-byte) public key, hex encoded, as Nostr uses it. */
 export function publicKeyFromPrivate(privkey: Uint8Array): string {
   return bytesToHex(schnorr.getPublicKey(privkey));
+}
+
+/**
+ * Is this a usable secp256k1 secret key: 32 bytes, and a scalar in `1 .. n-1`?
+ *
+ * Thirty-two bytes of the right length is not the same as a key. All-zero and anything at or
+ * above the curve order are out of range, and every operation on them throws. Checking here
+ * means a bad import is rejected where the user can still fix it, instead of surfacing as a
+ * curve-internal error message somewhere downstream.
+ */
+export function isValidPrivateKey(privkey: Uint8Array): boolean {
+  if (!(privkey instanceof Uint8Array) || privkey.length !== 32) return false;
+  return secp256k1.utils.isValidSecretKey(privkey);
 }
 
 /**

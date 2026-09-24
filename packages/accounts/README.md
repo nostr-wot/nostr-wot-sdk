@@ -23,7 +23,7 @@ npm i @nostr-wot/accounts
 import { deriveFromMnemonic, derivationPath, generateMnemonic } from '@nostr-wot/accounts';
 
 const mnemonic = generateMnemonic();            // 24 words; pass 128 for 12
-derivationPath(3);                              // "m/44'/1237'/3'/0/0"
+derivationPath(3);                              // "m/44'/1237'/0'/0/3"
 
 const { privkey, pubkey, path } = deriveFromMnemonic(mnemonic, 0);
 // privkey is live key material — zero it once the account is built.
@@ -34,11 +34,31 @@ privkey.fill(0);
 keys are derived from the same seed, and at 12 words the seed, not the algorithm, becomes the
 weakest link.
 
+### Sub-account paths: read this before changing them
+
+Sub-account `n` is at **`m/44'/1237'/0'/0/{n}`** — the last component varies, the account
+component stays at `0'`. Some other signers vary the account component instead, deriving
+`m/44'/1237'/{n}'/0/0`, which is the stricter reading of NIP-06.
+
+This package follows the browser extension, deliberately, because the extension has shipped.
+Someone who created sub-accounts there and then restores the same seed phrase in the mobile app
+has to get the same identities back. Deriving the other way would hand them a different set of
+keys with no error at all, and the only reasonable conclusion they could draw is that their
+accounts were lost. Protocol purity loses to not destroying identities that already exist.
+
+Index 0 is `m/44'/1237'/0'/0/0` under either convention, so the published NIP-06 test vector
+holds regardless. The two only diverge from index 1 onward.
+
+`standardDerivationIndex(derivationPath(n)) === n` for every valid `n`; that round-trip is what
+lets a stored path recover its account index, and it is covered by a test.
+
 ## Import
 
 `parseImportInput` validates; it does not merely match a prefix. A bech32 string whose checksum
-does not hold returns `null`, because an accepted-but-wrong npub becomes a watch-only account
-pointing at a pubkey nobody holds, and the user finds out weeks later.
+does not hold returns `null`, an `nsec` whose bytes are not a curve scalar returns `null`, and an
+`ncryptsec` with an unknown version or a truncated payload returns `null` — because an
+accepted-but-wrong npub becomes a watch-only account pointing at a pubkey nobody holds, and the
+user finds out weeks later.
 
 ```ts
 import { parseImportInput } from '@nostr-wot/accounts';
@@ -50,7 +70,28 @@ parseImportInput('bunker://<64 hex>?relay=…'); // { kind: 'bunker', uri }
 parseImportInput('<64 hex>');      // { kind: 'hex-private', privkey }
 parseImportInput('twelve or twenty four words…'); // { kind: 'mnemonic', mnemonic }
 parseImportInput('npub1qqqq…');    // null — bad checksum
+parseImportInput('0'.repeat(64));  // null — not a valid secp256k1 scalar
 ```
+
+### `detectImportKind` — for the error message, never for the decision
+
+Strict parsing alone leaves the UI with nothing useful to say. A seed phrase with one mistyped
+word is, to `parseImportInput`, indistinguishable from random text, and "unrecognized input" is a
+cruel message to show someone in the middle of recovering an identity.
+
+`detectImportKind` classifies by shape and validates nothing, so the caller can name what the
+user was evidently trying to paste:
+
+```ts
+import { detectImportKind, parseImportInput } from '@nostr-wot/accounts';
+
+const input = 'ladder monkey parrot …';   // one word mistyped
+parseImportInput(input);                  // null      — do not import this
+detectImportKind(input);                  // 'mnemonic' — "that seed phrase has a typo"
+```
+
+Never branch on `detectImportKind` to decide that material is usable. That is what
+`parseImportInput` is for.
 
 ## NIP-49 (ncryptsec)
 

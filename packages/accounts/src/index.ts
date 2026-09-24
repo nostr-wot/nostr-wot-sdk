@@ -19,6 +19,7 @@ export {
   deriveFromMnemonic,
   derivePath,
   generateMnemonic,
+  isValidPrivateKey,
   mnemonicToSeed,
   normalizeDerivationPath,
   publicKeyFromPrivate,
@@ -26,7 +27,7 @@ export {
   validateMnemonic,
 } from './derivation.js';
 
-export type { ImportInput } from './import.js';
+export type { ImportInput, ImportKind } from './import.js';
 export {
   BUNKER_PREFIX,
   ENCRYPTED_PRIVATE_KEY_PREFIX,
@@ -34,6 +35,7 @@ export {
   PRIVATE_KEY_HEX_PATTERN,
   PRIVATE_KEY_PREFIX,
   PUBLIC_KEY_PREFIX,
+  detectImportKind,
   parseImportInput,
 } from './import.js';
 

@@ -8,8 +8,11 @@ import {
   LEGACY_PBKDF2_ITERATIONS,
   VERSION_LEGACY,
   decryptNcryptsec,
+  detectImportKind,
   encryptNcryptsec,
+  npubDecode,
   npubEncode,
+  nsecDecode,
   nsecEncode,
   parseImportInput,
   shortNpub,
@@ -17,6 +20,12 @@ import {
 
 const MNEMONIC = 'leader monkey parrot ring guide accident before fence cannon height naive bean';
 const KEY = new Uint8Array(32).fill(4);
+const PUBKEY_HEX = 'e'.repeat(64);
+const PUBKEY_NPUB = 'npub1amhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhqmtnwcq';
+
+function flipLastChar(value: string): string {
+  return value.slice(0, -1) + (value.endsWith('q') ? 'p' : 'q');
+}
 
 describe('parseImportInput', () => {
   test('import input is classified by shape, and nonsense is rejected', () => {
@@ -30,29 +39,21 @@ describe('parseImportInput', () => {
   test('a valid nsec yields its private key bytes', () => {
     const parsed = parseImportInput(nsecEncode(KEY));
     expect(parsed?.kind).toBe('nsec');
-    expect(parsed).toMatchObject({ kind: 'nsec' });
     if (parsed?.kind !== 'nsec') throw new Error('unreachable');
     expect(bytesToHex(parsed.privkey)).toBe(bytesToHex(KEY));
   });
 
   test('a valid npub yields a hex pubkey and is not mistaken for a private key', () => {
-    const pubkeyHex = 'e'.repeat(64);
-    const parsed = parseImportInput(npubEncode(pubkeyHex));
+    const parsed = parseImportInput(PUBKEY_NPUB);
     expect(parsed?.kind).toBe('npub');
     if (parsed?.kind !== 'npub') throw new Error('unreachable');
-    expect(parsed.pubkey).toBe(pubkeyHex);
+    expect(parsed.pubkey).toBe(PUBKEY_HEX);
   });
 
   test('a bech32 string with a bad checksum is rejected for every prefix', () => {
-    const goodNsec = nsecEncode(KEY);
-    // Flip one data character; the checksum can no longer hold.
-    const badNsec = goodNsec.slice(0, -1) + (goodNsec.endsWith('q') ? 'p' : 'q');
-    expect(parseImportInput(badNsec)).toBe(null);
-
-    const goodNcryptsec = encryptNcryptsec(KEY, 'hunter22', 8);
-    const badNcryptsec =
-      goodNcryptsec.slice(0, -1) + (goodNcryptsec.endsWith('q') ? 'p' : 'q');
-    expect(parseImportInput(badNcryptsec)).toBe(null);
+    expect(parseImportInput(flipLastChar(nsecEncode(KEY)))).toBe(null);
+    expect(parseImportInput(flipLastChar(encryptNcryptsec(KEY, 'hunter22', 8)))).toBe(null);
+    expect(parseImportInput(flipLastChar(npubEncode(PUBKEY_HEX)))).toBe(null);
   });
 
   test('a bare 64-char hex string is a private key', () => {
@@ -67,6 +68,75 @@ describe('parseImportInput', () => {
 
   test('a bunker uri without a 64-char hex pubkey is rejected', () => {
     expect(parseImportInput('bunker://nope')).toBe(null);
+  });
+
+  test('a private key that is not a valid curve scalar is rejected', () => {
+    // Right length, valid checksum, unusable key: every one of these throws inside the curve
+    // later, so accepting them here would only move the failure somewhere less explainable.
+    const zero = new Uint8Array(32);
+    const overOrder = new Uint8Array(32).fill(0xff);
+
+    expect(parseImportInput(nsecEncode(zero))).toBe(null);
+    expect(parseImportInput(nsecEncode(overOrder))).toBe(null);
+    expect(parseImportInput('0'.repeat(64))).toBe(null);
+    expect(parseImportInput('f'.repeat(64))).toBe(null);
+
+    // ...while the shape detector still says what they were meant to be.
+    expect(detectImportKind(nsecEncode(zero))).toBe('nsec');
+    expect(detectImportKind('0'.repeat(64))).toBe('hex-private');
+  });
+
+  test('an ncryptsec with a bad version byte or a truncated payload is rejected', () => {
+    const tiny = bech32.encode('ncryptsec', bech32.toWords(new Uint8Array(5)), 5000);
+    expect(parseImportInput(tiny)).toBe(null);
+    expect(detectImportKind(tiny)).toBe('ncryptsec');
+
+    // Correct v2 length, unknown version byte.
+    const wrongVersion = new Uint8Array(91);
+    wrongVersion[0] = 0x07;
+    const encoded = bech32.encode('ncryptsec', bech32.toWords(wrongVersion), 5000);
+    expect(parseImportInput(encoded)).toBe(null);
+
+    // Correct version byte, one byte short.
+    const truncated = new Uint8Array(90);
+    truncated[0] = 0x02;
+    expect(parseImportInput(bech32.encode('ncryptsec', bech32.toWords(truncated), 5000))).toBe(
+      null,
+    );
+  });
+
+  test('a mnemonic with a mistyped word fails its checksum and is rejected', () => {
+    const typo = MNEMONIC.replace('leader', 'ladder');
+    expect(typo).not.toBe(MNEMONIC);
+    expect(parseImportInput(typo)).toBe(null);
+  });
+});
+
+describe('detectImportKind', () => {
+  test('shape alone decides, with no validation at all', () => {
+    expect(detectImportKind(MNEMONIC)).toBe('mnemonic');
+    expect(detectImportKind(MNEMONIC.replace('leader', 'ladder'))).toBe('mnemonic');
+    expect(detectImportKind('npub1' + 'q'.repeat(58))).toBe('npub');
+    expect(detectImportKind('ncryptsec1anything')).toBe('ncryptsec');
+    expect(detectImportKind('nsec1anything')).toBe('nsec');
+    expect(detectImportKind('bunker://nope')).toBe('bunker');
+    expect(detectImportKind('0'.repeat(64))).toBe('hex-private');
+  });
+
+  test('this is the point: bad material still reports what it was meant to be', () => {
+    const typo = MNEMONIC.replace('leader', 'ladder');
+    const badNpub = 'npub1' + 'q'.repeat(58);
+    // The UI can say "that seed phrase has a typo" rather than "unrecognized input".
+    expect(parseImportInput(typo)).toBe(null);
+    expect(detectImportKind(typo)).toBe('mnemonic');
+    expect(parseImportInput(badNpub)).toBe(null);
+    expect(detectImportKind(badNpub)).toBe('npub');
+  });
+
+  test('genuinely unrecognizable input is null either way', () => {
+    expect(detectImportKind('not a key')).toBe(null);
+    expect(detectImportKind('   ')).toBe(null);
+    expect(detectImportKind('')).toBe(null);
   });
 });
 
@@ -113,13 +183,39 @@ describe('NIP-49 ncryptsec', () => {
 
     expect(decryptNcryptsec(legacy, 'hunter22')).toEqual(KEY);
     expect(() => decryptNcryptsec(legacy, 'wrong')).toThrow();
+    // ...and it classifies as importable, which is the whole point of keeping the path.
+    expect(parseImportInput(legacy)?.kind).toBe('ncryptsec');
+  });
+});
+
+describe('bech32 entities', () => {
+  test('npub encodes and decodes to a fixed, published-shape string', () => {
+    expect(npubEncode(PUBKEY_HEX)).toBe(PUBKEY_NPUB);
+    expect(npubDecode(PUBKEY_NPUB)).toBe(PUBKEY_HEX);
+  });
+
+  test('nsec round trips through bytes', () => {
+    expect(bytesToHex(nsecDecode(nsecEncode(KEY)))).toBe(bytesToHex(KEY));
+  });
+
+  test('decoding throws on a bad checksum or the wrong prefix', () => {
+    expect(() => npubDecode(flipLastChar(PUBKEY_NPUB))).toThrow();
+    expect(() => npubDecode(nsecEncode(KEY))).toThrow();
+    expect(() => nsecDecode(PUBKEY_NPUB)).toThrow();
+  });
+
+  test('only 32-byte material can be encoded', () => {
+    expect(() => npubEncode(new Uint8Array(31))).toThrow();
+    expect(() => nsecEncode(new Uint8Array(33))).toThrow();
   });
 });
 
 describe('display', () => {
   test('shortNpub abbreviates the bech32 form', () => {
-    const pubkeyHex = 'e'.repeat(64);
-    const npub = npubEncode(pubkeyHex);
-    expect(shortNpub(pubkeyHex)).toBe(npub.slice(0, 12) + '...' + npub.slice(-4));
+    expect(shortNpub(PUBKEY_HEX)).toBe('npub1amhwamh...nwcq');
+  });
+
+  test('a pubkey that will not encode falls back to the hex form', () => {
+    expect(shortNpub('deadbeef')).toBe('deadbeef...beef');
   });
 });
