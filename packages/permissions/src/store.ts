@@ -110,7 +110,12 @@ const RESTRICTIVENESS: Record<string, number> = { allow: 1, ask: 2, deny: 3 };
 /** Retired decision value, from when NIP-46 accounts auto-forwarded to a remote signer. */
 const RETIRED_FORWARD = 'forward' as PermissionDecision;
 
-/** Blanket keys the per-kind model made meaningless. */
+/**
+ * Blanket keys the per-kind model retired as GRANTS. A blanket `allow` is dropped by
+ * {@link Permissions.migrateToPerKind}; a blanket `deny` under any of these keys is kept,
+ * because the cascade still consults the bare method and the wildcard, so it is a refusal
+ * in force, and one a remembered "deny, every kind" writes today.
+ */
 const BLANKET_KEYS = [
   'signEvent',
   'nip04Encrypt',
@@ -461,11 +466,19 @@ export class Permissions {
   }
 
   /**
-   * Drops the blanket keys the per-kind model retired.
+   * Drops the blanket grants the per-kind model retired, and only the grants.
    *
    * A stored `signEvent: allow` used to mean "any event", which is a far broader grant
    * than anything the current UI can express, so it is removed rather than reinterpreted.
-   * The logical group keys (`sendMessages`, `readMessages`) are not blanket keys and stay.
+   * A stored `signEvent: deny` (or `*: deny`, or a bare method deny) is not a grant: the
+   * cascade still consults those levels and honours the refusal, and a remembered "deny,
+   * every kind" writes exactly that key. {@link migrate} re-runs every migration whenever
+   * the stored version differs, so deleting it here would wipe every remembered refusal on
+   * the next version bump. The logical group keys (`sendMessages`, `readMessages`) are not
+   * blanket keys and stay.
+   *
+   * This diverges from the browser extension, whose migration drops the deny too; the
+   * divergence is in the restrictive direction, and it is raised against the extension.
    */
   async migrateToPerKind(): Promise<void> {
     await this.#lock.run(async () => {
@@ -477,7 +490,7 @@ export class Permissions {
           for (const bucket of Object.keys(target)) {
             if (typeof target[bucket] !== 'object') continue;
             for (const key of BLANKET_KEYS) {
-              if (target[bucket][key]) {
+              if (target[bucket][key] && target[bucket][key] !== 'deny') {
                 delete target[bucket][key];
                 changed = true;
               }
@@ -488,7 +501,7 @@ export class Permissions {
           // Still flat: the keys sit directly on the origin.
           const flat = target as unknown as Record<string, unknown>;
           for (const key of BLANKET_KEYS) {
-            if (flat[key]) {
+            if (flat[key] && flat[key] !== 'deny') {
               delete flat[key];
               changed = true;
             }

@@ -349,7 +349,40 @@ describe('migrations', () => {
       'signEvent:1': 'allow',
       sendMessages: 'allow',
       readMessages: 'deny',
+      // A blanket deny is kept: the cascade still consults the bare method key, and a user
+      // who said no must not find the method allowed after an upgrade.
+      nip44Decrypt: 'deny',
     });
+  });
+
+  /**
+   * A blanket `deny` is not a grant the per-kind model cannot express; it is a refusal the
+   * cascade still honours at the method and wildcard levels, and it is exactly what a
+   * remembered "deny, every kind" writes. `migrate()` re-runs every migration whenever the
+   * stored version differs, so a migration that deleted it would wipe every remembered
+   * refusal on the next version bump.
+   */
+  test('migrateToPerKind keeps a blanket deny, in both the bucketed and the flat shape', async () => {
+    const store = new MemoryStore({
+      signerPermissions: {
+        'a.com': { _default: { signEvent: 'deny', '*': 'allow', 'signEvent:1': 'allow' }, acct: { '*': 'deny' } },
+        'flat.com': { signEvent: 'deny', nip04Encrypt: 'allow' },
+      },
+    });
+    const permissions = new Permissions(store);
+    await permissions.migrate();
+
+    expect(await raw(store)).toEqual({
+      'a.com': { _default: { signEvent: 'deny', 'signEvent:1': 'allow' }, acct: { '*': 'deny' } },
+      'flat.com': { _default: { signEvent: 'deny' } },
+    });
+    expect(await permissions.check('a.com', 'signEvent', 1)).toBe('deny');
+    await permissions.setUseGlobalDefaults(false);
+    expect(await permissions.check('a.com', 'getPublicKey', undefined, 'acct')).toBe('deny');
+    // And it survives the next bump too: running everything again changes nothing.
+    await store.set('_permMigrationVersion', 0);
+    await permissions.migrate();
+    expect(await permissions.check('a.com', 'signEvent', 1, 'acct')).toBe('deny');
   });
 
   test('migrateToPerKind empties an origin that held nothing but blanket keys', async () => {

@@ -199,6 +199,21 @@ describe('permissions come before everything', () => {
     expect(approval.presented).toHaveLength(0);
   });
 
+  test('a remembered refusal for every kind survives a permissions migration', async () => {
+    // `rememberKind: false` persists the bare `signEvent` key, which the migrations used to
+    // list as a retired blanket key and delete. This branch is what starts persisting denies.
+    const { core, permissions, approval } = await fixture(false);
+    approval.decide = async () => ({ allow: false, remember: true, rememberKind: false });
+    await expect(core.handle(req('signEvent', { kind: 1 }))).rejects.toThrow(/rejected/i);
+    expect(approval.presented).toHaveLength(1);
+
+    await permissions.migrate();
+    for (const kind of [1, 7, 30023]) {
+      await expect(core.handle(req('signEvent', { kind }))).rejects.toThrow(/denied/i);
+    }
+    expect(approval.presented).toHaveLength(1);
+  });
+
   test('a deny is refused before the vault is consulted', async () => {
     const { core, permissions, vault } = await fixture(true);
     await permissions.save('example.com', 'signEvent', 1, 'deny');
