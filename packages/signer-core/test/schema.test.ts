@@ -68,13 +68,26 @@ describe('the envelope', () => {
     }
   });
 
-  test('an origin that is not exactly what the URL parser produces is refused', () => {
+  test('an http(s) origin is canonicalised: scheme and host lowercased, a default port dropped', () => {
+    for (const [identifier, canonical] of [
+      ['https://EXAMPLE.COM', 'https://example.com'],
+      ['HTTPS://Example.com:443', 'https://example.com'],
+      ['http://Example.com:80', 'http://example.com'],
+      ['http://[0:0:0:0:0:0:0:1]:8080', 'http://[::1]:8080'],
+      ['http://127.1', 'http://127.0.0.1'],
+    ]) {
+      const input = { ...base('getPublicKey', {}), origin: { kind: 'web' as const, identifier: identifier! } };
+      expect(validateRequest(input).request.origin.identifier).toBe(canonical);
+    }
+  });
+
+  test('an http(s) URL that is not an origin, or carries credentials, is refused', () => {
     for (const identifier of [
-      'https://EXAMPLE.COM',
       'https://example.com/',
-      'https://example.com:443',
       'https://example.com/path',
+      'https://example.com?x',
       'https://user@example.com',
+      'https://user:pw@example.com',
     ]) {
       expect(invalid({ ...base('getPublicKey', {}), origin: { kind: 'web', identifier } })).toMatch(/origin|hostname/i);
     }

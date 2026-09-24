@@ -39,6 +39,6 @@ export {
 
 export { permissionKey, consultedKeys, resolve, resolveDetailed } from './key.js';
 
-export { siteScopes, hasSiteScope, originPermissionBucket } from './scope.js';
+export { canonicalHttpOrigin, siteScopes, hasSiteScope, originPermissionBucket, storageLabel } from './scope.js';
 
 export { Permissions, type PermissionsOptions } from './store.js';

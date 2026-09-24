@@ -19,6 +19,7 @@ import {
   ORIGIN_KINDS,
   SIGNER_METHODS,
 } from './constants.js';
+import { canonicalHttpOrigin } from '@nostr-wot/permissions';
 import { SignerError } from './errors.js';
 import type {
   EventTemplateInput,
@@ -96,27 +97,21 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
-/** Exactly what a page's `location.origin` is: an http(s) origin the parser hands back unchanged. */
-function isExactHttpOrigin(identifier: string): boolean {
-  try {
-    const url = new URL(identifier);
-    return (url.protocol === 'http:' || url.protocol === 'https:') && url.origin === identifier;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * One spelling per caller, so a permission stored for one cannot be dodged by another.
  *
- * A web identifier is one of two things. The first is an exact http(s) origin, which is what
- * the extension sends (the page's `location.origin`) and what `@nostr-wot/permissions` keys on:
- * its `siteScopes` reads the exact origin and, underneath it, the bare hostname that older
- * stores used. That form is accepted only when the URL parser hands it back unchanged, so
- * `https://EXAMPLE.COM`, a path, a default port or credentials are refused rather than
- * silently re-spelled, and `http://` and `https://` stay two keys. Whatever the parser
- * normalises is what is stored; it keeps a trailing dot, so `https://example.com.` is its
- * own origin, exactly as a page would report it.
+ * A web identifier is one of two things. The first is an http(s) origin, which is what the
+ * extension sends (the page's `location.origin`) and what `@nostr-wot/permissions` keys on:
+ * its `siteScopes` reads the canonical origin and, underneath it, the bare hostname that older
+ * stores used. It is canonicalised by `canonicalHttpOrigin` from that package — scheme and
+ * host lowercased, a default port dropped, addresses written one way — and refused when it
+ * carries credentials or anything after the authority, so `https://EXAMPLE.COM` and
+ * `https://example.com:443` become `https://example.com` while `https://example.com/` and
+ * `https://user@example.com` are turned away; `http://` and `https://` stay two keys, and a
+ * trailing dot is kept, so `https://example.com.` is its own origin, exactly as a page would
+ * report it. The parsing is that package's own, never the host's `URL`: React Native's does
+ * not fold case or ports, and a rule that only held under Node's parser held nowhere it
+ * mattered.
  *
  * The second is a bare hostname, the legacy key: folded to lowercase, trailing dots removed,
  * because `EXAMPLE.COM` and `example.com.` would otherwise dodge a deny stored for
@@ -131,7 +126,8 @@ function isExactHttpOrigin(identifier: string): boolean {
 function canonicalIdentifier(kind: RequestOrigin['kind'], identifier: string): string {
   switch (kind) {
     case 'web': {
-      if (isExactHttpOrigin(identifier)) return identifier;
+      const origin = canonicalHttpOrigin(identifier);
+      if (origin !== null) return origin;
       if (identifier.includes(':')) {
         throw invalid('origin.identifier for a web origin must be an exact http(s) origin or a bare hostname');
       }

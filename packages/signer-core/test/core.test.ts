@@ -189,6 +189,16 @@ describe('permissions come before everything', () => {
     expect(approval.cancelled).toHaveLength(0);
   });
 
+  test('a deny stored for an origin holds for every spelling of it', async () => {
+    const { core, permissions, approval } = await fixture(true);
+    await permissions.save('https://example.com', 'signEvent', 1, 'deny');
+    for (const identifier of ['https://EXAMPLE.COM', 'https://example.com:443', 'HTTPS://Example.Com:0443']) {
+      const request = { ...req('signEvent', { kind: 1 }), origin: { kind: 'web' as const, identifier } };
+      await expect(core.handle(request)).rejects.toThrow(/denied/i);
+    }
+    expect(approval.presented).toHaveLength(0);
+  });
+
   test('a deny is refused before the vault is consulted', async () => {
     const { core, permissions, vault } = await fixture(true);
     await permissions.save('example.com', 'signEvent', 1, 'deny');

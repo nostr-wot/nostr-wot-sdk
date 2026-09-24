@@ -47,7 +47,7 @@ import {
 } from './constants.js';
 import { permissionKey, resolveDetailed } from './key.js';
 import { AsyncLock } from './lock.js';
-import { originPermissionBucket, siteScopes } from './scope.js';
+import { originPermissionBucket, siteScopes, storageLabel } from './scope.js';
 import type {
   OriginPermissions,
   PermissionBucket,
@@ -197,10 +197,10 @@ export class Permissions {
     return structuredClone(await this.#load());
   }
 
-  /** One origin's buckets, all of them, as a copy. */
+  /** One origin's buckets, all of them, as a copy. Read under the label a write would use. */
   async getForOriginRaw(origin: string): Promise<OriginPermissions> {
     const perms = await this.#load();
-    return structuredClone(perms[origin] ?? {});
+    return structuredClone(perms[storageLabel(origin)] ?? {});
   }
 
   /**
@@ -261,12 +261,15 @@ export class Permissions {
         `${key} is never consulted: DM sign kinds resolve to "sendMessages". Write that key instead.`,
       );
     }
+    // Written under the canonical spelling, so the label a read consults is the one a write
+    // produced whatever the caller's casing or port: see `canonicalHttpOrigin`.
+    const label = storageLabel(origin);
     await this.#lock.run(async () => {
       const bucket = await this.#writeBucket(accountId);
       const perms = await this.#draft();
-      if (!perms[origin]) perms[origin] = {};
-      if (!perms[origin][bucket]) perms[origin][bucket] = {};
-      perms[origin][bucket][key] = decision;
+      if (!perms[label]) perms[label] = {};
+      if (!perms[label][bucket]) perms[label][bucket] = {};
+      perms[label][bucket][key] = decision;
       await this.#commit(perms);
     });
   }

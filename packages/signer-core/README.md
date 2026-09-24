@@ -78,10 +78,12 @@ characters, and the extension's size limits, applied before anything large is co
 serialised. What comes out is a frozen deep copy: the prompt shows it and the signer signs it,
 so the two cannot drift.
 
-Origins are canonical. A `web` identifier is either an exact http(s) origin, which is what a
-browser's `location.origin` is and what `@nostr-wot/permissions` keys on (`http://` and
-`https://` are different keys, and the exact origin also reads the legacy bare-hostname rule
-underneath it), or a bare hostname, lower-cased with trailing dots removed. Anything else with
+Origins are canonical. A `web` identifier is either an http(s) origin, which is what a
+browser's `location.origin` is and what `@nostr-wot/permissions` keys on — canonicalised by
+that package's own `canonicalHttpOrigin` (scheme and host lowercased, a default port dropped,
+credentials or a path refused; never the host's `URL`, which on React Native folds nothing),
+with `http://` and `https://` as different keys and the legacy bare-hostname rule read
+underneath — or a bare hostname, lower-cased with trailing dots removed. Anything else with
 a `:` is refused, so a web caller cannot spell another transport's namespace; that includes a
 bare `localhost:3000` or `[::1]`, which arrive as `http://localhost:3000` and `http://[::1]:8080`
 anyway. A `nip46` identifier is a lowercase hex pubkey.

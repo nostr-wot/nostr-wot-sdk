@@ -72,6 +72,14 @@ An `origin` is whatever identifies the caller: a web origin, an Android package 
 signer's public key. Only `http(s)` origins additionally answer to their bare hostname, which is
 how rules stored by older versions are still read.
 
+An `http(s)` origin is stored and read under one canonical spelling, computed by
+`canonicalHttpOrigin` in this package rather than by the host's `URL`: scheme and host
+lowercased, a default port dropped, IPv4 and IPv6 addresses written one way, and anything with
+credentials or a path refused. React Native's `URL` folds neither case nor ports, so a check
+built on `new URL(x).origin === x` would let `https://EXAMPLE.COM` and `https://example.com:443`
+each hold their own rules on a phone; `test/origin.test.ts` runs the same table under a `URL`
+shaped like React Native's and checks the parser is never consulted.
+
 **Every mutating method throws on an empty origin, key or account id.** `''` type-checks wherever
 a label is expected and means nothing, so it is treated as a caller bug rather than as a wildcard
 or a no-op — notably `clear('')`, which does *not* mean "wipe everything" (omit the argument for
