@@ -388,6 +388,84 @@ describe("BunkerServer loopback", () => {
       expect(relay.received.filter(toA)).toEqual([]);
     });
 
+    it("a rejected nostrconnect scan leaves no trace on a host-minted secret's relays", async () => {
+      const strangerRelay = await TestRelay.start();
+      cleanups.push(() => strangerRelay.close());
+      const strangerPubkey = getPublicKey(generateSecretKey());
+      const picky = new BunkerServer({
+        connectionSecretKey: generateSecretKey(),
+        relays: [relay.url],
+        handler: async (req, ctx) => {
+          if (req.method === "connect" && req.clientPubkey === strangerPubkey) throw new BunkerError("user declined");
+          return signerHandler(user)(req, ctx);
+        },
+      });
+      await picky.start();
+      cleanups.push(() => picky.stop());
+      const { secret } = picky.createBunkerUri(); // host-minted, advertised on the host relay
+
+      // A stranger who learned the secret gets their nostrconnect scan rejected.
+      const strangerUri = `nostrconnect://${strangerPubkey}?relay=${encodeURIComponent(strangerRelay.url)}&secret=${secret}`;
+      await expect(picky.acceptNostrConnect(strangerUri)).rejects.toThrow("user declined");
+
+      // The legitimate client then connects with the same secret over the host relay.
+      const b = new RawClient([relay.url], picky.connectionPubkey);
+      cleanups.push(() => b.close());
+      await b.listen();
+      await b.send("cb", "connect", [picky.connectionPubkey, secret]);
+      expect(await b.waitFor("cb", 1500)).toEqual({ id: "cb", result: "ack" });
+      expect(picky.relaysFor(b.pubkey)).toEqual([relay.url]);
+      expect(picky.listeningRelays).toEqual([relay.url]);
+      const toB = (e: { tags: string[][] }) => e.tags.some((t) => t[0] === "p" && t[1] === b.pubkey);
+      expect(strangerRelay.received.filter(toB)).toEqual([]);
+    });
+
+    it("an auth_url to a relay of a rejected scan leaves no socket behind, and stop() closes every socket", async () => {
+      const strangerRelay = await TestRelay.start();
+      cleanups.push(() => strangerRelay.close());
+      const settled = async (predicate: () => boolean, ms = 2000) => {
+        const deadline = Date.now() + ms;
+        while (!predicate() && Date.now() < deadline) await wait(20);
+        return predicate();
+      };
+
+      // Rejected after an auth_url: the socket the auth_url opened must go away with the record.
+      const rejecting = new BunkerServer({
+        connectionSecretKey: generateSecretKey(),
+        relays: [relay.url],
+        handler: async (req, ctx) => {
+          if (req.method !== "connect") return signerHandler(user)(req, ctx);
+          await ctx.sendAuthUrl("https://bunker.test/approve/stranger");
+          throw new BunkerError("user declined");
+        },
+      });
+      await rejecting.start();
+      cleanups.push(() => rejecting.stop());
+      const uri1 = `nostrconnect://${getPublicKey(generateSecretKey())}?relay=${encodeURIComponent(strangerRelay.url)}&secret=s1`;
+      await expect(rejecting.acceptNostrConnect(uri1)).rejects.toThrow("user declined");
+      expect(strangerRelay.received).toHaveLength(1); // the auth_url did go out
+      expect(await settled(() => strangerRelay.connections === 0)).toBe(true);
+
+      // Still pending at stop(): stop() must close the socket the auth_url opened, not only the host relays.
+      const hanging = new BunkerServer({
+        connectionSecretKey: generateSecretKey(),
+        relays: [relay.url],
+        handlerTimeoutMs: 0,
+        handler: async (req, ctx) => {
+          if (req.method !== "connect") return signerHandler(user)(req, ctx);
+          await ctx.sendAuthUrl("https://bunker.test/approve/slow");
+          return new Promise<string>(() => {});
+        },
+      });
+      await hanging.start();
+      const uri2 = `nostrconnect://${getPublicKey(generateSecretKey())}?relay=${encodeURIComponent(strangerRelay.url)}&secret=s2`;
+      void hanging.acceptNostrConnect(uri2).catch(() => {});
+      expect(await settled(() => strangerRelay.received.length === 2)).toBe(true);
+      expect(await settled(() => strangerRelay.connections === 1, 500)).toBe(true);
+      await hanging.stop();
+      expect(await settled(() => strangerRelay.connections === 0)).toBe(true);
+    });
+
     it("two concurrent acceptNostrConnect calls with one secret admit exactly one client", async () => {
       const gates = new Map<string, ReturnType<typeof deferred<string>>>();
       const aPubkey = getPublicKey(generateSecretKey());
