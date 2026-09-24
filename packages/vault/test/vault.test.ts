@@ -759,3 +759,51 @@ describe('racing the session, round two', () => {
     expect(await vault.unlock('hunter22')).toBe(true);
   });
 });
+
+describe('racing the storage write', () => {
+  test('a lock during the re-seal\'s write does not install a key into a locked vault', async () => {
+    const backing = new MemoryStore();
+    const setup = new Vault({ store: backing, kdf: fastKdf });
+    await setup.create('hunter22', [account]);
+    setup.lock();
+
+    let markEntered!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      markEntered = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // The derivation is not the only window: the write after it is one too, and on a host
+    // whose storage is a round trip it can be the longer of the two.
+    let parkNextRecordWrite = true;
+    const store: KeyValueStore = {
+      get: (key) => backing.get(key),
+      set: async (key, value) => {
+        if (parkNextRecordWrite && key === VAULT_STORAGE_KEY) {
+          parkNextRecordWrite = false;
+          markEntered();
+          await gate;
+        }
+        return backing.set(key, value);
+      },
+      remove: (key) => backing.remove(key),
+      keys: () => backing.keys(),
+    };
+
+    const vault = new Vault({ store, kdf: fastKdf });
+    const pending = vault.changePassword('hunter22', 'next-one');
+    await entered;
+    vault.lock();
+    release();
+
+    // Otherwise this resolves true over a locked vault, with a live AES-256 vault key installed
+    // into the held slot and nothing to zero it until the next lock or unlock.
+    await expect(pending).rejects.toThrow(/session/i);
+    expect(vault.isLocked()).toBe(true);
+    // The write itself was already in flight and did land, so the new password is now the one
+    // that opens the record — the vault just refuses to hold its key.
+    expect(await vault.unlock('next-one')).toBe(true);
+  });
+});

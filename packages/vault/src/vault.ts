@@ -386,7 +386,21 @@ export class Vault {
    * mid-callback cannot skip the zeroing, and the buffer is a copy, so a callback that mangles
    * it cannot corrupt the vault.
    *
+   * **`fn` must compute and return, and must not externalize anything.** Sign, encrypt, derive
+   * — then hand the result back and let the caller decide what to do with it. A lock taken
+   * while `fn` is running zeroes the copy and makes this call throw, so nothing computed under
+   * a revoked session is returned; but throwing cannot unsend. A callback that signs AND
+   * publishes — a relay publish, an HTTP POST, a DM send — has already put the event on the
+   * wire by the time the throw happens, and no one can recall it. Every side effect belongs
+   * outside `withPrivkey`, downstream of the value it returns.
+   *
+   * This voids a result; it does not interrupt a callback. A long-running `fn` keeps running
+   * after a lock, it simply cannot return anything. Cancelling one needs an `AbortSignal` in
+   * this contract, which belongs with whatever introduces long-lived signer handles.
+   *
    * @param accountId the account, or undefined for the active one
+   * @throws if the vault is locked, the account has no private key, or the session was revoked
+   *         while `fn` was running
    */
   async withPrivkey<T>(
     accountId: string | undefined,
@@ -593,6 +607,13 @@ export class Vault {
       const record = await sealPayload(toStoragePayload(payload), password, capture.kdf);
       this.#assertRevision(revision);
       await this.#store.set(VAULT_STORAGE_KEY, record);
+      // Again after the write, immediately before the key is installed. The write is a window
+      // of its own — on a host whose storage is a round trip it can be the longer one — and a
+      // lock landing inside it would otherwise put a live AES-256 vault key into a locked
+      // vault, where nothing zeroes it until the next lock or unlock. Throwing here hands the
+      // capture to the `finally` below, which zeroes it. The record itself is already written
+      // and is perfectly valid; it is only this session that is over.
+      this.#assertRevision(revision);
       this.#adoptKey(capture.take());
       this.#armAutoLock();
     } finally {
