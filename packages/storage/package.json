@@ -1,0 +1,54 @@
+{
+  "name": "@nostr-wot/storage",
+  "version": "0.1.0",
+  "description": "Platform-neutral key/value storage port for the @nostr-wot packages: the KeyValueStore interface, an in-memory implementation, and a namespacing wrapper.",
+  "author": "Leon Acosta <leon@nostr-wot.com>",
+  "license": "MIT",
+  "keywords": [
+    "nostr",
+    "storage",
+    "key-value",
+    "port",
+    "platform-neutral"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nostr-wot/nostr-wot-sdk.git",
+    "directory": "packages/storage"
+  },
+  "homepage": "https://github.com/nostr-wot/nostr-wot-sdk/tree/main/packages/storage",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:run": "vitest run"
+  },
+  "devDependencies": {
+    "tsup": "^8.0.1",
+    "typescript": "^5.3.0",
+    "vitest": "^4.0.18"
+  },
+  "sideEffects": false
+}
