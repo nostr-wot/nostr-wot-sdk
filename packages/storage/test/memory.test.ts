@@ -153,3 +153,71 @@ describe('namespaced', () => {
     expect(await inner.keys()).toEqual(['k']);
   });
 });
+
+describe('namespaced — separator collisions', () => {
+  test('a prefix containing the separator cannot collide with a key containing it', async () => {
+    const base = new MemoryStore();
+    const a = namespaced(base, 'a');
+    const ab = namespaced(base, 'a:b');
+    await a.set('b:c', 'from-a-namespace');
+    await ab.set('c', 'from-a:b-namespace');
+    expect(await a.get('b:c')).toBe('from-a-namespace');
+    expect(await ab.get('c')).toBe('from-a:b-namespace');
+    expect((await base.keys()).length).toBe(2);
+  });
+
+  test('keys() does not leak across a separator collision', async () => {
+    const base = new MemoryStore();
+    const a = namespaced(base, 'a');
+    const ab = namespaced(base, 'a:b');
+    await a.set('b:c', 1);
+    await ab.set('c', 2);
+    expect(await a.keys()).toEqual(['b:c']);
+    expect(await ab.keys()).toEqual(['c']);
+  });
+
+  test('subscribe does not leak across a separator collision', async () => {
+    const base = new MemoryStore();
+    const a = namespaced(base, 'a');
+    const ab = namespaced(base, 'a:b');
+    const seenA: string[] = [];
+    const seenAb: string[] = [];
+    a.subscribe!((key) => seenA.push(key));
+    ab.subscribe!((key) => seenAb.push(key));
+    await a.set('b:c', 1);
+    await ab.set('c', 2);
+    expect(seenA).toEqual(['b:c']);
+    expect(seenAb).toEqual(['c']);
+  });
+
+  test('remove in one namespace does not remove the collided neighbour', async () => {
+    const base = new MemoryStore();
+    const a = namespaced(base, 'a');
+    const ab = namespaced(base, 'a:b');
+    await a.set('b:c', 1);
+    await ab.set('c', 2);
+    await ab.remove('c');
+    expect(await a.get('b:c')).toBe(1);
+    expect(await ab.get('c')).toBeUndefined();
+  });
+
+  test('the escape character in a prefix cannot forge another prefix', async () => {
+    const base = new MemoryStore();
+    const literal = namespaced(base, 'a%3Ab');
+    const escaped = namespaced(base, 'a:b');
+    await literal.set('k', 'from-literal');
+    await escaped.set('k', 'from-escaped');
+    expect(await literal.get('k')).toBe('from-literal');
+    expect(await escaped.get('k')).toBe('from-escaped');
+    expect(await literal.keys()).toEqual(['k']);
+    expect(await escaped.keys()).toEqual(['k']);
+  });
+
+  test('still nests, composing prefixes, when a prefix is separator-free', async () => {
+    const base = new MemoryStore();
+    const inner = namespaced(namespaced(base, 'one'), 'two');
+    await inner.set('k', 'v');
+    expect(await base.get('one:two:k')).toBe('v');
+    expect(await inner.keys()).toEqual(['k']);
+  });
+});

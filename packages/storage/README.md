@@ -64,6 +64,11 @@ await signer.keys();          // ['key'] — unprefixed, and only its own
 underlying store has one, does the same. Nesting composes: `namespaced(namespaced(s, 'a'), 'b')`
 writes `a:b:key`.
 
+Keys are free-form and may contain the `:` separator. The *prefix* is percent-escaped so that
+they can, which keeps the mapping from `(prefix, key)` to storage key injective — without it,
+`namespaced(s, 'a').set('b:c', …)` and `namespaced(s, 'a:b').set('c', …)` would both write
+`a:b:c` and silently clobber each other.
+
 ## License
 
 MIT
