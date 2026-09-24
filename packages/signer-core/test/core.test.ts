@@ -207,6 +207,93 @@ describe('the vault\'s clock is the pipeline\'s clock', () => {
   });
 });
 
+// ── The thinnest points, named by the whole-branch review ──
+
+describe('a lock landing inside the signing step', () => {
+  test('between the last identity check and withPrivkey: vault_locked, and no result', async () => {
+    // The identity port is the last thing awaited before the key is read. A lock that lands
+    // during that await leaves the pipeline with a resolved account and no key.
+    let target!: { vault: Vault; inner: IdentityPort };
+    let calls = 0;
+    const identity: IdentityPort = {
+      async getActiveAccount() {
+        const answer = await target.inner.getActiveAccount();
+        calls += 1;
+        if (calls === 3) target.vault.lock(); // 1: resolve; 2: after approval; 3: before execute
+        return answer;
+      },
+    };
+    const { core, vault, accounts, activity } = await fixture(true, { identity });
+    target = { vault, inner: vaultIdentity(vault, accounts) };
+    const spy = vi.spyOn(vault, 'withPrivkey');
+    await expect(core.handle(req('signEvent', { kind: 1 }))).rejects.toMatchObject({ code: 'vault_locked' });
+    expect(calls).toBe(3);
+    expect(vault.isLocked()).toBe(true);
+    // withPrivkey was reached on a locked vault and refused; nothing was computed.
+    expect(spy).toHaveBeenCalledTimes(1);
+    await expect(spy.mock.results[0]!.value).rejects.toThrow(/locked/i);
+    expect(activity.entries.at(-1)).toMatchObject({ decision: 'deny', code: 'vault_locked' });
+  });
+
+  test('after the callback computed and before withPrivkey returned: vault_locked, and the signature is void', async () => {
+    // Tested in the vault alone until now, never through the pipeline. The signing step has
+    // finished with the real key and produced a perfectly valid event; the lock lands in the
+    // window before withPrivkey hands it back. That event must not reach the caller.
+    const { core, vault, activity } = await fixture(true);
+    const original = vault.withPrivkey.bind(vault);
+    let computed: Event | undefined;
+    vi.spyOn(vault, 'withPrivkey').mockImplementation((accountId, fn) =>
+      original(accountId, async (key) => {
+        const result = (await fn(key)) as Event;
+        computed = result;
+        vault.lock();
+        return result;
+      }),
+    );
+    await expect(core.handle(req('signEvent', { kind: 1 }))).rejects.toMatchObject({ code: 'vault_locked' });
+    // The callback really did produce a publishable signature by the right key; the
+    // rejection above is the whole property.
+    expect(computed?.pubkey).toBe(PUBKEY_1);
+    expect(verifyEvent(computed!)).toBe(true);
+    expect(activity.entries.at(-1)).toMatchObject({ decision: 'deny', code: 'vault_locked' });
+  });
+});
+
+describe('the identity port and the vault agree', () => {
+  test('the fixture\'s port names the account the vault holds active, with the pubkey of that key', async () => {
+    // The test double itself has to be honest, or every test above proves less than it says.
+    const { vault, identity } = await fixture(true);
+    const shown = (await identity.getActiveAccount())!;
+    expect(shown.id).toBe(await vault.getActiveAccountId());
+    const derived = await vault.withPrivkey(shown.id, async (key) => getPublicKey(key));
+    expect(shown.pubkey).toBe(derived);
+  });
+
+  test('a port whose pubkey is not the key the vault holds under that id is refused, and nothing is signed', async () => {
+    // The port is the host's. If it says acct_1 is PUBKEY_2 while the vault's acct_1 key is
+    // PRIVKEY_1, the user approved as one identity and the signature would be another's.
+    // Nothing else in the chain compares the two; this is where it has to happen.
+    const one = account('acct_1', PRIVKEY_1);
+    const lying: IdentityPort = {
+      async getActiveAccount() {
+        return toSafeAccount({ ...one, pubkey: PUBKEY_2 });
+      },
+    };
+    const { core, approval, activity } = await fixture(true, { accounts: [one], identity: lying });
+    await expect(core.handle(req('signEvent', { kind: 1 }))).rejects.toMatchObject({ code: 'author_mismatch' });
+    // The prompt showed PUBKEY_2; that is what the user agreed to, and it was a lie.
+    expect(approval.presented[0]!.account.pubkey).toBe(PUBKEY_2);
+    expect(activity.entries.at(-1)).toMatchObject({ decision: 'deny', code: 'author_mismatch' });
+    // getPublicKey answers from the port and never touches the key, so it is not covered by
+    // this guard; the honest half of that is that it cannot produce a signature either.
+    for (const method of ['nip04Encrypt', 'nip44Encrypt'] as const) {
+      await expect(core.handle(req(method, { pubkey: PUBKEY_2, plaintext: 'x' }))).rejects.toMatchObject({
+        code: 'author_mismatch',
+      });
+    }
+  });
+});
+
 // ── The order of the pipeline ──
 
 describe('permissions come before everything', () => {

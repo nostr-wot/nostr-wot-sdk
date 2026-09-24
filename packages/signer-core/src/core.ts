@@ -298,15 +298,24 @@ export class SignerCore {
       );
     }
     // Pinned to the account the user saw, never "whatever is active now".
-    return this.#vault.withPrivkey(account.id, (key) => this.#execute(params, key));
+    return this.#vault.withPrivkey(account.id, async (key) => {
+      const signer = new PrivateKeySigner(key);
+      // The identity port is the host's, and it is what the user was shown and what
+      // `getPublicKey` answers. Nothing else in the chain checks that its pubkey is the one
+      // this key derives to under this id. If it is not, the user approved as one identity
+      // and the signature would be another's, so the key is not used at all.
+      if ((await signer.getPublicKey()) !== account.pubkey) {
+        throw new SignerError('author_mismatch', 'Event author does not match the active account');
+      }
+      return this.#execute(params, signer);
+    });
   }
 
   /**
    * The signing backend. Computes and returns; never externalizes. `PrivateKeySigner` holds
    * the very buffer the vault handed in, so the vault's zeroing reaches it.
    */
-  async #execute(params: ValidatedParams, key: Uint8Array): Promise<unknown> {
-    const signer = new PrivateKeySigner(key);
+  async #execute(params: ValidatedParams, signer: PrivateKeySigner): Promise<unknown> {
     switch (params.method) {
       case 'signEvent': {
         const { event } = params;
