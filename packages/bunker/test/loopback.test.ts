@@ -949,6 +949,42 @@ describe("BunkerServer loopback", () => {
       expect(handlerCalls.filter((c) => c.method === "get_public_key")).toHaveLength(2);
     });
 
+    it("a forged event carrying a genuine request's id, delivered first on the same relay, cannot suppress the genuine request", async () => {
+      // The forgery needs no valid signature, only the right 64 hex characters in `id`.
+      // nostr-tools' pool records that id as seen before it verifies anything, so
+      // through the pool's own subscription the genuine event is dropped as a duplicate.
+      const raw = new RawClient([relay.url], connectionPubkey);
+      cleanups.push(() => raw.close());
+      await raw.listen();
+      await raw.send("c1", "connect", [connectionPubkey, server.createBunkerUri().secret]);
+      await raw.waitFor("c1");
+
+      const genuine = raw.build("v1", "get_public_key", []);
+      const forged = { ...genuine, sig: genuine.sig.slice(0, -2) + (genuine.sig.endsWith("00") ? "11" : "00") };
+      await raw.publish(forged as typeof genuine);
+      await wait(50); // the forgery is in first
+      await raw.publish(genuine);
+      expect(await raw.waitFor("v1", 1500)).toEqual({ id: "v1", result: userPubkey });
+      expect(handlerCalls.filter((c) => c.method === "get_public_key")).toHaveLength(1);
+
+      // And the same forgery, then the genuine event, from a second relay in the client's set.
+      const honest = await TestRelay.start();
+      cleanups.push(() => honest.close());
+      server.addRelay(honest.url);
+      await wait(100);
+      const raw2 = new RawClient([relay.url, honest.url], connectionPubkey);
+      cleanups.push(() => raw2.close());
+      await raw2.listen();
+      await raw2.send("c2", "connect", [connectionPubkey, server.createBunkerUri({ relays: [relay.url, honest.url] }).secret]);
+      await raw2.waitFor("c2");
+      const genuine2 = raw2.build("v2", "get_public_key", []);
+      const forged2 = { ...genuine2, sig: forged.sig };
+      await raw2.publish(forged2 as typeof genuine2, [relay.url]);
+      await wait(50);
+      await raw2.publish(genuine2, [honest.url]);
+      expect(await raw2.waitFor("v2", 1500)).toEqual({ id: "v2", result: userPubkey });
+    });
+
     it("a signature-corrupted copy from a malicious relay cannot suppress the genuine request from an honest one", async () => {
       // Two relays in the client's set: the server holds one subscription per relay, so a
       // corrupted copy on one and the genuine event on the other both reach the server.
