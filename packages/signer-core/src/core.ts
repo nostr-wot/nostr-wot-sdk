@@ -119,7 +119,8 @@ export class SignerCore {
     this.#remote = deps.remote;
     this.#relays = deps.relays;
     this.#logger = deps.logger;
-    this.#now = deps.now ?? (() => Date.now());
+    // One clock: the vault's. See `SignerCoreDeps`.
+    this.#now = deps.vault.now;
     this.#queue = new ApprovalQueue({
       now: this.#now,
       onCancel: (entry, reason) => {

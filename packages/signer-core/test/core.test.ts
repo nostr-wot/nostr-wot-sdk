@@ -177,12 +177,42 @@ function req(method: SignerMethod, params: Record<string, unknown> = {}): Signer
 /** Lets the pipeline run up to its first await on the host, without a real clock. */
 const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
+// ── One clock ──
+
+describe('the vault\'s clock is the pipeline\'s clock', () => {
+  test('activity timestamps, created_at and queue stamps all read the vault\'s now', async () => {
+    const now = 1_700_000_000_000;
+    const vault = new Vault({ store: new MemoryStore(), kdf: fastKdf, now: () => now });
+    const accounts = [account('acct_1', PRIVKEY_1)];
+    await vault.create(PASSWORD, accounts);
+    const approval = recordingApproval(true);
+    const activity = recordingActivity();
+    const core = new SignerCore({
+      vault,
+      permissions: new Permissions(new MemoryStore()),
+      approval,
+      activity,
+      identity: vaultIdentity(vault, accounts),
+    });
+    cores.push(core);
+    let stamped: number | undefined;
+    approval.decide = async () => {
+      stamped = core.pending()[0]?.queuedAt;
+      return { allow: true };
+    };
+    const event = (await core.handle(req('signEvent', { kind: 1 }))) as Event;
+    expect(event.created_at).toBe(Math.floor(now / 1000));
+    expect(activity.entries[0]!.timestamp).toBe(now);
+    expect(stamped).toBe(now);
+  });
+});
+
 // ── The order of the pipeline ──
 
 describe('permissions come before everything', () => {
   test('a denied permission is refused even when the vault is unlocked', async () => {
     const { core, permissions, approval, vault } = await fixture(true);
-    await permissions.save('example.com', 'signEvent', 1, 'deny');
+    await permissions.save('example.com', 'signEvent', 1, 'deny', 'acct_1');
     expect(vault.isLocked()).toBe(false);
     await expect(core.handle(req('signEvent', { kind: 1 }))).rejects.toThrow(/denied/i);
     expect(approval.presented).toHaveLength(0);
@@ -191,7 +221,7 @@ describe('permissions come before everything', () => {
 
   test('a deny stored for an origin holds for every spelling of it', async () => {
     const { core, permissions, approval } = await fixture(true);
-    await permissions.save('https://example.com', 'signEvent', 1, 'deny');
+    await permissions.save('https://example.com', 'signEvent', 1, 'deny', 'acct_1');
     for (const identifier of ['https://EXAMPLE.COM', 'https://example.com:443', 'HTTPS://Example.Com:0443']) {
       const request = { ...req('signEvent', { kind: 1 }), origin: { kind: 'web' as const, identifier } };
       await expect(core.handle(request)).rejects.toThrow(/denied/i);
@@ -216,7 +246,7 @@ describe('permissions come before everything', () => {
 
   test('a deny is refused before the vault is consulted', async () => {
     const { core, permissions, vault } = await fixture(true);
-    await permissions.save('example.com', 'signEvent', 1, 'deny');
+    await permissions.save('example.com', 'signEvent', 1, 'deny', 'acct_1');
     const spy = vi.spyOn(vault, 'withPrivkey');
     await expect(core.handle(req('signEvent', { kind: 1 }))).rejects.toThrow(/denied/i);
     expect(spy).not.toHaveBeenCalled();
@@ -228,7 +258,7 @@ describe('permissions come before everything', () => {
       accounts: [account('acct_1', null, { type: 'nip46', readOnly: false })],
       remote,
     });
-    await permissions.save('example.com', 'signEvent', 1, 'deny');
+    await permissions.save('example.com', 'signEvent', 1, 'deny', 'acct_1');
     await expect(core.handle(req('signEvent', { kind: 1 }))).rejects.toThrow(/denied/i);
     expect(remote.calls).toBe(0);
     expect(approval.presented).toHaveLength(0);
@@ -238,14 +268,14 @@ describe('permissions come before everything', () => {
     const { core, permissions, approval } = await fixture(true);
     expect(await core.handle(req('getPublicKey'))).toBe(PUBKEY_1);
     expect(approval.presented).toHaveLength(1);
-    await permissions.save('example.com', 'getPublicKey', null, 'deny');
+    await permissions.save('example.com', 'getPublicKey', null, 'deny', 'acct_1');
     await expect(core.handle(req('getPublicKey'))).rejects.toThrow(/denied/i);
     expect(approval.presented).toHaveLength(1);
   });
 
   test('a deny holds while the vault is locked, and permissions are consulted before the lock', async () => {
     const { core, permissions, approval } = await fixture(true, { locked: true });
-    await permissions.save('example.com', 'signEvent', 1, 'deny');
+    await permissions.save('example.com', 'signEvent', 1, 'deny', 'acct_1');
     const check = vi.spyOn(permissions, 'check');
     await expect(core.handle(req('signEvent', { kind: 1 }))).rejects.toMatchObject({
       code: 'permission_denied',
@@ -256,13 +286,13 @@ describe('permissions come before everything', () => {
 
   test('a deny for a read-only account is a deny, not a hint about the account', async () => {
     const { core, permissions } = await fixture(true, { accounts: [account('acct_ro', null)] });
-    await permissions.save('example.com', 'signEvent', 1, 'deny');
+    await permissions.save('example.com', 'signEvent', 1, 'deny', 'acct_1');
     await expect(core.handle(req('signEvent', { kind: 1 }))).rejects.toThrow(/denied/i);
   });
 
   test('a deny for example.com holds for EXAMPLE.COM', async () => {
     const { core, permissions, approval } = await fixture(true);
-    await permissions.save('example.com', 'signEvent', 1, 'deny');
+    await permissions.save('example.com', 'signEvent', 1, 'deny', 'acct_1');
     const shouting = { ...req('signEvent', { kind: 1 }), origin: { kind: 'web' as const, identifier: 'EXAMPLE.COM' } };
     await expect(core.handle(shouting)).rejects.toThrow(/denied/i);
     expect(approval.presented).toHaveLength(0);
@@ -270,7 +300,7 @@ describe('permissions come before everything', () => {
 
   test('a deny for example.com holds for example.com. with a trailing dot', async () => {
     const { core, permissions, approval } = await fixture(true);
-    await permissions.save('example.com', 'signEvent', 1, 'deny');
+    await permissions.save('example.com', 'signEvent', 1, 'deny', 'acct_1');
     const dotted = { ...req('signEvent', { kind: 1 }), origin: { kind: 'web' as const, identifier: 'example.com.' } };
     await expect(core.handle(dotted)).rejects.toThrow(/denied/i);
     expect(approval.presented).toHaveLength(0);
@@ -278,7 +308,7 @@ describe('permissions come before everything', () => {
 
   test('a browser origin is accepted, and http and https are different keys', async () => {
     const { core, permissions, approval } = await fixture(true);
-    await permissions.save('https://example.com', 'signEvent', 1, 'allow');
+    await permissions.save('https://example.com', 'signEvent', 1, 'allow', 'acct_1');
     const secure = { ...req('signEvent', { kind: 1 }), origin: { kind: 'web' as const, identifier: 'https://example.com' } };
     await core.handle(secure);
     expect(approval.presented).toHaveLength(0);
@@ -290,7 +320,7 @@ describe('permissions come before everything', () => {
 
   test('an exact-origin deny is consulted for the origin form', async () => {
     const { core, permissions, approval } = await fixture(true);
-    await permissions.save('https://example.com', 'signEvent', 1, 'deny');
+    await permissions.save('https://example.com', 'signEvent', 1, 'deny', 'acct_1');
     const secure = { ...req('signEvent', { kind: 1 }), origin: { kind: 'web' as const, identifier: 'https://example.com' } };
     await expect(core.handle(secure)).rejects.toThrow(/denied/i);
     expect(approval.presented).toHaveLength(0);
@@ -299,12 +329,12 @@ describe('permissions come before everything', () => {
   test('the origin form also reads the legacy hostname rule, and the bare form reads only itself, as siteScopes intends', async () => {
     const { core, permissions, approval } = await fixture(true);
     // Legacy: stored under the bare hostname. The origin form still sees it.
-    await permissions.save('example.com', 'signEvent', 1, 'deny');
+    await permissions.save('example.com', 'signEvent', 1, 'deny', 'acct_1');
     const secure = { ...req('signEvent', { kind: 1 }), origin: { kind: 'web' as const, identifier: 'https://example.com' } };
     await expect(core.handle(secure)).rejects.toThrow(/denied/i);
     // Exact: stored under the origin. The bare form is its own scope and does not see it.
-    await permissions.clear('example.com');
-    await permissions.save('https://example.com', 'signEvent', 7, 'deny');
+    await permissions.clear('example.com', 'acct_1');
+    await permissions.save('https://example.com', 'signEvent', 7, 'deny', 'acct_1');
     await core.handle(req('signEvent', { kind: 7 }));
     expect(approval.presented).toHaveLength(1);
     const dotted = { ...req('signEvent', { kind: 7 }), origin: { kind: 'web' as const, identifier: 'https://example.com' } };
@@ -332,7 +362,7 @@ describe('permissions come before everything', () => {
 
   test('a web caller cannot spell another transport\'s namespace to borrow its grant', async () => {
     const { core, permissions, approval } = await fixture(true);
-    await permissions.save('nip55:com.evil.app', 'signEvent', 1, 'allow');
+    await permissions.save('nip55:com.evil.app', 'signEvent', 1, 'allow', 'acct_1');
     const forged = { ...req('signEvent', { kind: 1 }), origin: { kind: 'web' as const, identifier: 'nip55:com.evil.app' } };
     await expect(core.handle(forged)).rejects.toMatchObject({ code: 'invalid_request' });
     expect(approval.presented).toHaveLength(0);
@@ -340,7 +370,7 @@ describe('permissions come before everything', () => {
 
   test('a grant to a hostname is not a grant to the Android package spelled the same', async () => {
     const { core, permissions, approval } = await fixture(true);
-    await permissions.save('com.example.app', 'signEvent', 1, 'allow');
+    await permissions.save('com.example.app', 'signEvent', 1, 'allow', 'acct_1');
     const web = { ...req('signEvent', { kind: 1 }), origin: { kind: 'web' as const, identifier: 'com.example.app' } };
     await core.handle(web);
     expect(approval.presented).toHaveLength(0);
@@ -352,8 +382,8 @@ describe('permissions come before everything', () => {
 
   test('a wildcard deny blocks a kind that was allowed', async () => {
     const { core, permissions } = await fixture(true);
-    await permissions.save('example.com', 'signEvent', 1, 'allow');
-    await permissions.saveDirect('example.com', '*', 'deny');
+    await permissions.save('example.com', 'signEvent', 1, 'allow', 'acct_1');
+    await permissions.saveDirect('example.com', '*', 'deny', 'acct_1');
     await expect(core.handle(req('signEvent', { kind: 1 }))).rejects.toThrow(/denied/i);
   });
 });
@@ -361,7 +391,7 @@ describe('permissions come before everything', () => {
 describe('allow and ask', () => {
   test('an allowed permission signs without asking', async () => {
     const { core, permissions, approval } = await fixture(true);
-    await permissions.save('example.com', 'signEvent', 1, 'allow');
+    await permissions.save('example.com', 'signEvent', 1, 'allow', 'acct_1');
     const signed = (await core.handle(req('signEvent', { kind: 1, content: 'hi' }))) as Event;
     expect(approval.presented).toHaveLength(0);
     expect(signed.sig).toMatch(/^[0-9a-f]{128}$/);
@@ -402,7 +432,7 @@ describe('allow and ask', () => {
   test('an allowed request is refused if the account switches during the permission check', async () => {
     const two = [account('acct_1', PRIVKEY_1), account('acct_2', PRIVKEY_2)];
     const { core, permissions, vault } = await fixture(true, { accounts: two });
-    await permissions.save('example.com', 'signEvent', 1, 'allow');
+    await permissions.save('example.com', 'signEvent', 1, 'allow', 'acct_1');
     const original = permissions.check.bind(permissions);
     vi.spyOn(permissions, 'check').mockImplementation(async (...args) => {
       const decision = await original(...args);
@@ -422,7 +452,7 @@ describe('allow and ask', () => {
 
   test('an event authored by another key is refused', async () => {
     const { core, permissions } = await fixture(true);
-    await permissions.save('example.com', 'signEvent', 1, 'allow');
+    await permissions.save('example.com', 'signEvent', 1, 'allow', 'acct_1');
     await expect(core.handle(req('signEvent', { kind: 1, pubkey: PUBKEY_2 }))).rejects.toThrow(
       /author/i,
     );
@@ -464,7 +494,7 @@ describe('the approval queue', () => {
   test('unlock markers do not count toward the cap', async () => {
     const unlock: UnlockPort = { requestUnlock: () => new Promise(() => {}) };
     const { core, permissions } = await fixture('never', { locked: true, unlock });
-    await permissions.save('example.com', 'signEvent', 1, 'allow');
+    await permissions.save('example.com', 'signEvent', 1, 'allow', 'acct_1');
     for (let i = 0; i < MAX_PENDING_PER_ORIGIN + 2; i++) {
       core.handle(req('signEvent', { kind: 1 })).catch(() => {});
     }
@@ -705,7 +735,7 @@ describe('malformed requests', () => {
 
   test.each(cases)('%s is rejected before it reaches the vault or the user', async (_, request) => {
     const { core, approval, vault, activity, permissions } = await fixture(true);
-    await permissions.saveDirect('example.com', '*', 'allow');
+    await permissions.saveDirect('example.com', '*', 'allow', 'acct_1');
     const withPrivkey = vi.spyOn(vault, 'withPrivkey');
     const check = vi.spyOn(permissions, 'check');
     await expect(core.handle(request)).rejects.toThrow(SignerError);
@@ -729,13 +759,13 @@ describe('malformed requests', () => {
 describe('execution', () => {
   test('getPublicKey answers with the active pubkey', async () => {
     const { core, permissions } = await fixture(true);
-    await permissions.save('example.com', 'getPublicKey', null, 'allow');
+    await permissions.save('example.com', 'getPublicKey', null, 'allow', 'acct_1');
     expect(await core.handle(req('getPublicKey'))).toBe(PUBKEY_1);
   });
 
   test('nip44 encrypts for the recipient and decrypts what they send', async () => {
     const { core, permissions } = await fixture(true);
-    await permissions.saveDirect('example.com', '*', 'allow');
+    await permissions.saveDirect('example.com', '*', 'allow', 'acct_1');
     const other = new PrivateKeySigner(PRIVKEY_2);
     const ciphertext = (await core.handle(
       req('nip44Encrypt', { pubkey: PUBKEY_2, plaintext: 'to you' }),
@@ -747,7 +777,7 @@ describe('execution', () => {
 
   test('nip04 encrypts for the recipient and decrypts what they send', async () => {
     const { core, permissions } = await fixture(true);
-    await permissions.saveDirect('example.com', '*', 'allow');
+    await permissions.saveDirect('example.com', '*', 'allow', 'acct_1');
     const other = new PrivateKeySigner(PRIVKEY_2);
     const ciphertext = (await core.handle(
       req('nip04Encrypt', { pubkey: PUBKEY_2, plaintext: 'legacy' }),
@@ -761,13 +791,13 @@ describe('execution', () => {
     const { core, permissions, approval } = await fixture(true);
     expect(await core.handle(req('getRelays'))).toEqual({});
     expect(approval.presented).toHaveLength(0);
-    await permissions.save('example.com', 'getRelays', null, 'deny');
+    await permissions.save('example.com', 'getRelays', null, 'deny', 'acct_1');
     await expect(core.handle(req('getRelays'))).rejects.toThrow(/denied/i);
   });
 
   test('a created_at is defaulted from the clock when the template has none', async () => {
     const { core, permissions } = await fixture(true);
-    await permissions.save('example.com', 'signEvent', 1, 'allow');
+    await permissions.save('example.com', 'signEvent', 1, 'allow', 'acct_1');
     const before = Math.floor(Date.now() / 1000);
     const signed = (await core.handle(req('signEvent', { kind: 1 }))) as Event;
     expect(signed.created_at).toBeGreaterThanOrEqual(before);
@@ -806,15 +836,15 @@ describe('execution', () => {
 describe('the vault lock', () => {
   test('a locked vault with no unlock port refuses after the permission gate', async () => {
     const { core, permissions } = await fixture(true, { locked: true });
-    await permissions.save('example.com', 'signEvent', 1, 'allow');
+    await permissions.save('example.com', 'signEvent', 1, 'allow', 'acct_1');
     await expect(core.handle(req('signEvent', { kind: 1 }))).rejects.toThrow(/locked/i);
-    await permissions.save('example.com', 'signEvent', 1, 'deny');
+    await permissions.save('example.com', 'signEvent', 1, 'deny', 'acct_1');
     await expect(core.handle(req('signEvent', { kind: 1 }))).rejects.toThrow(/denied/i);
   });
 
   test('getPublicKey answers from the identity port while the vault is locked', async () => {
     const { core, permissions } = await fixture(true, { locked: true });
-    await permissions.save('example.com', 'getPublicKey', null, 'allow');
+    await permissions.save('example.com', 'getPublicKey', null, 'allow', 'acct_1');
     expect(await core.handle(req('getPublicKey'))).toBe(PUBKEY_1);
   });
 
@@ -829,7 +859,7 @@ describe('the vault lock', () => {
     };
     const { core, permissions, vault } = await fixture(true, { locked: true, unlock });
     vaultRef = vault;
-    await permissions.save('example.com', 'signEvent', 1, 'allow');
+    await permissions.save('example.com', 'signEvent', 1, 'allow', 'acct_1');
     const request = req('signEvent', { kind: 1 });
     const signed = (await core.handle(request)) as Event;
     expect(asked).toEqual([request.id]);
@@ -844,7 +874,7 @@ describe('the vault lock', () => {
       },
     };
     const { core, permissions } = await fixture(true, { locked: true, unlock });
-    await permissions.save('example.com', 'signEvent', 1, 'allow');
+    await permissions.save('example.com', 'signEvent', 1, 'allow', 'acct_1');
     await expect(core.handle(req('signEvent', { kind: 1 }))).rejects.toMatchObject({
       code: 'rejected',
       message: 'Cancelled by user',
@@ -854,7 +884,7 @@ describe('the vault lock', () => {
   test('an unlock that does not actually open the vault is still locked', async () => {
     const unlock: UnlockPort = { async requestUnlock() {} };
     const { core, permissions } = await fixture(true, { locked: true, unlock });
-    await permissions.save('example.com', 'signEvent', 1, 'allow');
+    await permissions.save('example.com', 'signEvent', 1, 'allow', 'acct_1');
     await expect(core.handle(req('signEvent', { kind: 1 }))).rejects.toThrow(/locked/i);
   });
 });
@@ -876,7 +906,7 @@ describe('foreign errors', () => {
       unlock,
       logger: { warn: (message, context) => warnings.push({ message, context }) },
     });
-    await permissions.save('example.com', 'signEvent', 1, 'allow');
+    await permissions.save('example.com', 'signEvent', 1, 'allow', 'acct_1');
     let outcome: unknown;
     try {
       await core.handle(req('signEvent', { kind: 1 }));
@@ -905,7 +935,7 @@ describe('foreign errors', () => {
 
   test('a cipher failure reaches the caller as a fixed-text operation failure', async () => {
     const { core, permissions } = await fixture(true);
-    await permissions.saveDirect('example.com', '*', 'allow');
+    await permissions.saveDirect('example.com', '*', 'allow', 'acct_1');
     for (const method of ['nip04Decrypt', 'nip44Decrypt'] as const) {
       await expect(core.handle(req(method, { pubkey: PUBKEY_2, ciphertext: 'garbage?iv=abc' }))).rejects.toMatchObject({
         code: 'operation_failed',
@@ -932,7 +962,7 @@ describe('foreign errors', () => {
 
   test('a failing activity port on the allow path still answers', async () => {
     const { core, permissions, activity } = await fixture(true);
-    await permissions.save('example.com', 'signEvent', 1, 'allow');
+    await permissions.save('example.com', 'signEvent', 1, 'allow', 'acct_1');
     activity.record = async () => {
       throw new Error('disk full');
     };
@@ -961,7 +991,7 @@ describe('host-side cancel', () => {
 describe('the activity log', () => {
   test('every handled request lands in the activity log with its origin', async () => {
     const { core, permissions, activity } = await fixture(true);
-    await permissions.save('example.com', 'signEvent', 1, 'allow');
+    await permissions.save('example.com', 'signEvent', 1, 'allow', 'acct_1');
     await core.handle(req('signEvent', { kind: 1 }));
     expect(activity.entries).toHaveLength(1);
     expect(activity.entries[0]!.origin.identifier).toBe('example.com');
@@ -974,7 +1004,7 @@ describe('the activity log', () => {
 
   test('a denial is logged with its reason', async () => {
     const { core, permissions, activity } = await fixture(true);
-    await permissions.save('example.com', 'signEvent', 1, 'deny');
+    await permissions.save('example.com', 'signEvent', 1, 'deny', 'acct_1');
     await core.handle(req('signEvent', { kind: 1 })).catch(() => {});
     expect(activity.entries).toHaveLength(1);
     expect(activity.entries[0]!.decision).toBe('deny');
@@ -990,7 +1020,7 @@ describe('the activity log', () => {
 
   test('a decrypt entry keeps the ciphertext and never the plaintext', async () => {
     const { core, permissions, activity } = await fixture(true);
-    await permissions.saveDirect('example.com', '*', 'allow');
+    await permissions.saveDirect('example.com', '*', 'allow', 'acct_1');
     const other = new PrivateKeySigner(PRIVKEY_2);
     const theirs = await other.nip44Encrypt(PUBKEY_1, 'the secret');
     await core.handle(req('nip44Decrypt', { pubkey: PUBKEY_2, ciphertext: theirs }));
@@ -1002,14 +1032,14 @@ describe('the activity log', () => {
 
   test('an encrypt entry never carries the plaintext', async () => {
     const { core, permissions, activity } = await fixture(true);
-    await permissions.saveDirect('example.com', '*', 'allow');
+    await permissions.saveDirect('example.com', '*', 'allow', 'acct_1');
     await core.handle(req('nip44Encrypt', { pubkey: PUBKEY_2, plaintext: 'the secret' }));
     expect(JSON.stringify(activity.entries[0])).not.toContain('the secret');
   });
 
   test('a signEvent entry keeps the event that was signed', async () => {
     const { core, permissions, activity } = await fixture(true);
-    await permissions.save('example.com', 'signEvent', 1, 'allow');
+    await permissions.save('example.com', 'signEvent', 1, 'allow', 'acct_1');
     await core.handle(req('signEvent', { kind: 1, content: 'logged', tags: [['t', 'x']] }));
     expect(activity.entries[0]!.event).toMatchObject({ kind: 1, content: 'logged', tags: [['t', 'x']] });
   });
@@ -1019,7 +1049,7 @@ describe('the activity log', () => {
     const { core, permissions, activity } = await fixture(true, {
       logger: { warn: (message) => warnings.push(message) },
     });
-    await permissions.save('example.com', 'signEvent', 1, 'allow');
+    await permissions.save('example.com', 'signEvent', 1, 'allow', 'acct_1');
     activity.record = async () => {
       throw new Error('disk full');
     };

@@ -28,7 +28,8 @@ export interface ApprovalQueueOptions {
   maxPendingPerOrigin?: number;
   maxInFlightPerOrigin?: number;
   maxInFlightGlobal?: number;
-  now?: () => number;
+  /** The clock. Required: the pipeline passes the vault's, so the queue never keeps its own. */
+  now: () => number;
 }
 
 /** What {@link ApprovalQueue.track} takes: an entry without the timestamp it stamps itself. */
@@ -59,13 +60,13 @@ export class ApprovalQueue {
   readonly #now: () => number;
   #disposed = false;
 
-  constructor(options: ApprovalQueueOptions = {}) {
+  constructor(options: ApprovalQueueOptions) {
     this.#onCancel = options.onCancel;
     this.#timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
     this.#maxPendingPerOrigin = options.maxPendingPerOrigin ?? MAX_PENDING_PER_ORIGIN;
     this.#maxInFlightPerOrigin = options.maxInFlightPerOrigin ?? MAX_IN_FLIGHT_PER_ORIGIN;
     this.#maxInFlightGlobal = options.maxInFlightGlobal ?? MAX_IN_FLIGHT_GLOBAL;
-    this.#now = options.now ?? (() => Date.now());
+    this.#now = options.now;
   }
 
   /** Everything waiting, oldest first. Copies, so a host cannot reach the live entries. */

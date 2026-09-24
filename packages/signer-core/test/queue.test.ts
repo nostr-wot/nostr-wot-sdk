@@ -23,6 +23,7 @@ const never = () => new Promise<never>(() => {});
 function build(options: { onCancel?: (entry: PendingEntry, reason: string) => void } = {}) {
   const cancelled: Array<{ id: string; reason: string }> = [];
   const queue = new ApprovalQueue({
+    now: () => Date.now(),
     onCancel: (entry, reason) => {
       cancelled.push({ id: entry.id, reason });
       options.onCancel?.(entry, reason);

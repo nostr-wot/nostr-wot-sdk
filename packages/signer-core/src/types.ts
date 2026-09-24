@@ -226,6 +226,11 @@ export interface PendingEntry {
 
 // ── The core ──
 
+/**
+ * There is no `now` here on purpose. The core reads the vault's clock (`vault.now`) for its
+ * cooldowns, activity timestamps, `created_at` and queue stamps, so the system runs on one
+ * clock and faking time is done in one place.
+ */
 export interface SignerCoreDeps {
   vault: Vault;
   permissions: Permissions;
@@ -236,6 +241,4 @@ export interface SignerCoreDeps {
   remote?: RemoteSignerPort;
   relays?: RelayListPort;
   logger?: SignerLogger;
-  /** The clock, injectable so cooldowns and timestamps can be tested without waiting. */
-  now?: () => number;
 }

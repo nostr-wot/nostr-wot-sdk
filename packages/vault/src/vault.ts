@@ -66,7 +66,12 @@ export interface VaultOptions {
   store: KeyValueStore;
   /** Password stretching. Defaults to {@link noblePbkdf2}, which needs nothing native. */
   kdf?: Pbkdf2Port;
-  /** The clock, injectable so the guard and the auto-lock can be tested without waiting. */
+  /**
+   * The clock. Injectable so the guard and the auto-lock can be tested without waiting, and
+   * the ONE clock of the system: `@nostr-wot/signer-core` reads it back from the vault for
+   * its cooldowns, timestamps and queue, so faking time is done here, once. Defaults to
+   * `Date.now`, and this is the only default clock anywhere in the shared packages.
+   */
   now?: () => number;
 }
 
@@ -142,6 +147,8 @@ export class Vault {
   readonly #store: KeyValueStore;
   readonly #kdf: Pbkdf2Port;
   readonly #now: () => number;
+  /** The clock this vault was built with; what everything downstream of it reads. */
+  readonly now: () => number;
 
   /** The decrypted vault, or null when locked. The only place key material lives. */
   #payload: MemoryVaultPayload | null = null;
@@ -180,6 +187,7 @@ export class Vault {
     this.#store = options.store;
     this.#kdf = options.kdf ?? noblePbkdf2;
     this.#now = options.now ?? Date.now;
+    this.now = this.#now;
   }
 
   // ── State ─────────────────────────────────────────────────────────────────────────────
