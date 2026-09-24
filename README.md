@@ -17,6 +17,7 @@ A set of focused, peer-dep-only packages that compose into a full Nostr stack �
 | Package | Scope | Depends on |
 |---|---|---|
 | **[`@nostr-wot/signers`](./packages/signers)** | One `NostrSigner` interface, four backends — `Nip07Signer` (extension), `Nip46Signer` (bunker, with `nostrconnect://` QR + auth-URL relay), `Nip55Signer` (Android/Amber), `PrivateKeySigner`. Plus NDK bridges in both directions (`ndkSignerAsNostrSigner`, `nostrSignerAsNdkSigner`). | `nostr-tools` (peer) |
+| **[`@nostr-wot/bunker`](./packages/bunker)** | NIP-46 responder (the bunker side). `BunkerServer` listens for kind 24133 requests, verifies pairing secrets, dedupes, and hands every request to one injected handler. Both `bunker://` and `nostrconnect://` pairing; NIP-44 transport only. | `@nostr-wot/relay`, `nostr-tools` (peer) |
 | **[`@nostr-wot/ui`](./packages/ui)** | Headless React login UI — `<NostrSessionProvider>`, `<LoginButton>`, `<LoginModal>`, `<LoginWidget>`. Four login methods, NIP-46 QR + paste tabs, optional profile-setup wizard, pluggable encrypted-at-rest signer storage, branding slots, themable via CSS variables (built-in `light` / `dark` / `la-crypta` themes). Built-in `@nostr-wot/auth` handshake when you set `authBaseUrl`. | `@nostr-wot/data`, `@nostr-wot/signers` |
 | **[`@nostr-wot/auth`](./packages/auth)** | Server-side NIP-98 challenge / verify / JWT for Nostr login. Web-standard handlers + Next.js shim + a client helper that pairs with `@nostr-wot/ui`'s `authBaseUrl`. | — |
 
