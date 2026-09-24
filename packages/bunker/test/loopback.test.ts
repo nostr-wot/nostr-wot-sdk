@@ -5,7 +5,7 @@ import { v2 as nip44 } from "nostr-tools/nip44";
 import { NostrConnect } from "nostr-tools/kinds";
 import { BunkerSigner, parseBunkerInput } from "nostr-tools/nip46";
 import { Nip46Signer, PrivateKeySigner } from "@nostr-wot/signers";
-import { BunkerServer, type BunkerHandler, type BunkerRequest } from "../src";
+import { BunkerError, BunkerServer, type BunkerHandler, type BunkerRequest } from "../src";
 import { TestRelay } from "./relay";
 
 /**
@@ -42,9 +42,20 @@ function signerHandler(user: PrivateKeySigner): BunkerHandler {
       case "logout":
         return "ack";
       default:
-        throw new Error(`unsupported method: ${req.method}`);
+        throw new BunkerError(`unsupported method: ${req.method}`);
     }
   };
+}
+
+/** A promise the test settles by hand, for ordering without sleeps. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }
 
 /** A raw NIP-46 client with no library in between, for the negative-path tests. */
@@ -75,13 +86,18 @@ class RawClient {
     });
   }
 
-  async send(id: string, method: string, params: string[]): Promise<void> {
+  async send(
+    id: string,
+    method: string,
+    params: string[],
+    opts: { convKey?: Uint8Array; createdAt?: number } = {},
+  ): Promise<void> {
     const event = finalizeEvent(
       {
         kind: NostrConnect,
-        created_at: Math.floor(Date.now() / 1000),
+        created_at: opts.createdAt ?? Math.floor(Date.now() / 1000),
         tags: [["p", this.signerPubkey]],
-        content: nip44.encrypt(JSON.stringify({ id, method, params }), this.#convKey),
+        content: nip44.encrypt(JSON.stringify({ id, method, params }), opts.convKey ?? this.#convKey),
       },
       this.sk,
     );
@@ -321,7 +337,7 @@ describe("BunkerServer loopback", () => {
         connectionSecretKey: generateSecretKey(),
         relays: [relay.url],
         handler: async () => {
-          throw new Error("user declined");
+          throw new BunkerError("user declined");
         },
       });
       await denying.start();
@@ -338,14 +354,78 @@ describe("BunkerServer loopback", () => {
       const a = await connectWithNip46Signer();
       const b = await connectWithNostrTools();
       const before = handlerCalls.length;
-      // The handler throws for methods it does not know.
-      await expect(a.signEvent({ kind: 1, content: "", tags: [], created_at: 0 })).resolves.toBeTruthy();
+      const signed = await a.signEvent({ kind: 1, content: "still fine", tags: [], created_at: 0 });
+      expect(signed.pubkey).toBe(userPubkey);
+      expect(verifyEvent(signed)).toBe(true);
+      // The handler throws a BunkerError for methods it does not know: its text is wire-visible.
       await expect((b as unknown as { sendRequest(m: string, p: string[]): Promise<string> }).sendRequest("sign_psbt", []))
         .rejects.toBe("unsupported method: sign_psbt");
       expect(handlerCalls.slice(before).map((c) => c.method)).toEqual(["sign_event", "sign_psbt"]);
     });
 
-    it("ping is answered by the transport, logout disconnects", async () => {
+    it("a plain Error thrown by the handler never reaches the wire; BunkerError and mapError do", async () => {
+      const inner = signerHandler(user);
+      const leaky = new BunkerServer({
+        connectionSecretKey: generateSecretKey(),
+        relays: [relay.url],
+        handler: async (req, ctx) => {
+          if (req.method === "nip04_encrypt") throw new Error("keychain: item 0x1f locked, owner leon@example");
+          return inner(req, ctx);
+        },
+      });
+      await leaky.start();
+      cleanups.push(() => leaky.stop());
+      const signer = await connectWithNip46Signer(leaky.createBunkerUri().uri);
+      // The README's handler shape, fed a non-JSON param: the parser's message must not leak either.
+      const rawErr = await signer.signEvent("not json {{" as unknown as EventTemplate).catch((e) => e);
+      expect(rawErr).toBe("request rejected");
+      await expect(signer.nip04Encrypt(userPubkey, "x")).rejects.toBe("request rejected");
+
+      const mapped = new BunkerServer({
+        connectionSecretKey: generateSecretKey(),
+        relays: [relay.url],
+        handler: async () => {
+          throw new Error("internal detail");
+        },
+        mapError: (err, req) => `refused ${req.method} (${err instanceof Error ? "error" : "other"})`,
+      });
+      await mapped.start();
+      cleanups.push(() => mapped.stop());
+      const { uri } = mapped.createBunkerUri();
+      const bp = (await parseBunkerInput(uri))!;
+      const pool = new SimplePool();
+      const s2 = BunkerSigner.fromBunker(generateSecretKey(), bp, { pool });
+      cleanups.push(async () => {
+        await s2.close();
+        pool.close([relay.url]);
+      });
+      await expect(s2.connect()).rejects.toBe("refused connect (error)");
+    });
+
+    it("a handler that never settles is answered with a timeout error", async () => {
+      const inner = signerHandler(user);
+      const stuck = new BunkerServer({
+        connectionSecretKey: generateSecretKey(),
+        relays: [relay.url],
+        handlerTimeoutMs: 200,
+        handler: (req, ctx) => (req.method === "sign_event" ? new Promise<string>(() => {}) : inner(req, ctx)),
+      });
+      await stuck.start();
+      cleanups.push(() => stuck.stop());
+      const signer = await connectWithNip46Signer(stuck.createBunkerUri().uri);
+      const started = Date.now();
+      await expect(signer.signEvent({ kind: 1, content: "", tags: [], created_at: 1 })).rejects.toBe("request timed out");
+      expect(Date.now() - started).toBeGreaterThanOrEqual(180);
+      expect(await signer.getPublicKey()).toBe(userPubkey);
+    });
+
+    it("ping is answered by the transport, before and after connect; logout disconnects", async () => {
+      const raw = new RawClient([relay.url], connectionPubkey);
+      cleanups.push(() => raw.close());
+      await raw.listen();
+      await raw.send("p0", "ping", []);
+      expect(await raw.waitFor("p0")).toEqual({ id: "p0", result: "pong" });
+
       const signer = await connectWithNostrTools();
       await signer.ping();
       expect(handlerCalls.map((c) => c.method)).toEqual(["connect"]);
@@ -353,13 +433,51 @@ describe("BunkerServer loopback", () => {
       expect(server.connectedClients).toEqual([]);
     });
 
+    it("requireSecret: false forwards a secretless connect to the handler, which owns admission", async () => {
+      const inner = signerHandler(user);
+      const calls: BunkerRequest[] = [];
+      const open = new BunkerServer({
+        connectionSecretKey: generateSecretKey(),
+        relays: [relay.url],
+        requireSecret: false,
+        handler: async (req, ctx) => {
+          calls.push(req);
+          if (req.method === "connect" && req.params[3]?.includes("blocked")) throw new BunkerError("not on the list");
+          return inner(req, ctx);
+        },
+      });
+      await open.start();
+      cleanups.push(() => open.stop());
+      const bp = { pubkey: open.connectionPubkey, relays: [relay.url], secret: null };
+      const pool = new SimplePool();
+      cleanups.push(() => pool.close([relay.url]));
+
+      const allowed = BunkerSigner.fromBunker(generateSecretKey(), bp, { pool });
+      await allowed.connect();
+      expect(await allowed.getPublicKey()).toBe(userPubkey);
+      expect(open.relaysFor(getPublicKey((allowed as unknown as { secretKey: Uint8Array }).secretKey))).toEqual([relay.url]);
+      await allowed.close();
+
+      const blocked = BunkerSigner.fromBunker(generateSecretKey(), bp, { pool });
+      await expect(blocked.connect({ name: "blocked app" })).rejects.toBe("not on the list");
+      await expect(blocked.getPublicKey()).rejects.toBe("unauthorized: connect first");
+      await blocked.close();
+      expect(calls.filter((c) => c.method === "connect")).toHaveLength(2);
+      expect(calls[0]!.params[1]).toBe("");
+    });
+
     it("concurrent requests are answered out of order, each on its own id", async () => {
       const slowUser = signerHandler(user);
+      const gate = deferred<void>();
+      const signEntered = deferred<void>();
       const slow = new BunkerServer({
         connectionSecretKey: generateSecretKey(),
         relays: [relay.url],
         handler: async (req, ctx) => {
-          if (req.method === "sign_event") await wait(400);
+          if (req.method === "sign_event") {
+            signEntered.resolve();
+            await gate.promise; // held open until the test says so
+          }
           return slowUser(req, ctx);
         },
       });
@@ -373,16 +491,75 @@ describe("BunkerServer loopback", () => {
         order.push("sign_event");
         return e;
       });
-      await wait(50);
+      await signEntered.promise; // sign_event is now blocked inside the handler
       const pk = await signer.getPublicKey().then((k) => {
         order.push("get_public_key");
         return k;
       });
+      expect(order).toEqual(["get_public_key"]);
+      gate.resolve();
       const signed = await signing;
       expect(order).toEqual(["get_public_key", "sign_event"]);
       expect(pk).toBe(userPubkey);
       expect(verifyEvent(signed)).toBe(true);
       expect(signed.content).toBe("slow");
+    });
+
+    it("two clients racing the same secret while approval is pending: exactly one gets in", async () => {
+      const inner = signerHandler(user);
+      const gate = deferred<void>();
+      const racing = new BunkerServer({
+        connectionSecretKey: generateSecretKey(),
+        relays: [relay.url],
+        handler: async (req, ctx) => {
+          if (req.method === "connect") await gate.promise;
+          return inner(req, ctx);
+        },
+      });
+      await racing.start();
+      cleanups.push(() => racing.stop());
+      const { secret } = racing.createBunkerUri();
+      const a = new RawClient([relay.url], racing.connectionPubkey);
+      const b = new RawClient([relay.url], racing.connectionPubkey);
+      cleanups.push(() => a.close(), () => b.close());
+      await Promise.all([a.listen(), b.listen()]);
+
+      await a.send("ca", "connect", [racing.connectionPubkey, secret]);
+      await wait(50); // a's connect is now pending inside the handler
+      await b.send("cb", "connect", [racing.connectionPubkey, secret]);
+      expect(await b.waitFor("cb")).toEqual({ id: "cb", error: "secret already used by another client" });
+      gate.resolve();
+      expect(await a.waitFor("ca")).toEqual({ id: "ca", result: "ack" });
+      expect(racing.connectedClients).toEqual([a.pubkey]);
+    });
+
+    it("a secret whose pending connect was rejected is free again for the next client", async () => {
+      const inner = signerHandler(user);
+      let denyNext = true;
+      const picky = new BunkerServer({
+        connectionSecretKey: generateSecretKey(),
+        relays: [relay.url],
+        handler: async (req, ctx) => {
+          if (req.method === "connect" && denyNext) {
+            denyNext = false;
+            throw new BunkerError("user declined");
+          }
+          return inner(req, ctx);
+        },
+      });
+      await picky.start();
+      cleanups.push(() => picky.stop());
+      const { uri } = picky.createBunkerUri();
+      const bp = (await parseBunkerInput(uri))!;
+      const pool = new SimplePool();
+      cleanups.push(() => pool.close([relay.url]));
+      const first = BunkerSigner.fromBunker(generateSecretKey(), bp, { pool });
+      await expect(first.connect()).rejects.toBe("user declined");
+      await first.close();
+      const second = BunkerSigner.fromBunker(generateSecretKey(), bp, { pool });
+      await second.connect();
+      expect(await second.getPublicKey()).toBe(userPubkey);
+      await second.close();
     });
 
     it("a redelivered request (same id, fresh event) is answered exactly once", async () => {
@@ -400,6 +577,66 @@ describe("BunkerServer loopback", () => {
       expect(raw.responses.filter((r) => r.id === "dup")).toEqual([{ id: "dup", result: userPubkey }]);
       expect(handlerCalls.filter((c) => c.method === "get_public_key")).toHaveLength(1);
     });
+
+    it("a request encrypted to the wrong key is dropped without a response or a handler call", async () => {
+      const raw = new RawClient([relay.url], connectionPubkey);
+      cleanups.push(() => raw.close());
+      await raw.listen();
+      const { secret } = server.createBunkerUri();
+      await raw.send("c1", "connect", [connectionPubkey, secret]);
+      await raw.waitFor("c1");
+      const wrongKey = nip44.utils.getConversationKey(raw.sk, getPublicKey(generateSecretKey()));
+      await raw.send("w1", "get_public_key", [], { convKey: wrongKey });
+      await raw.send("ok1", "ping", []);
+      await raw.waitFor("ok1");
+      expect(raw.responses.find((r) => r.id === "w1")).toBeUndefined();
+      expect(handlerCalls.map((c) => c.method)).toEqual(["connect"]);
+    });
+
+    it("a request outside the clock-skew limit is dropped", async () => {
+      const raw = new RawClient([relay.url], connectionPubkey);
+      cleanups.push(() => raw.close());
+      await raw.listen();
+      const { secret } = server.createBunkerUri();
+      await raw.send("c1", "connect", [connectionPubkey, secret]);
+      await raw.waitFor("c1");
+      const now = Math.floor(Date.now() / 1000);
+      await raw.send("old", "get_public_key", [], { createdAt: now - 3600 });
+      await raw.send("future", "get_public_key", [], { createdAt: now + 3600 });
+      await raw.send("ok1", "ping", []);
+      await raw.waitFor("ok1");
+      expect(raw.responses.filter((r) => r.id === "old" || r.id === "future")).toEqual([]);
+      expect(handlerCalls.map((c) => c.method)).toEqual(["connect"]);
+    });
+
+    it("a flood of strangers cannot evict a connected client's replay window", async () => {
+      const raw = new RawClient([relay.url], connectionPubkey);
+      cleanups.push(() => raw.close());
+      await raw.listen();
+      const { secret } = server.createBunkerUri();
+      await raw.send("c1", "connect", [connectionPubkey, secret]);
+      await raw.waitFor("c1");
+      await raw.send("once", "get_public_key", []);
+      expect(await raw.waitFor("once")).toEqual({ id: "once", result: userPubkey });
+
+      // 600 fresh keypairs, each one validly signed and p-tagged, more than twice the stranger capacity.
+      const pool = new SimplePool();
+      cleanups.push(() => pool.close([relay.url]));
+      const accepted: Promise<unknown>[] = [];
+      for (let i = 0; i < 600; i++) {
+        const junk = finalizeEvent(
+          { kind: NostrConnect, created_at: Math.floor(Date.now() / 1000), tags: [["p", connectionPubkey]], content: "junk" },
+          generateSecretKey(),
+        );
+        accepted.push(Promise.any(pool.publish([relay.url], junk)));
+      }
+      await Promise.all(accepted); // every junk event is in the relay before the replay
+      await raw.send("once", "get_public_key", []); // the same request id again, a fresh event
+      await raw.send("after", "ping", []);
+      await raw.waitFor("after");
+      expect(raw.responses.filter((r) => r.id === "once")).toHaveLength(1);
+      expect(handlerCalls.filter((c) => c.method === "get_public_key")).toHaveLength(1);
+    }, 15_000);
 
     it("auth_url goes out on the request id and the real result follows on the same id", async () => {
       const inner = signerHandler(user);
@@ -436,6 +673,66 @@ describe("BunkerServer loopback", () => {
       await raw.send("s1", "switch_relays", []);
       const res = await raw.waitFor("s1");
       expect(JSON.parse(res.result!)).toEqual([relay.url]);
+    });
+  });
+
+  describe("relay privacy", () => {
+    it("a relay one client introduced never carries another client's traffic", async () => {
+      const attackerRelay = await TestRelay.start();
+      cleanups.push(() => attackerRelay.close());
+
+      // Client A pairs via nostrconnect:// naming only the attacker's relay.
+      const aSk = generateSecretKey();
+      const aPubkey = getPublicKey(aSk);
+      const aPool = new SimplePool();
+      const aUri = `nostrconnect://${aPubkey}?relay=${encodeURIComponent(attackerRelay.url)}&secret=a-secret`;
+      const abort = new AbortController();
+      const aReady = BunkerSigner.fromURI(aSk, aUri, { pool: aPool }, abort.signal);
+      cleanups.push(async () => {
+        abort.abort();
+        await aReady.then((s) => s.close()).catch(() => {});
+        aPool.close([attackerRelay.url]);
+      });
+      await attackerRelay.waitForSubscriber(aPubkey);
+      await server.acceptNostrConnect(aUri);
+      const a = await aReady;
+      expect(await a.getPublicKey()).toBe(userPubkey);
+      expect(server.relaysFor(aPubkey)).toEqual([attackerRelay.url]);
+      expect(server.relays).toEqual([relay.url]); // host relays untouched
+      expect(server.listeningRelays.sort()).toEqual([relay.url, attackerRelay.url].sort());
+
+      // Client B pairs via bunker:// on the host relay and asks where to go.
+      const b = await connectWithNostrTools();
+      const bPubkey = getPublicKey((b as unknown as { secretKey: Uint8Array }).secretKey);
+      const switched = JSON.parse(await (b as unknown as { sendRequest(m: string, p: string[]): Promise<string> }).sendRequest("switch_relays", []));
+      expect(switched).toEqual([relay.url]);
+      expect(await b.getPublicKey()).toBe(userPubkey);
+      const signed = await b.signEvent({ kind: 1, content: "private", tags: [], created_at: 1 });
+      expect(signed.pubkey).toBe(userPubkey);
+
+      const toB = (e: { tags: string[][] }) => e.tags.some((t) => t[0] === "p" && t[1] === bPubkey);
+      const toA = (e: { tags: string[][] }) => e.tags.some((t) => t[0] === "p" && t[1] === aPubkey);
+      expect(attackerRelay.received.filter(toB)).toEqual([]);
+      expect(attackerRelay.received.some(toA)).toBe(true);
+      expect(relay.received.filter(toA)).toEqual([]);
+
+      // A's switch_relays is A's own set, and A leaving drops the relay it brought.
+      const aSwitched = JSON.parse(await (a as unknown as { sendRequest(m: string, p: string[]): Promise<string> }).sendRequest("switch_relays", []));
+      expect(aSwitched).toEqual([attackerRelay.url]);
+      await a.logout();
+      expect(server.listeningRelays).toEqual([relay.url]);
+      const deadline = Date.now() + 2000;
+      while (attackerRelay.connections > 1 && Date.now() < deadline) await wait(20);
+      expect(attackerRelay.connections).toBeLessThanOrEqual(1); // only A's own pool socket, if it is still open
+    });
+
+    it("a scanned nostrconnect URI cannot rebind a secret already bound to another client", async () => {
+      const { uri, secret } = server.createBunkerUri();
+      const first = await connectWithNostrTools(uri);
+      expect(await first.getPublicKey()).toBe(userPubkey);
+      const intruder = `nostrconnect://${getPublicKey(generateSecretKey())}?relay=${encodeURIComponent(relay.url)}&secret=${secret}`;
+      await expect(server.acceptNostrConnect(intruder)).rejects.toThrow("secret already in use");
+      expect(handlerCalls.filter((c) => c.method === "connect")).toHaveLength(1);
     });
   });
 
