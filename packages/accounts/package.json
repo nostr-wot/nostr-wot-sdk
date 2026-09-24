@@ -1,0 +1,63 @@
+{
+  "name": "@nostr-wot/accounts",
+  "version": "0.1.0",
+  "description": "Platform-neutral Nostr account primitives for the @nostr-wot packages: NIP-06 key derivation, import parsing and NIP-49 (ncryptsec) encoding, with no browser or React Native globals.",
+  "author": "Leon Acosta <leon@nostr-wot.com>",
+  "license": "MIT",
+  "keywords": [
+    "nostr",
+    "nip-06",
+    "nip-49",
+    "bip-39",
+    "ncryptsec",
+    "platform-neutral"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nostr-wot/nostr-wot-sdk.git",
+    "directory": "packages/accounts"
+  },
+  "homepage": "https://github.com/nostr-wot/nostr-wot-sdk/tree/main/packages/accounts",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:run": "vitest run"
+  },
+  "dependencies": {
+    "@noble/ciphers": "^2.1.1",
+    "@noble/curves": "^2.0.1",
+    "@noble/hashes": "^2.0.1",
+    "@scure/base": "^2.0.0",
+    "@scure/bip32": "^2.0.1",
+    "@scure/bip39": "^2.0.1"
+  },
+  "devDependencies": {
+    "tsup": "^8.0.1",
+    "typescript": "^5.3.0",
+    "vitest": "^4.0.18"
+  },
+  "sideEffects": false
+}
