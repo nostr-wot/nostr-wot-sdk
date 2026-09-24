@@ -12,7 +12,7 @@ import {
   type ParsedRequest,
   type ResponsePayload,
 } from "./codec";
-import { createBunkerUri, parseNostrConnectUri } from "./uri";
+import { createBunkerUri, normalizeRelays, parseNostrConnectUri } from "./uri";
 import {
   BunkerError,
   type BunkerErrorMapper,
@@ -146,7 +146,7 @@ export class BunkerServer {
     if (options.relays.length === 0) throw new Error("BunkerServer needs at least one relay");
     this.#ownsPool = !options.pool;
     this.#relayPool = new RelayPool({
-      urls: dedupe(options.relays),
+      urls: normalizeRelays(options.relays),
       ...(options.pool ? { pool: options.pool } : {}),
     });
     this.#relayPool.ensurePool(() => {
@@ -205,7 +205,7 @@ export class BunkerServer {
    */
   createBunkerUri(options: { relays?: string[]; secret?: string } = {}): BunkerUri {
     const secret = options.secret ?? randomHex(16);
-    const relays = dedupe(options.relays && options.relays.length > 0 ? options.relays : this.relays);
+    const relays = normalizeRelays(options.relays && options.relays.length > 0 ? options.relays : this.relays);
     for (const url of relays) this.addRelay(url);
     const existing = this.#secrets.get(secret);
     if (existing) {
@@ -245,6 +245,8 @@ export class BunkerServer {
       await this.#runHandler(request, parsed.relays);
     } catch (err) {
       this.#unbind(record, parsed.secret);
+      // Whatever record the secret came from, a socket an auth_url opened to the scanned relays has no owner now.
+      for (const url of parsed.relays) this.#closeSocket(url);
       throw err;
     }
     record.pending -= 1;
@@ -257,7 +259,8 @@ export class BunkerServer {
   }
 
   /** Listen on a host-chosen relay that was not in the initial set. Safe to call repeatedly. */
-  addRelay(url: string): void {
+  addRelay(rawUrl: string): void {
+    const url = normalizeRelays([rawUrl])[0]!;
     this.#relayPool.addRelay(url);
     if (this.#started && !this.#stopped) void this.#subscribe(url, SERVER_OWNER);
     else this.#claim(url, SERVER_OWNER);
@@ -280,7 +283,7 @@ export class BunkerServer {
   async stop(): Promise<void> {
     if (this.#stopped) return;
     this.#stopped = true;
-    const urls = dedupe([...this.#subs.keys(), ...this.#opened]);
+    const urls = normalizeRelays([...this.#subs.keys(), ...this.#opened]);
     for (const [url, sub] of this.#subs) {
       if (sub.timer) clearTimeout(sub.timer);
       sub.timer = null;
@@ -302,7 +305,8 @@ export class BunkerServer {
   // ── Subscriptions ──
 
   /** Record `owner`'s interest in `url` without opening anything. */
-  #claim(url: string, owner: string): RelaySubscription {
+  #claim(rawUrl: string, owner: string): RelaySubscription {
+    const url = normalizeRelays([rawUrl])[0]!;
     let state = this.#subs.get(url);
     if (!state) {
       state = { closer: null, timer: null, failures: 0, owners: new Set() };
@@ -409,7 +413,6 @@ export class BunkerServer {
     if (event.kind !== NostrConnect) return;
     if (!event.tags.some((t) => t[0] === "p" && t[1] === this.#pubkey)) return;
     const clientPubkey = event.pubkey;
-    if (this.#seen(clientPubkey, `e:${event.id}`)) return;
     if (!verifyEvent(event as never)) {
       this.#log.warn?.("dropped request with invalid signature", { clientPubkey });
       return;
@@ -419,6 +422,10 @@ export class BunkerServer {
       this.#log.warn?.("dropped request outside the clock-skew limit", { clientPubkey, skewSec: skew });
       return;
     }
+    // Only a verified, timely event may occupy a slot in the window. Recording
+    // it earlier would let a corrupted copy from one relay suppress the genuine
+    // event the honest relays deliver.
+    if (this.#seen(clientPubkey, `e:${event.id}`)) return;
 
     const convKey = this.#conversationKey(clientPubkey);
     let message: unknown;
@@ -567,7 +574,7 @@ export class BunkerServer {
   /** Mark a client connected, pinning its dedup window and its relay set. Resolves once its relays are subscribed. */
   async #admit(clientPubkey: string, secret: string | undefined, relays: string[]): Promise<void> {
     const previous = this.#clients.get(clientPubkey);
-    const relaySet = dedupe(relays);
+    const relaySet = normalizeRelays(relays);
     const seen = previous?.seen ?? this.#strangers.get(clientPubkey) ?? new BoundedSet(this.#opts.seenCapacity);
     this.#strangers.delete(clientPubkey);
     this.#clients.set(clientPubkey, {
@@ -679,10 +686,6 @@ async function publishAny(pool: PoolLike | null, relays: string[], event: NostrE
       );
     }
   });
-}
-
-function dedupe(urls: string[]): string[] {
-  return [...new Set(urls)];
 }
 
 function randomHex(byteLength: number): string {
