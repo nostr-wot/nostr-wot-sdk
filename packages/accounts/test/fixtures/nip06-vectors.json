@@ -1,0 +1,39 @@
+{
+  "$comment": [
+    "NIP-06 derivation vectors in the EXTENSION-COMPATIBLE layout: sub-account n is at",
+    "m/44'/1237'/0'/0/{n} — the LAST component varies, the account component stays at 0'.",
+    "This is NOT the m/44'/1237'/{n}'/0/0 that a strict reading of NIP-06 suggests, and the",
+    "difference is deliberate: the browser extension has shipped these paths to real users, and",
+    "a seed restored elsewhere must return the same identities. See packages/accounts/README.md.",
+    "Index 0 is the published NIP-06 test vector and is identical under either layout.",
+    "Generated from @nostr-wot/accounts. nostr-wot-extension is expected to gain a mirror test",
+    "reading this same file during its migration; keep the two copies byte-identical."
+  ],
+  "mnemonic": "leader monkey parrot ring guide accident before fence cannon height naive bean",
+  "vectors": [
+    {
+      "index": 0,
+      "path": "m/44'/1237'/0'/0/0",
+      "pubkey": "17162c921dc4d2518f9a101db33695df1afb56ab82f5ff3e5da6eec3ca5cd917",
+      "privkey": "7f7ff03d123792d6ac594bfa67bf6d0c0ab55b6b1fdb6249303fe861f1ccba9a"
+    },
+    {
+      "index": 1,
+      "path": "m/44'/1237'/0'/0/1",
+      "pubkey": "bb5cb62b06ae1a9032cbd6b42eb17c41cf6882ca3d4a8e98704f1560aa851b05",
+      "privkey": "461c92592ef537a622cbd7b2d30bb2219e118f4013d0cc53cc553040ec034b03"
+    },
+    {
+      "index": 3,
+      "path": "m/44'/1237'/0'/0/3",
+      "pubkey": "09f45bff089e6b3ba9d6c67c1af7c3b0236f42bfb143c9eb027a1924aefcdce6",
+      "privkey": "54b5eedfb23f7e603780fd331a43bb20bd3e2811441a71d34db34db47405f13f"
+    },
+    {
+      "index": 7,
+      "path": "m/44'/1237'/0'/0/7",
+      "pubkey": "eeccdc0422e9f97a3268cbce3b1da99e0f1e9b7647f445fe407a85a267e05dea",
+      "privkey": "a9819284bbc936f5b0e34601765c9440938237e6fe34019ac26e98eb169965f4"
+    }
+  ]
+}

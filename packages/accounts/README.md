@@ -54,11 +54,12 @@ lets a stored path recover its account index, and it is covered by a test.
 
 ## Import
 
-`parseImportInput` validates; it does not merely match a prefix. A bech32 string whose checksum
-does not hold returns `null`, an `nsec` whose bytes are not a curve scalar returns `null`, and an
-`ncryptsec` with an unknown version or a truncated payload returns `null` — because an
-accepted-but-wrong npub becomes a watch-only account pointing at a pubkey nobody holds, and the
-user finds out weeks later.
+`parseImportInput` validates; it does not merely match a prefix. It returns `null` for a bech32
+string whose checksum does not hold, an `nsec` or hex key whose bytes are not a valid secp256k1
+scalar, an `npub` whose x-coordinate is not on the curve, and an `ncryptsec` with an unknown
+version byte or a payload of the wrong length. Every one of those is material that looks
+importable and is not: an accepted-but-wrong npub becomes a watch-only account pointing at a
+pubkey nobody holds, and the import screen is the last moment anyone can be told.
 
 ```ts
 import { parseImportInput } from '@nostr-wot/accounts';
@@ -71,6 +72,7 @@ parseImportInput('<64 hex>');      // { kind: 'hex-private', privkey }
 parseImportInput('twelve or twenty four words…'); // { kind: 'mnemonic', mnemonic }
 parseImportInput('npub1qqqq…');    // null — bad checksum
 parseImportInput('0'.repeat(64));  // null — not a valid secp256k1 scalar
+// null — an npub whose x-coordinate has no point on the curve
 ```
 
 ### `detectImportKind` — for the error message, never for the decision
@@ -115,6 +117,18 @@ writes that format any more.
 
 The `logn` argument on `encryptNcryptsec` exists for tests. Lowering it lowers the cost of
 guessing the password.
+
+## The committed derivation fixture
+
+`test/fixtures/nip06-vectors.json` pins the NIP-06 mnemonic and the derived keys for indexes 0,
+1, 3 and 7 in the extension-compatible layout, and a test asserts `deriveFromMnemonic` reproduces
+every row. An edit that "corrects" the path convention breaks all four rows instead of silently
+handing existing users a different set of identities. Index 0 is the published NIP-06 vector, so
+the fixture is anchored to the spec and not only to this implementation.
+
+The other half of the guard — a mirror test in `nostr-wot-extension` reading this same file — is
+what would actually catch a cross-repo divergence. It belongs to the extension migration phase and
+is not in this package. Keep the two copies byte-identical when it lands.
 
 ## License
 

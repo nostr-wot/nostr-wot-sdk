@@ -20,6 +20,7 @@ export {
   derivePath,
   generateMnemonic,
   isValidPrivateKey,
+  isValidPublicKey,
   mnemonicToSeed,
   normalizeDerivationPath,
   publicKeyFromPrivate,

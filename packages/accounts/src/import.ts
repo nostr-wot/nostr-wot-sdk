@@ -20,7 +20,7 @@
  */
 import { hexToBytes } from '@noble/hashes/utils.js';
 import { bech32DecodeFixed, bech32Decode } from './bech32.js';
-import { isValidPrivateKey, validateMnemonic } from './derivation.js';
+import { isValidPrivateKey, isValidPublicKey, validateMnemonic } from './derivation.js';
 import { V2_PAYLOAD_LENGTH, VERSION_LEGACY, VERSION_V2 } from './nip49.js';
 
 export const ENCRYPTED_PRIVATE_KEY_PREFIX = 'ncryptsec1';
@@ -117,7 +117,10 @@ export function parseImportInput(raw: string): ImportInput | null {
 
     case 'npub': {
       const pubkey = bech32DecodeFixed(input, 'npub', 32);
-      return pubkey ? { kind: 'npub', pubkey: bytesToHexLower(pubkey) } : null;
+      // An x-coordinate that is not on the curve makes a watch-only account that can never
+      // verify anything. This is the only screen on which anyone can be told.
+      if (!pubkey || !isValidPublicKey(pubkey)) return null;
+      return { kind: 'npub', pubkey: bytesToHexLower(pubkey) };
     }
 
     case 'bunker':

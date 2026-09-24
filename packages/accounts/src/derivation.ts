@@ -141,6 +141,25 @@ export function isValidPrivateKey(privkey: Uint8Array): boolean {
 }
 
 /**
+ * Is this a usable x-only Nostr public key: 32 bytes, and an x-coordinate that lifts to a
+ * point on secp256k1?
+ *
+ * Most of Nostr treats a pubkey as opaque 32-byte hex, and for relays and event tags that is
+ * fine. Importing one is different: a watch-only account whose x-coordinate is not on the curve
+ * can never verify a signature, and the import screen is the only moment anyone can be told.
+ * After that they own an account that is silently dead.
+ *
+ * Checked as BIP-340 lifts it — the even-y point with this x.
+ */
+export function isValidPublicKey(pubkey: Uint8Array): boolean {
+  if (!(pubkey instanceof Uint8Array) || pubkey.length !== 32) return false;
+  const compressed = new Uint8Array(33);
+  compressed[0] = 0x02;
+  compressed.set(pubkey, 1);
+  return secp256k1.utils.isValidPublicKey(compressed);
+}
+
+/**
  * Derive the NIP-06 identity at `index` from a mnemonic.
  *
  * `privkey` is live key material: the caller owns it and should zero it once used. The

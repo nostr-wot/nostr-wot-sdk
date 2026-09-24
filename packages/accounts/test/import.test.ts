@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { bytesToHex } from '@noble/hashes/utils.js';
+import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
 import { pbkdf2 } from '@noble/hashes/pbkdf2.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { gcm } from '@noble/ciphers/aes.js';
@@ -22,6 +22,8 @@ const MNEMONIC = 'leader monkey parrot ring guide accident before fence cannon h
 const KEY = new Uint8Array(32).fill(4);
 const PUBKEY_HEX = 'e'.repeat(64);
 const PUBKEY_NPUB = 'npub1amhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhqmtnwcq';
+// The NIP-06 vector's public key: a real derived key, not a handpicked x-coordinate.
+const DERIVED_PUBKEY_HEX = '17162c921dc4d2518f9a101db33695df1afb56ab82f5ff3e5da6eec3ca5cd917';
 
 function flipLastChar(value: string): string {
   return value.slice(0, -1) + (value.endsWith('q') ? 'p' : 'q');
@@ -84,6 +86,27 @@ describe('parseImportInput', () => {
     // ...while the shape detector still says what they were meant to be.
     expect(detectImportKind(nsecEncode(zero))).toBe('nsec');
     expect(detectImportKind('0'.repeat(64))).toBe('hex-private');
+  });
+
+  test('an npub whose x-coordinate is not on the curve is rejected', () => {
+    // x = 0 and x = 7 have no point on secp256k1; 0xff…ff is outside the field entirely.
+    // A watch-only account on any of them could never verify a signature.
+    for (const hex of ['0'.repeat(64), '0'.repeat(63) + '7', 'f'.repeat(64)]) {
+      const npub = bech32.encode('npub', bech32.toWords(hexToBytes(hex)), 5000);
+      expect(parseImportInput(npub)).toBe(null);
+      // ...and the UI can still say which thing it was, per ruling B.
+      expect(detectImportKind(npub)).toBe('npub');
+    }
+  });
+
+  test('a real npub still parses after the curve check', () => {
+    expect(parseImportInput(PUBKEY_NPUB)?.kind).toBe('npub');
+    // A pubkey actually derived from a seed, not just a handpicked x-coordinate.
+    const derived = npubEncode(DERIVED_PUBKEY_HEX);
+    const parsed = parseImportInput(derived);
+    expect(parsed?.kind).toBe('npub');
+    if (parsed?.kind !== 'npub') throw new Error('unreachable');
+    expect(parsed.pubkey).toBe(DERIVED_PUBKEY_HEX);
   });
 
   test('an ncryptsec with a bad version byte or a truncated payload is rejected', () => {

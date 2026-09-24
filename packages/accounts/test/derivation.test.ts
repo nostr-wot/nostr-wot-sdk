@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { bytesToHex } from '@noble/hashes/utils.js';
+import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
 import {
   NIP06_ACCOUNT_PREFIX,
   NIP06_PATH,
@@ -8,6 +8,7 @@ import {
   derivePath,
   generateMnemonic,
   isValidPrivateKey,
+  isValidPublicKey,
   mnemonicToSeed,
   normalizeDerivationPath,
   publicKeyFromPrivate,
@@ -16,6 +17,7 @@ import {
   validateMnemonic,
 } from '../src/index.js';
 import type { Account } from '../src/index.js';
+import vectors from './fixtures/nip06-vectors.json' with { type: 'json' };
 
 // NIP-06 test vector: https://github.com/nostr-protocol/nips/blob/master/06.md
 const MNEMONIC = 'leader monkey parrot ring guide accident before fence cannon height naive bean';
@@ -59,6 +61,35 @@ describe('NIP-06 derivation', () => {
     const direct = derivePath(seed, NIP06_PATH);
     expect(bytesToHex(direct)).toBe(EXPECTED_PRIV);
     expect(publicKeyFromPrivate(direct)).toBe(EXPECTED_PUB);
+  });
+});
+
+describe('the committed NIP-06 fixture', () => {
+  // The divergence guard. These values are the EXTENSION-COMPATIBLE layout —
+  // m/44'/1237'/0'/0/{n}, last component varying — not the m/44'/1237'/{n}'/0/0 a strict
+  // reading of NIP-06 suggests. An edit that "fixes" the convention breaks every row here
+  // rather than silently handing existing users a different set of identities.
+  //
+  // The other half of this guard is a mirror test in nostr-wot-extension reading this same
+  // file. That lands with the extension migration; see the report.
+  test('the fixture declares the extension-compatible layout', () => {
+    expect(vectors.$comment.join(' ')).toContain('EXTENSION-COMPATIBLE');
+    expect(vectors.mnemonic).toBe(MNEMONIC);
+    expect(vectors.vectors.map((v) => v.index)).toEqual([0, 1, 3, 7]);
+  });
+
+  test.each(vectors.vectors)('index $index derives to the recorded key', (vector) => {
+    const { privkey, pubkey, path } = deriveFromMnemonic(vectors.mnemonic, vector.index);
+    expect(path).toBe(vector.path);
+    expect(bytesToHex(privkey)).toBe(vector.privkey);
+    expect(pubkey).toBe(vector.pubkey);
+  });
+
+  test('index 0 is the published NIP-06 vector, so the fixture is anchored to the spec', () => {
+    const first = vectors.vectors[0]!;
+    expect(first.privkey).toBe(EXPECTED_PRIV);
+    expect(first.pubkey).toBe(EXPECTED_PUB);
+    expect(first.path).toBe(NIP06_PATH);
   });
 });
 
@@ -121,6 +152,19 @@ describe('isValidPrivateKey', () => {
     expect(isValidPrivateKey(new Uint8Array(32).fill(0xff))).toBe(false);
     expect(isValidPrivateKey(new Uint8Array(31).fill(4))).toBe(false);
     expect(isValidPrivateKey(new Uint8Array(33).fill(4))).toBe(false);
+  });
+});
+
+describe('isValidPublicKey', () => {
+  test('a derived x-only key lifts to a point on the curve', () => {
+    expect(isValidPublicKey(hexToBytes(EXPECTED_PUB))).toBe(true);
+  });
+
+  test('an x-coordinate with no point on the curve is rejected', () => {
+    expect(isValidPublicKey(new Uint8Array(32))).toBe(false); // x = 0
+    expect(isValidPublicKey(hexToBytes('0'.repeat(63) + '7'))).toBe(false); // x = 7
+    expect(isValidPublicKey(new Uint8Array(32).fill(0xff))).toBe(false); // outside the field
+    expect(isValidPublicKey(new Uint8Array(31))).toBe(false);
   });
 });
 
