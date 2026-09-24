@@ -1,5 +1,6 @@
 import { WebSocketServer, type WebSocket } from "ws";
 import type { AddressInfo } from "node:net";
+import { normalizeURL } from "nostr-tools/utils";
 
 interface Filter {
   ids?: string[];
@@ -53,7 +54,8 @@ export class TestRelay {
   private constructor(wss: WebSocketServer, port: number) {
     this.#wss = wss;
     this.port = port;
-    this.url = `ws://127.0.0.1:${port}`;
+    // The pool's spelling of this relay, so assertions against `server.relays` compare like with like.
+    this.url = normalizeURL(`ws://127.0.0.1:${port}`);
     wss.on("connection", (socket) => {
       this.#subs.set(socket, new Map());
       socket.on("message", (raw) => this.#onMessage(socket, raw.toString()));
