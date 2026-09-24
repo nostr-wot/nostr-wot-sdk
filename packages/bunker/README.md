@@ -99,7 +99,9 @@ client's own `nostrconnect://` relays for a client-initiated one. A relay one cl
 is never used for another client's traffic, `switch_relays` answers with the asking client's own
 set, and a client-introduced relay is dropped when that client leaves. `server.relays` is the
 host-configured set, `server.listeningRelays` everything currently subscribed,
-`server.relaysFor(pubkey)` one client's set.
+`server.relaysFor(pubkey)` one client's set. A pending pairing never writes to a secret's relays,
+so a rejected scan leaves no trace on a host-minted secret, and `stop()` closes every socket the
+server opened, publish-only ones included.
 
 ### Out of scope, deliberately
 
