@@ -48,6 +48,10 @@ The DM kinds collapse so one approval covers the whole send-a-DM flow, encrypt a
 signature, instead of prompting twice. The consequence is deliberate: denying sign-of-DM-kind
 without also denying encrypt is not expressible, because it is one decision.
 
+Because of that collapse, nothing ever consults a raw `signEvent:4`, `:13`, `:14` or `:1059` key,
+so `saveDirect` **throws** on one rather than storing a rule that can never fire. Write
+`sendMessages`, or go through `save`, which maps the kind for you.
+
 ## Usage
 
 ```ts
@@ -73,8 +77,16 @@ how rules stored by older versions are still read.
 The two modes are mutually exclusive, and `getUseGlobalDefaults()` is `true` when nothing is
 stored.
 
-- **Global** — every account shares the `_default` bucket.
+- **Global** — every account shares the `_default` bucket, and `accountId` is ignored.
 - **Per-account** — each account has its own bucket, and an account with no bucket asks.
+
+**In per-account mode a missing or empty `accountId` fails closed.** It resolves to no bucket at
+all: `check` answers `ask`, `getAll` and `getForOrigin` come back empty, and a write throws rather
+than landing in the shared `_default` bucket. This is a deliberate divergence from the browser
+extension, which resolves `accountId || '_default'` in both modes. The extension gets away with it
+because it has one call site; with four transports feeding this package, an optional parameter one
+call site forgets is exactly how a cross-account leak ships. One extra approval prompt on a path
+that should not occur is cheaper than an unauthorized signature.
 
 Dormant data survives a switch: only the active mode's bucket is read or written.
 `setupNewAccountPermissions` uses that carefully — in global mode it copies each existing

@@ -23,6 +23,16 @@ async function raw(store: KeyValueStore): Promise<PermissionMap> {
   return (await store.get<PermissionMap>(PERMISSIONS_STORAGE_KEY)) ?? {};
 }
 
+/**
+ * A store holding a pre-migration tree.
+ *
+ * Seeded through the store rather than through `saveDirect`, which now refuses the raw
+ * DM-kind keys precisely because nothing consults them.
+ */
+function seeded(tree: PermissionMap, flags: Record<string, unknown> = {}): MemoryStore {
+  return new MemoryStore({ [PERMISSIONS_STORAGE_KEY]: tree, ...flags });
+}
+
 /** A store that cannot report changes, so only explicit invalidation can save it. */
 function withoutSubscribe(store: KeyValueStore): KeyValueStore {
   return {
@@ -139,9 +149,9 @@ describe('save, saveDirect and getAll', () => {
   test('saveDirect writes a key verbatim', async () => {
     const store = new MemoryStore();
     const permissions = new Permissions(store);
-    await permissions.saveDirect('chat.com', 'signEvent:4', 'allow');
+    await permissions.saveDirect('chat.com', 'signEvent:1111', 'allow');
 
-    expect(await raw(store)).toEqual({ 'chat.com': { _default: { 'signEvent:4': 'allow' } } });
+    expect(await raw(store)).toEqual({ 'chat.com': { _default: { 'signEvent:1111': 'allow' } } });
   });
 
   test('getAll and getForOrigin report the active bucket', async () => {
@@ -364,45 +374,47 @@ describe('migrations', () => {
 
   describe('migrateDmKindsToSendMessages', () => {
     test('moves a stored signEvent:4 entry into sendMessages', async () => {
-      const permissions = new Permissions(new MemoryStore());
-      await permissions.saveDirect('chat.com', 'signEvent:4', 'allow');
+      const permissions = new Permissions(seeded({ 'chat.com': { _default: { 'signEvent:4': 'allow' } } }));
       await permissions.migrateDmKindsToSendMessages();
 
       expect(await permissions.getForOrigin('chat.com')).toEqual({ sendMessages: 'allow' });
     });
 
     test('merges several DM kinds most-restrictive-wins', async () => {
-      const permissions = new Permissions(new MemoryStore());
-      await permissions.saveDirect('chat.com', 'signEvent:4', 'allow');
-      await permissions.saveDirect('chat.com', 'signEvent:13', 'deny');
-      await permissions.saveDirect('chat.com', 'signEvent:1059', 'allow');
+      const permissions = new Permissions(
+        seeded({
+          'chat.com': {
+            _default: { 'signEvent:4': 'allow', 'signEvent:13': 'deny', 'signEvent:1059': 'allow' },
+          },
+        }),
+      );
       await permissions.migrateDmKindsToSendMessages();
 
       expect(await permissions.getForOrigin('chat.com')).toEqual({ sendMessages: 'deny' });
     });
 
     test('the ranking is deny over ask over allow', async () => {
-      const permissions = new Permissions(new MemoryStore());
-      await permissions.saveDirect('chat.com', 'signEvent:4', 'allow');
-      await permissions.saveDirect('chat.com', 'signEvent:14', 'ask');
+      const permissions = new Permissions(
+        seeded({ 'chat.com': { _default: { 'signEvent:4': 'allow', 'signEvent:14': 'ask' } } }),
+      );
       await permissions.migrateDmKindsToSendMessages();
 
       expect(await permissions.getForOrigin('chat.com')).toEqual({ sendMessages: 'ask' });
     });
 
     test('an existing sendMessages deny survives a less restrictive DM kind', async () => {
-      const permissions = new Permissions(new MemoryStore());
-      await permissions.saveDirect('chat.com', 'sendMessages', 'deny');
-      await permissions.saveDirect('chat.com', 'signEvent:4', 'allow');
+      const permissions = new Permissions(
+        seeded({ 'chat.com': { _default: { sendMessages: 'deny', 'signEvent:4': 'allow' } } }),
+      );
       await permissions.migrateDmKindsToSendMessages();
 
       expect(await permissions.getForOrigin('chat.com')).toEqual({ sendMessages: 'deny' });
     });
 
     test('a more restrictive DM kind escalates an existing sendMessages allow', async () => {
-      const permissions = new Permissions(new MemoryStore());
-      await permissions.saveDirect('chat.com', 'sendMessages', 'allow');
-      await permissions.saveDirect('chat.com', 'signEvent:13', 'deny');
+      const permissions = new Permissions(
+        seeded({ 'chat.com': { _default: { sendMessages: 'allow', 'signEvent:13': 'deny' } } }),
+      );
       await permissions.migrateDmKindsToSendMessages();
 
       expect(await permissions.getForOrigin('chat.com')).toEqual({ sendMessages: 'deny' });
@@ -446,8 +458,9 @@ describe('migrations', () => {
     expect(await raw(store)).toEqual({ 'a.com': { _default: { sendMessages: 'ask' } } });
     expect(await store.get('_permMigrationVersion')).toBe(4);
 
-    // A second run must not touch already-migrated data.
-    await permissions.saveDirect('a.com', 'signEvent:4', 'allow');
+    // A second run must not touch already-migrated data. Written through the store,
+    // because saveDirect refuses the raw DM-kind key.
+    await store.set(PERMISSIONS_STORAGE_KEY, { 'a.com': { _default: { 'signEvent:4': 'allow' } } });
     await permissions.migrate();
     expect((await raw(store))['a.com']?._default?.['signEvent:4']).toBe('allow');
   });
@@ -529,6 +542,194 @@ describe('concurrency and the cache', () => {
     await permissions.save('a.com', 'signEvent', 1, 'allow');
     expect(await permissions.check('a.com', 'signEvent', 1)).toBe('allow');
     expect(() => permissions.dispose()).not.toThrow();
+  });
+});
+
+describe('a revocation is not reversible by a concurrent write', () => {
+  /** A store whose writes land later than its removals, as every real backend's do. */
+  function slowWrites(store: KeyValueStore, delayMs: number): KeyValueStore {
+    const view: KeyValueStore = {
+      get: (key) => store.get(key),
+      set: async (key, value) => {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        return store.set(key, value);
+      },
+      remove: (key) => store.remove(key),
+      keys: () => store.keys(),
+    };
+    const underlying = store.subscribe;
+    if (underlying) view.subscribe = (listener) => underlying.call(store, listener);
+    return view;
+  }
+
+  test('clear() with no origin cannot be overtaken by a save already in flight', async () => {
+    const backing = new MemoryStore();
+    const permissions = new Permissions(slowWrites(backing, 20));
+
+    await permissions.saveDirect('evil.com', 'signEvent:1', 'allow');
+
+    // The save loads the tree first and writes it back last. Unlocked, its write lands
+    // after the removal and resurrects every grant the user had just revoked.
+    await Promise.all([permissions.saveDirect('good.com', 'signEvent:1', 'allow'), permissions.clear()]);
+
+    expect(await backing.get(PERMISSIONS_STORAGE_KEY)).toBeUndefined();
+    expect(await permissions.check('evil.com', 'signEvent', 1)).toBe('ask');
+    expect(await permissions.check('good.com', 'signEvent', 1)).toBe('ask');
+  });
+});
+
+describe('a failed write never leaves the cache more permissive than the disk', () => {
+  /** A store whose `set` rejects once armed. */
+  function brittle(store: KeyValueStore): { store: KeyValueStore; arm: (on: boolean) => void } {
+    let failing = false;
+    const view: KeyValueStore = {
+      get: (key) => store.get(key),
+      set: async (key, value) => {
+        if (failing) throw new Error('quota exceeded');
+        return store.set(key, value);
+      },
+      remove: (key) => store.remove(key),
+      keys: () => store.keys(),
+    };
+    const underlying = store.subscribe;
+    if (underlying) view.subscribe = (listener) => underlying.call(store, listener);
+    return { store: view, arm: (on: boolean) => (failing = on) };
+  }
+
+  test('an allow that failed to persist is not answered from the cache', async () => {
+    const backing = new MemoryStore();
+    const { store, arm } = brittle(backing);
+    const permissions = new Permissions(store);
+
+    arm(true);
+    await expect(permissions.save('a.com', 'signEvent', 1, 'allow')).rejects.toThrow('quota exceeded');
+
+    expect(await backing.get(PERMISSIONS_STORAGE_KEY)).toBeUndefined();
+    expect(await permissions.check('a.com', 'signEvent', 1)).toBe('ask');
+
+    // And the instance still works once the store recovers.
+    arm(false);
+    await permissions.save('a.com', 'signEvent', 1, 'allow');
+    expect(await permissions.check('a.com', 'signEvent', 1)).toBe('allow');
+  });
+
+  test('a deny that failed to persist is not answered from the cache either', async () => {
+    const backing = new MemoryStore();
+    const { store, arm } = brittle(backing);
+    const permissions = new Permissions(store);
+
+    arm(true);
+    await expect(permissions.save('a.com', 'signEvent', 1, 'deny')).rejects.toThrow('quota exceeded');
+
+    expect(await backing.get(PERMISSIONS_STORAGE_KEY)).toBeUndefined();
+    expect(await permissions.check('a.com', 'signEvent', 1)).toBe('ask');
+  });
+
+  test('a failed write does not strand a stored grant behind a phantom', async () => {
+    const backing = seeded({ 'a.com': { _default: { 'signEvent:1': 'allow' } } });
+    const { store, arm } = brittle(backing);
+    const permissions = new Permissions(store);
+
+    arm(true);
+    await expect(permissions.save('a.com', 'signEvent', 1, 'deny')).rejects.toThrow('quota exceeded');
+
+    // What is on disk is still the allow, and that is what the cache must report.
+    expect(await permissions.check('a.com', 'signEvent', 1)).toBe('allow');
+  });
+});
+
+describe('per-account mode fails closed without an accountId', () => {
+  test('a missing or empty accountId resolves to ask, never to _default', async () => {
+    const store = new MemoryStore();
+    const permissions = new Permissions(store);
+
+    await permissions.save('a.com', 'signEvent', 1, 'allow');
+    await permissions.setUseGlobalDefaults(false);
+
+    expect(await permissions.check('a.com', 'signEvent', 1)).toBe('ask');
+    expect(await permissions.check('a.com', 'signEvent', 1, '')).toBe('ask');
+    expect(await permissions.check('a.com', 'signEvent', 1, 'acct')).toBe('ask');
+    expect(await permissions.getForOrigin('a.com')).toEqual({});
+    expect(await permissions.getAll()).toEqual({});
+
+    // The _default bucket is still there, just out of reach until the mode says otherwise.
+    expect(await raw(store)).toEqual({ 'a.com': { _default: { 'signEvent:1': 'allow' } } });
+  });
+
+  test('a write with nowhere to go is refused rather than landing in _default', async () => {
+    const store = new MemoryStore();
+    const permissions = new Permissions(store);
+    await permissions.setUseGlobalDefaults(false);
+
+    await expect(permissions.save('a.com', 'signEvent', 1, 'allow')).rejects.toThrow(/accountId/);
+    await expect(permissions.saveDirect('a.com', 'getPublicKey', 'allow')).rejects.toThrow(/accountId/);
+    await expect(permissions.clear('a.com')).rejects.toThrow(/accountId/);
+    expect(await raw(store)).toEqual({});
+  });
+
+  test('global mode keeps the fallback, where _default is the right bucket by definition', async () => {
+    const permissions = new Permissions(new MemoryStore());
+    await permissions.save('a.com', 'signEvent', 1, 'allow');
+
+    expect(await permissions.check('a.com', 'signEvent', 1)).toBe('allow');
+    expect(await permissions.check('a.com', 'signEvent', 1, '')).toBe('allow');
+    expect(await permissions.check('a.com', 'signEvent', 1, 'anyone')).toBe('allow');
+    expect(await permissions.getAll()).toEqual({ 'a.com': { 'signEvent:1': 'allow' } });
+  });
+});
+
+describe('the one place an allow beats a deny', () => {
+  test('an exact-origin allow overrides the same key denied on the legacy hostname', async () => {
+    const store = seeded({ 'example.com': { _default: { 'signEvent:1': 'deny' } } });
+    const permissions = new Permissions(store);
+
+    expect(await permissions.check('https://example.com', 'signEvent', 1)).toBe('deny');
+
+    // Deliberate, and the only exception to deny-wins in the system: an exact-origin rule
+    // is a later and more specific statement about the same key than the legacy hostname
+    // rule it replaces, so it replaces it before the cascade ever runs.
+    await permissions.save('https://example.com', 'signEvent', 1, 'allow');
+    expect(await permissions.check('https://example.com', 'signEvent', 1)).toBe('allow');
+
+    // The legacy rule itself is untouched, and still governs the bare hostname.
+    expect(await permissions.check('example.com', 'signEvent', 1)).toBe('deny');
+  });
+
+  test('a legacy deny on a DIFFERENT key still wins, because the cascade still runs', async () => {
+    const store = seeded({ 'example.com': { _default: { '*': 'deny' } } });
+    const permissions = new Permissions(store);
+
+    await permissions.save('https://example.com', 'signEvent', 1, 'allow');
+
+    // The exact origin overrode nothing: the wildcard deny is a different key, survives
+    // the merge, and denies.
+    expect(await permissions.check('https://example.com', 'signEvent', 1)).toBe('deny');
+  });
+});
+
+describe('a dead permission key is refused, not silently stored', () => {
+  test('saveDirect rejects the DM-kind keys that nothing ever consults', async () => {
+    const store = new MemoryStore();
+    const permissions = new Permissions(store);
+
+    for (const key of ['signEvent:4', 'signEvent:13', 'signEvent:14', 'signEvent:1059']) {
+      await expect(permissions.saveDirect('chat.com', key, 'deny')).rejects.toThrow(/sendMessages/);
+    }
+    expect(await raw(store)).toEqual({});
+  });
+
+  test('save still accepts the same kinds, because it maps them first', async () => {
+    const permissions = new Permissions(new MemoryStore());
+    await permissions.save('chat.com', 'signEvent', 4, 'deny');
+
+    expect(await permissions.getForOrigin('chat.com')).toEqual({ sendMessages: 'deny' });
+    expect(await permissions.check('chat.com', 'signEvent', 4)).toBe('deny');
+  });
+
+  test('non-DM signEvent keys are still accepted verbatim', async () => {
+    const permissions = new Permissions(new MemoryStore());
+    await permissions.saveDirect('a.com', 'signEvent:1', 'allow');
+    expect(await permissions.check('a.com', 'signEvent', 1)).toBe('allow');
   });
 });
 

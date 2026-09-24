@@ -16,6 +16,20 @@
  * Dormant data survives a mode switch: only the active mode's bucket is read or written,
  * so switching back finds what was there before.
  *
+ * ## Divergence from the browser extension: no `_default` fallback in per-account mode
+ *
+ * The extension resolves its bucket as `accountId || '_default'` in both modes, so a call
+ * that omits `accountId` while in per-account mode silently reads the bucket every account
+ * shares. It gets away with it because it has one call site. This package is about to have
+ * four transports feeding it, and an optional parameter that one call site forgets is
+ * exactly how a cross-account leak ships.
+ *
+ * So this implementation fails closed. In per-account mode a missing or empty `accountId`
+ * resolves to no bucket at all: reads see an empty bucket and answer `ask`, and writes
+ * throw rather than land in `_default`. Global mode keeps the fallback, where `_default` is
+ * the correct bucket by definition. The cost is one extra approval prompt on a path that
+ * should not occur; the alternative cost is an unauthorized signature.
+ *
  * Nothing here decides how a request is *routed* — local signing versus a remote signer is
  * the signer's business, not the permission's. A permission answers one question: may this
  * caller do this.
@@ -136,8 +150,9 @@ export class Permissions {
 
   /** Every origin's rules in the active bucket: `{ origin: { permissionKey: decision } }`. */
   async getAll(accountId?: string): Promise<Record<string, PermissionBucket>> {
-    const perms = await this.#load();
     const bucket = await this.#activeBucket(accountId);
+    if (bucket === null) return {};
+    const perms = await this.#load();
     const result: Record<string, PermissionBucket> = {};
     for (const origin of Object.keys(perms)) {
       const data = perms[origin][bucket];
@@ -148,8 +163,9 @@ export class Permissions {
 
   /** One origin's effective rules in the active bucket, legacy scopes folded in. */
   async getForOrigin(origin: string, accountId?: string): Promise<PermissionBucket> {
-    const perms = await this.#load();
-    return originPermissionBucket(perms, origin, await this.#activeBucket(accountId));
+    const bucket = await this.#activeBucket(accountId);
+    if (bucket === null) return {};
+    return originPermissionBucket(await this.#load(), origin, bucket);
   }
 
   /** The whole stored tree, every bucket, as a copy. For settings screens and diffs. */
@@ -179,8 +195,11 @@ export class Permissions {
 
   /** Turns global defaults on or off. The dormant buckets are left exactly as they are. */
   async setUseGlobalDefaults(enabled: boolean): Promise<void> {
-    await this.#store.set(GLOBAL_DEFAULTS_KEY, !!enabled);
-    this.invalidateCache();
+    try {
+      await this.#store.set(GLOBAL_DEFAULTS_KEY, !!enabled);
+    } finally {
+      this.invalidateCache();
+    }
   }
 
   /**
@@ -198,8 +217,12 @@ export class Permissions {
   }
 
   /**
-   * Records a decision under a key verbatim, for a UI that edits keys directly and for
-   * seeding a store with pre-migration data.
+   * Records a decision under a key verbatim, for a UI that edits keys directly.
+   *
+   * A DM-kind key (`signEvent:4`, `:13`, `:14`, `:1059`) is rejected, because nothing ever
+   * consults one: {@link permissionKey} maps those kinds to `sendMessages`, so a rule
+   * written under the raw key is dead on arrival. Accepting one silently is how a UI ships
+   * a `deny` the user believes is in force and that never fires. Write `sendMessages`.
    */
   async saveDirect(
     origin: string,
@@ -207,9 +230,14 @@ export class Permissions {
     decision: PermissionDecision,
     accountId?: string,
   ): Promise<void> {
+    if (DM_PERMISSION_KEYS.includes(key)) {
+      throw new Error(
+        `${key} is never consulted: DM sign kinds resolve to "sendMessages". Write that key instead.`,
+      );
+    }
     await this.#lock.run(async () => {
+      const bucket = await this.#writeBucket(accountId);
       const perms = await this.#load();
-      const bucket = await this.#activeBucket(accountId);
       if (!perms[origin]) perms[origin] = {};
       if (!perms[origin][bucket]) perms[origin][bucket] = {};
       perms[origin][bucket][key] = decision;
@@ -219,16 +247,25 @@ export class Permissions {
 
   /**
    * Clears one origin's rules in the active bucket, or, with no origin, every rule there is.
+   *
+   * Both paths take the lock. A revocation that raced a concurrent save used to be
+   * reversible: the save had already loaded the tree, so writing it back resurrected every
+   * grant the user had just revoked.
    */
   async clear(origin?: string, accountId?: string): Promise<void> {
     if (!origin) {
-      await this.#store.remove(PERMISSIONS_STORAGE_KEY);
-      this.invalidateCache();
+      await this.#lock.run(async () => {
+        try {
+          await this.#store.remove(PERMISSIONS_STORAGE_KEY);
+        } finally {
+          this.invalidateCache();
+        }
+      });
       return;
     }
     await this.#lock.run(async () => {
+      const bucket = await this.#writeBucket(accountId);
       const perms = await this.#load();
-      const bucket = await this.#activeBucket(accountId);
       for (const scope of siteScopes(origin)) {
         if (!perms[scope]) continue;
         delete perms[scope][bucket];
@@ -490,9 +527,28 @@ export class Permissions {
 
   // ── Internals ──
 
-  /** Which bucket the current mode reads and writes. */
-  async #activeBucket(accountId?: string): Promise<string> {
-    return (await this.getUseGlobalDefaults()) ? DEFAULT_BUCKET : accountId || DEFAULT_BUCKET;
+  /**
+   * Which bucket the current mode reads and writes, or `null` when there is none.
+   *
+   * In global mode that is always `_default`. In per-account mode it is the account's own
+   * bucket, and a missing or empty `accountId` yields `null` rather than falling back to
+   * `_default` — see the divergence note in the module doc. `null` reads as an empty
+   * bucket, so the answer is `ask`, and it refuses a write outright.
+   */
+  async #activeBucket(accountId?: string): Promise<string | null> {
+    if (await this.getUseGlobalDefaults()) return DEFAULT_BUCKET;
+    return accountId || null;
+  }
+
+  /** The bucket to write into, or an error: a write with nowhere to go is a caller bug. */
+  async #writeBucket(accountId?: string): Promise<string> {
+    const bucket = await this.#activeBucket(accountId);
+    if (bucket === null) {
+      throw new Error(
+        'per-account permissions mode needs an accountId: refusing to write to the shared _default bucket',
+      );
+    }
+    return bucket;
   }
 
   async #load(): Promise<PermissionMap> {
@@ -501,9 +557,19 @@ export class Permissions {
     return this.#cachedPerms;
   }
 
-  /** Writes the tree back and drops the cache, so the next read sees what was stored. */
+  /**
+   * Writes the tree back and drops the cache, so the next read sees what was stored.
+   *
+   * The cache is dropped in a `finally`, because the tree handed in here is the cached
+   * object and has already been mutated. A store whose write rejects would otherwise leave
+   * an approval in memory that never reached disk, and an authorization cache that is more
+   * permissive than the disk behind it fails open.
+   */
   async #commit(perms: PermissionMap): Promise<void> {
-    await this.#store.set(PERMISSIONS_STORAGE_KEY, perms);
-    this.invalidateCache();
+    try {
+      await this.#store.set(PERMISSIONS_STORAGE_KEY, perms);
+    } finally {
+      this.invalidateCache();
+    }
   }
 }
