@@ -845,6 +845,99 @@ describe('a dead permission key is refused, not silently stored', () => {
   });
 });
 
+/**
+ * The empty string type-checks wherever a label is expected and means nothing, so every
+ * mutating path treats it as a caller bug. The audit behind this block walked all of the
+ * class's public methods; the three that were found silently no-opping, the one that
+ * silently wiped everything and the one that silently stored junk are all pinned here.
+ */
+describe('an empty label is refused by every mutating path', () => {
+  test('clear("") does not mean "wipe every permission there is"', async () => {
+    const store = seeded({ 'a.com': { _default: { 'signEvent:1': 'allow' } } });
+    const permissions = new Permissions(store);
+
+    await expect(permissions.clear('')).rejects.toThrow(/origin must not be empty/);
+    expect(await raw(store)).toEqual({ 'a.com': { _default: { 'signEvent:1': 'allow' } } });
+
+    // Omitting it entirely still means everything, as ruled.
+    await permissions.clear();
+    expect(await store.get(PERMISSIONS_STORAGE_KEY)).toBeUndefined();
+  });
+
+  test('clearAllForOrigin("") throws instead of doing nothing', async () => {
+    const permissions = new Permissions(new MemoryStore());
+    await expect(permissions.clearAllForOrigin('')).rejects.toThrow(/origin must not be empty/);
+  });
+
+  test('clearForAccount("") throws, while _default is still refused quietly', async () => {
+    const store = seeded({
+      'a.com': { _default: { 'signEvent:1': 'allow' }, acct: { 'signEvent:1': 'deny' } },
+    });
+    const permissions = new Permissions(store);
+
+    await expect(permissions.clearForAccount('')).rejects.toThrow(/account id must not be empty/);
+
+    // Refusing the shared bucket is a deliberate safety rule, not a swallowed caller bug.
+    await expect(permissions.clearForAccount(DEFAULT_BUCKET)).resolves.toBeUndefined();
+    expect((await raw(store))['a.com']?._default).toEqual({ 'signEvent:1': 'allow' });
+  });
+
+  test('copyPermissions("acct", "") throws instead of copying nothing', async () => {
+    const store = seeded({ 'a.com': { acct: { 'signEvent:1': 'allow' } } });
+    const permissions = new Permissions(store);
+
+    await expect(permissions.copyPermissions('acct', '')).rejects.toThrow(
+      /target account id must not be empty/,
+    );
+    expect(await raw(store)).toEqual({ 'a.com': { acct: { 'signEvent:1': 'allow' } } });
+  });
+
+  test('setupNewAccountPermissions("") throws instead of silently skipping the wizard', async () => {
+    const store = new MemoryStore();
+    const permissions = new Permissions(store);
+    await permissions.save('a.com', 'signEvent', 1, 'allow');
+
+    await expect(permissions.setupNewAccountPermissions('', ['old'], null)).rejects.toThrow(
+      /new account id must not be empty/,
+    );
+
+    // And it failed before changing anything: still global mode, still one bucket.
+    expect(await permissions.getUseGlobalDefaults()).toBe(true);
+    expect(await raw(store)).toEqual({ 'a.com': { _default: { 'signEvent:1': 'allow' } } });
+  });
+
+  test('save and saveDirect refuse an empty origin or an empty key', async () => {
+    const store = new MemoryStore();
+    const permissions = new Permissions(store);
+
+    await expect(permissions.save('', 'signEvent', 1, 'allow')).rejects.toThrow(
+      /origin must not be empty/,
+    );
+    await expect(permissions.saveDirect('', 'getPublicKey', 'allow')).rejects.toThrow(
+      /origin must not be empty/,
+    );
+    await expect(permissions.saveDirect('a.com', '', 'allow')).rejects.toThrow(
+      /permission key must not be empty/,
+    );
+    expect(await raw(store)).toEqual({});
+  });
+
+  /**
+   * Reads are deliberately NOT guarded. An authorization check that throws into a signing
+   * path is worse than one that prompts, and an unknown origin already resolves to `ask`,
+   * which is the safest answer there is.
+   */
+  test('reads stay tolerant of an empty origin and answer ask', async () => {
+    const permissions = new Permissions(
+      seeded({ 'a.com': { _default: { 'signEvent:1': 'allow' } } }),
+    );
+
+    expect(await permissions.check('', 'signEvent', 1)).toBe('ask');
+    expect(await permissions.getForOrigin('')).toEqual({});
+    expect(await permissions.getForOriginRaw('')).toEqual({});
+  });
+});
+
 describe('the injected logger', () => {
   test('a denial is reported with the key that denied it, and nothing else is', async () => {
     const logger = { warn: vi.fn() };

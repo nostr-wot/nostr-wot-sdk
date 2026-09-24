@@ -72,6 +72,13 @@ An `origin` is whatever identifies the caller: a web origin, an Android package 
 signer's public key. Only `http(s)` origins additionally answer to their bare hostname, which is
 how rules stored by older versions are still read.
 
+**Every mutating method throws on an empty origin, key or account id.** `''` type-checks wherever
+a label is expected and means nothing, so it is treated as a caller bug rather than as a wildcard
+or a no-op — notably `clear('')`, which does *not* mean "wipe everything" (omit the argument for
+that). Reads stay tolerant: an unknown origin resolves to `ask`, and a check that throws into a
+signing path would be worse than one that prompts. `undefined` and `null` keep their documented
+meanings.
+
 ## Modes
 
 The two modes are mutually exclusive, and `getUseGlobalDefaults()` is `true` when nothing is

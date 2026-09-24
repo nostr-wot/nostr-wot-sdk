@@ -69,6 +69,26 @@ export interface PermissionsOptions {
 const DM_PERMISSION_KEYS = [...DM_SIGN_KINDS].map((kind) => `signEvent:${kind}`);
 
 /**
+ * Rejects the empty string where an origin or an account id is required.
+ *
+ * `''` type-checks everywhere a label is expected, means nothing, and quietly takes a path
+ * nobody intended: it silently no-ops one method, stores a rule under a junk origin in
+ * another, and in `clear` it used to mean "wipe every permission there is". A caller that
+ * built a label from a variable and got an empty one deserves to hear about it.
+ *
+ * This guards the mutating methods only. Reads stay tolerant on purpose: an unknown origin
+ * resolves to `ask`, which is both correct and the safest possible answer, and an
+ * authorization check that throws into a signing path is worse than one that prompts.
+ * `undefined` and `null` keep their documented meanings and never reach here.
+ */
+function requireLabel(value: string, what: string): string {
+  if (value === '') {
+    throw new Error(`${what} must not be empty: an empty label is a caller bug, not a wildcard`);
+  }
+  return value;
+}
+
+/**
  * How restrictive each decision is. Used only when merging two rules into one, where the
  * conservative choice is the one the user is least likely to be surprised by: someone who
  * once denied a DM-related signature stays denied.
@@ -234,6 +254,8 @@ export class Permissions {
     decision: PermissionDecision,
     accountId?: string,
   ): Promise<void> {
+    requireLabel(origin, 'origin');
+    requireLabel(key, 'permission key');
     if (DM_PERMISSION_KEYS.includes(key)) {
       throw new Error(
         `${key} is never consulted: DM sign kinds resolve to "sendMessages". Write that key instead.`,
@@ -252,11 +274,16 @@ export class Permissions {
   /**
    * Clears one origin's rules in the active bucket, or, with no origin, every rule there is.
    *
+   * Omitting `origin` is the documented way to say "everything". An empty string is not,
+   * and throws: a caller that built an origin from a variable that came back empty meant to
+   * clear one site, not to wipe every permission the user has.
+   *
    * Both paths take the lock. A revocation that raced a concurrent save used to be
    * reversible: the save had already loaded the tree, so writing it back resurrected every
    * grant the user had just revoked.
    */
   async clear(origin?: string, accountId?: string): Promise<void> {
+    if (origin !== undefined) requireLabel(origin, 'origin');
     if (!origin) {
       await this.#lock.run(async () => {
         try {
@@ -288,7 +315,7 @@ export class Permissions {
    * resurrect it.
    */
   async clearAllForOrigin(origin: string): Promise<void> {
-    if (!origin) return;
+    requireLabel(origin, 'origin');
     await this.#lock.run(async () => {
       const perms = await this.#draft();
       for (const scope of siteScopes(origin)) delete perms[scope];
@@ -296,9 +323,18 @@ export class Permissions {
     });
   }
 
-  /** Removes one account's overrides everywhere. Called when an account is deleted. */
+  /**
+   * Removes one account's overrides everywhere. Called when an account is deleted.
+   *
+   * An empty id throws. Passing {@link DEFAULT_BUCKET} is refused quietly instead, which is
+   * a deliberate safety rule rather than a swallowed caller bug: the shared bucket is not
+   * one account's overrides, and deleting an account must never wipe every account's rules.
+   */
   async clearForAccount(accountId: string): Promise<void> {
-    if (!accountId || accountId === DEFAULT_BUCKET) return;
+    requireLabel(accountId, 'account id');
+    // Refusing _default is deliberate, not a swallowed bug: the shared bucket is not one
+    // account's overrides, and deleting an account must never wipe every account's rules.
+    if (accountId === DEFAULT_BUCKET) return;
     await this.#lock.run(async () => {
       const perms = await this.#draft();
       let changed = false;
@@ -331,7 +367,7 @@ export class Permissions {
         'copyPermissions needs a source account id or null: refusing to read the shared _default bucket for an empty id',
       );
     }
-    if (!toAccountId) return;
+    requireLabel(toAccountId, 'target account id');
     await this.#lock.run(async () => {
       const from = fromAccountId ?? DEFAULT_BUCKET;
       const perms = await this.#draft();
@@ -359,6 +395,9 @@ export class Permissions {
    * allowed on. With the mode switched, the new account is isolated, and either inherits a
    * chosen account's rules or starts empty.
    *
+   * An empty `newAccountId` throws rather than doing nothing, because a wizard whose
+   * "start fresh" or "copy from" choice silently did not happen is worse than one that fails.
+   *
    * @param newAccountId - the account just created
    * @param existingAccountIds - every other account id, to preserve across the mode switch
    * @param copyFromAccountId - a source to copy into the new account, or null for fresh
@@ -368,7 +407,7 @@ export class Permissions {
     existingAccountIds: string[],
     copyFromAccountId: string | null,
   ): Promise<void> {
-    if (!newAccountId) return;
+    requireLabel(newAccountId, 'new account id');
 
     if (await this.getUseGlobalDefaults()) {
       // Preserve each existing account's currently-shared rules in its own bucket BEFORE
