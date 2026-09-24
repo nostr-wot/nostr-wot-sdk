@@ -71,7 +71,7 @@ describe('a vault the extension wrote opens here', () => {
     expect(payload).toEqual(expected.payload);
     // The extension's create() always writes a cacheKey, so reading one back never mints.
     expect(cacheKeyMinted).toBe(false);
-  }, 30_000);
+  }, 60_000);
 
   test('the seeded account keeps its mnemonic and the imported one keeps its walletConfig', async () => {
     const { payload } = await openRecord(record, expected.password, noblePbkdf2);
@@ -84,7 +84,7 @@ describe('a vault the extension wrote opens here', () => {
       provider: 'nwc',
       connectionString: 'nostr+walletconnect://deadbeef',
     });
-  }, 30_000);
+  }, 60_000);
 
   /**
    * The oldest vaults in the field. They predate the `iterations` field entirely and were all
@@ -95,7 +95,7 @@ describe('a vault the extension wrote opens here', () => {
     expect(Object.hasOwn(legacyRecord, 'iterations')).toBe(false);
     const { payload } = await openRecord(legacyRecord, legacyExpected.password, noblePbkdf2);
     expect(payload).toEqual(legacyExpected.payload);
-  }, 30_000);
+  }, 60_000);
 
   test('deriving at the strong count would not open the legacy record', async () => {
     await expect(
@@ -106,7 +106,7 @@ describe('a vault the extension wrote opens here', () => {
 
   test('the wrong password does not open the fixture', async () => {
     await expect(openRecord(record, 'not the password', noblePbkdf2)).rejects.toThrow();
-  }, 30_000);
+  }, 60_000);
 });
 
 describe('a vault written here opens in the extension', () => {

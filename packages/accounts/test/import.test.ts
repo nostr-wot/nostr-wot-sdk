@@ -182,12 +182,16 @@ describe('NIP-49 ncryptsec', () => {
     expect(() => encryptNcryptsec(new Uint8Array(31), 'hunter22', 8)).toThrow();
   });
 
-  test('the default scrypt cost factor round trips', () => {
+  // The two tests below run their KDFs at the shipping work factor: scrypt at N = 2^16 twice,
+  // and PBKDF2 at 210000 three times. That is around a second of pure JavaScript on an idle
+  // machine and well past vitest's 5s default on a loaded one. The cost factor is what is
+  // under test, so the headroom goes on the timeout, never on the count.
+  test('the default scrypt cost factor round trips', { timeout: 60_000 }, () => {
     const encoded = encryptNcryptsec(KEY, 'hunter22');
     expect(decryptNcryptsec(encoded, 'hunter22')).toEqual(KEY);
   });
 
-  test('a legacy 0x01 backup written by the extension still opens', () => {
+  test('a legacy 0x01 backup written by the extension still opens', { timeout: 60_000 }, () => {
     // Built independently, from the extension's legacy format:
     // version(1) + salt(16) + iv(12) + AES-256-GCM ciphertext(48), PBKDF2-SHA256 at 210K.
     const salt = new Uint8Array(16).fill(7);

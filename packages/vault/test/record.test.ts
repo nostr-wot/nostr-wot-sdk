@@ -114,7 +114,10 @@ describe('opening a record', () => {
    * field at all, and were every one of them written at 210000. Recomputing would derive at
    * 600000 and refuse to open exactly the oldest vaults in the field.
    */
-  test('a record with no iterations field opens at the legacy count', async () => {
+  // Two genuine derivations at the legacy count, about 0.7s of pure JavaScript on an idle
+  // machine and well past vitest's 5s default on a loaded one. The work factor is the thing
+  // under test, so the headroom goes on the timeout, never on the count.
+  test('a record with no iterations field opens at the legacy count', { timeout: 60_000 }, async () => {
     const sealed = await sealPayload(
       { accounts: [account], activeAccountId: 'acct_1' },
       'hunter22',
