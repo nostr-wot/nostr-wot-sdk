@@ -101,6 +101,29 @@ export class Vault {
   #lastActivity = 0;
   /** One lane for every mutation, so two unlocks cannot interleave their writes. */
   #lane: Promise<unknown> = Promise.resolve();
+  /**
+   * Which session the vault is on. Ported from the extension's `sessionRevision`.
+   *
+   * The lane alone is not enough, and the difference is the whole reason this counter exists.
+   * The lane decides the ORDER of two writes; it cannot express that one of them should no
+   * longer happen at all. `lock()` and `destroy()` are synchronous by design — locking must
+   * never queue behind a derivation it is trying to cancel — so an unlock that was already in
+   * flight goes on to finish and repopulate a vault the user has just locked or destroyed. At
+   * 600000 iterations that window is about a second wide, which is every lock-on-blur, every
+   * panic lock and every auto-lock that happens to fire mid-unlock.
+   *
+   * So every operation that will install a session captures this number BEFORE it queues, and
+   * refuses to install anything if it has moved by the time it gets there. A lock always wins.
+   */
+  #sessionRevision = 0;
+  /**
+   * The key copies handed to in-flight {@link withPrivkey} callbacks.
+   *
+   * Tracked so that a lock reaches them too: without it a callback that is already running
+   * keeps signing with live key material for as long as it likes while `isLocked()` reports
+   * true. These are copies, so zeroing them cannot corrupt the vault.
+   */
+  readonly #liveKeys = new Set<Uint8Array>();
 
   constructor(options: VaultOptions) {
     this.#store = options.store;
@@ -137,7 +160,12 @@ export class Vault {
    */
   async create(password: string, accounts: Account[]): Promise<void> {
     assertPassword(password, 'Password');
+    // This replaces whatever session was open, so anything already in flight against the old
+    // one is cancelled here rather than allowed to land on top of the new vault.
+    this.#invalidateSession();
+    const revision = this.#sessionRevision;
     return this.#run(async () => {
+      this.#assertRevision(revision);
       // Read before the old payload is zeroed, and as a string so nothing survives as a view
       // into a buffer that is about to be filled with zeroes.
       const cacheKey = this.#payload?.cacheKeyBytes
@@ -150,13 +178,24 @@ export class Vault {
       };
 
       const capture = this.#capturingKdf();
-      const record = await sealPayload(stored, password, capture.kdf);
-      await this.#store.set(VAULT_STORAGE_KEY, record);
+      try {
+        const record = await sealPayload(stored, password, capture.kdf);
+        this.#assertRevision(revision);
+        await this.#store.set(VAULT_STORAGE_KEY, record);
+        // A new vault starts with a clean slate. Otherwise "I forgot my password, start over"
+        // hands the user a brand-new vault they are still locked out of.
+        await this.#store.remove(UNLOCK_GUARD_KEY);
 
-      this.#adoptPayload(toMemoryPayload(stored));
-      this.#adoptKey(capture.take());
-      await this.#restoreAutoLockSetting();
-      this.#noteLockStateChanged();
+        this.#assertRevision(revision);
+        this.#adoptPayload(toMemoryPayload(stored));
+        this.#adoptKey(capture.take());
+        await this.#restoreAutoLockSetting();
+        this.#noteLockStateChanged();
+      } finally {
+        // Nothing below take() can throw, but everything above it can, and a derived vault key
+        // dropped un-zeroed on an error path is exactly the leak this class exists to avoid.
+        capture.discard();
+      }
     });
   }
 
@@ -181,7 +220,12 @@ export class Vault {
    * failed cache-key save is, because the in-memory key would no longer match the stored one.
    */
   async unlock(password: string): Promise<boolean> {
+    // Captured before queueing, so a lock or a destroy taken while this waits for the lane —
+    // or while it is inside the derivation — cancels it instead of being undone by it.
+    const revision = this.#sessionRevision;
     return this.#run(async () => {
+      if (revision !== this.#sessionRevision) return false;
+
       const guard = await this.#readGuard();
       const remaining = guardLockoutRemaining(guard, this.#now());
       if (remaining > 0) throw new VaultLockedOutError(remaining);
@@ -190,43 +234,57 @@ export class Vault {
       if (!record) throw new Error('No vault found');
 
       const capture = this.#capturingKdf();
-      let opened;
       try {
-        opened = await openRecord(record, password, capture.kdf);
-      } catch {
-        // Wrong password, or a corrupt record. Either way nothing about the current session
-        // changes except the counter.
-        capture.discard();
-        await this.#store.set(UNLOCK_GUARD_KEY, nextGuardState(guard, false, this.#now()));
-        return false;
-      }
-
-      this.#adoptPayload(toMemoryPayload(opened.payload));
-      this.#adoptKey(capture.take());
-      await this.#store.remove(UNLOCK_GUARD_KEY);
-      await this.#restoreAutoLockSetting();
-
-      const storedIterations = record.iterations ?? LEGACY_VAULT_PBKDF2_ITERATIONS;
-      if (storedIterations < iterationsFor(password)) {
+        let opened;
         try {
-          await this.#resealNow(password);
+          opened = await openRecord(record, password, capture.kdf);
         } catch {
-          // An upgrade that fails must never cost the user their unlocked session: the vault
-          // is open and the record that opened it is still perfectly valid.
+          // Wrong password, or a corrupt record. Either way nothing about the current session
+          // changes except the counter.
+          await this.#store.set(UNLOCK_GUARD_KEY, nextGuardState(guard, false, this.#now()));
+          return false;
         }
-      }
-      if (opened.cacheKeyMinted) {
-        try {
-          await this.#saveNow();
-        } catch (error) {
-          this.#lockNow();
-          this.#noteLockStateChanged();
-          throw error;
-        }
-      }
 
-      this.#noteLockStateChanged();
-      return true;
+        // The check that matters: the derivation is the second-long window, and this is the
+        // first moment after it at which anything would be installed. Overtaken means false —
+        // the password was right, so charging the guard would walk an ordinary lock-on-blur
+        // towards a lockout.
+        if (revision !== this.#sessionRevision) return false;
+
+        this.#adoptPayload(toMemoryPayload(opened.payload));
+        this.#adoptKey(capture.take());
+        await this.#store.remove(UNLOCK_GUARD_KEY);
+        await this.#restoreAutoLockSetting();
+        if (revision !== this.#sessionRevision) return false;
+
+        const storedIterations = record.iterations ?? LEGACY_VAULT_PBKDF2_ITERATIONS;
+        if (storedIterations < iterationsFor(password)) {
+          try {
+            await this.#resealNow(password, revision);
+          } catch {
+            // An upgrade that fails must never cost the user their unlocked session: the vault
+            // is open and the record that opened it is still perfectly valid.
+          }
+        }
+        if (opened.cacheKeyMinted) {
+          try {
+            await this.#saveNow(revision);
+          } catch (error) {
+            // A session that moved under us is not a failed save; it is a lock winning, and
+            // the lock has already zeroed everything.
+            if (revision !== this.#sessionRevision) return false;
+            this.#lockNow();
+            this.#noteLockStateChanged();
+            throw error;
+          }
+        }
+        if (revision !== this.#sessionRevision) return false;
+
+        this.#noteLockStateChanged();
+        return true;
+      } finally {
+        capture.discard();
+      }
     });
   }
 
@@ -238,6 +296,9 @@ export class Vault {
    * lock-state marker is written fire and forget for exactly that reason.
    */
   lock(): void {
+    // Bump first: anything in flight has to see that it has been overtaken, whatever order the
+    // lane hands it back in.
+    this.#invalidateSession();
     this.#lockNow();
     this.#noteLockStateChanged();
   }
@@ -253,6 +314,10 @@ export class Vault {
     await this.#run(async () => {
       await this.#store.remove(VAULT_STORAGE_KEY);
       await this.#store.remove(UNLOCK_GUARD_KEY);
+      // Belt and braces. The revision check makes an overtaken unlock refuse to install
+      // anything, and this makes the outcome of a destroy independent of the lane order
+      // regardless: when this returns, there is no session, full stop.
+      this.#lockNow();
     });
   }
 
@@ -327,9 +392,13 @@ export class Vault {
     if (!account?.privkeyBytes) throw new Error('No private key for this account');
 
     const key = new Uint8Array(account.privkeyBytes);
+    // Registered so a lock taken mid-callback reaches this copy too. Otherwise a callback that
+    // is already running signs on with live key material while `isLocked()` says true.
+    this.#liveKeys.add(key);
     try {
       return await fn(key);
     } finally {
+      this.#liveKeys.delete(key);
       key.fill(0);
     }
   }
@@ -378,6 +447,21 @@ export class Vault {
    * Internal helpers (`#saveNow`, `#resealNow`) deliberately do not, because they are called
    * from inside the lane and re-entering it would deadlock.
    */
+  /**
+   * Move to a new session, cancelling everything in flight against the old one.
+   *
+   * Cheap and synchronous on purpose: `lock()` calls it, and locking must never be able to
+   * queue, wait or fail. See {@link Vault.#sessionRevision}.
+   */
+  #invalidateSession(): void {
+    this.#sessionRevision += 1;
+  }
+
+  /** Refuse to install anything from a session that has been overtaken. */
+  #assertRevision(revision: number): void {
+    if (revision !== this.#sessionRevision) throw new Error('Vault session changed');
+  }
+
   #run<T>(fn: () => Promise<T>): Promise<T> {
     const result = this.#lane.then(fn, fn);
     this.#lane = result.then(
@@ -457,7 +541,8 @@ export class Vault {
    * key was actually derived at, never the constant: a record that claims 600000 over a key
    * derived at 210000 is a vault nobody can open again.
    */
-  async #saveNow(): Promise<void> {
+  async #saveNow(revision?: number): Promise<void> {
+    if (revision !== undefined) this.#assertRevision(revision);
     const payload = this.#payload;
     const held = this.#held;
     if (!payload || !held) throw new Error('Vault is locked');
@@ -480,19 +565,31 @@ export class Vault {
    * Both the transparent upgrade and the password change end up here. The session stays open
    * across it: the payload is untouched, only the record and the held key change.
    */
-  async #resealNow(password: string): Promise<void> {
+  async #resealNow(password: string, revision?: number): Promise<void> {
+    if (revision !== undefined) this.#assertRevision(revision);
     const payload = this.#payload;
     if (!payload) throw new Error('Vault is locked');
 
     const capture = this.#capturingKdf();
-    const record = await sealPayload(toStoragePayload(payload), password, capture.kdf);
-    await this.#store.set(VAULT_STORAGE_KEY, record);
-    this.#adoptKey(capture.take());
-    this.#armAutoLock();
+    try {
+      const record = await sealPayload(toStoragePayload(payload), password, capture.kdf);
+      if (revision !== undefined) this.#assertRevision(revision);
+      await this.#store.set(VAULT_STORAGE_KEY, record);
+      this.#adoptKey(capture.take());
+      this.#armAutoLock();
+    } finally {
+      // The transparent upgrade swallows failures from this path by design, so without this
+      // a full copy of the AES-256 vault key would be dropped un-zeroed in normal operation.
+      capture.discard();
+    }
   }
 
   /** Lock without announcing it. The announcement is fire and forget; this is not. */
   #lockNow(): void {
+    // The copies in flight first: a signing callback holding one is the only key material a
+    // caller outside this class can still read once the payload is gone.
+    for (const key of this.#liveKeys) key.fill(0);
+    this.#liveKeys.clear();
     if (this.#payload) zeroMemoryPayload(this.#payload);
     this.#payload = null;
     this.#held?.key.fill(0);

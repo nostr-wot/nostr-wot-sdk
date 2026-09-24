@@ -9,7 +9,7 @@
  * tests deliberately use the real, unweakened default — one end to end, one over a record
  * the shipping browser extension wrote.
  */
-import { describe, test, expect } from 'vitest';
+import { describe, test, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -466,7 +466,27 @@ describe('auto-lock settings', () => {
     const store = new MemoryStore();
     const vault = new Vault({ store, kdf: fastKdf });
     await vault.setAutoLockMs(5);
-    await vault.create('hunter22', [account]);
+
+    // An auto-lock timer that keeps a ref turns every Node process that opened a vault into
+    // one that will not exit, and every test run into a hang.
+    const timers: Array<{ hasRef?: () => boolean }> = [];
+    const realSetTimeout = globalThis.setTimeout;
+    const spy = vi
+      .spyOn(globalThis, 'setTimeout')
+      .mockImplementation(((handler: () => void, ms?: number, ...rest: unknown[]) => {
+        const timer = (realSetTimeout as (...args: unknown[]) => unknown)(handler, ms, ...rest);
+        timers.push(timer as { hasRef?: () => boolean });
+        return timer;
+      }) as unknown as typeof globalThis.setTimeout);
+    try {
+      await vault.create('hunter22', [account]);
+    } finally {
+      spy.mockRestore();
+    }
+    const refable = timers.filter((timer) => typeof timer.hasRef === 'function');
+    expect(refable.length).toBeGreaterThan(0);
+    expect(refable.every((timer) => timer.hasRef!() === false)).toBe(true);
+
     expect(vault.isLocked()).toBe(false);
     await new Promise((resolve) => setTimeout(resolve, 40));
     expect(vault.isLocked()).toBe(true);
@@ -510,5 +530,120 @@ describe('the real work factor', () => {
     expect(upgraded!.iterations).toBe(VAULT_PBKDF2_ITERATIONS);
     vault.lock();
     expect(await vault.unlock(expected.password)).toBe(true);
+  });
+});
+
+describe('racing the session', () => {
+  /**
+   * A derivation that parks until the test lets it through, so a lock can be taken while an
+   * unlock is genuinely mid-flight rather than merely queued behind one. At the shipping work
+   * factor that window is about a second wide in real life.
+   */
+  function gatedKdf(): Pbkdf2Port & { entered: Promise<void>; release: () => void } {
+    let markEntered!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      markEntered = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return {
+      entered,
+      release,
+      async derive(password, salt, iterations) {
+        markEntered();
+        await gate;
+        return fastKdf.derive(password, salt, iterations);
+      },
+    };
+  }
+
+  test('destroy beats an unlock that is already in flight', async () => {
+    const store = new MemoryStore();
+    const vault = new Vault({ store, kdf: fastKdf });
+    await vault.create('hunter22', [account]);
+    vault.lock();
+
+    // The unlock is on the lane; destroy locks synchronously and queues behind it. Without a
+    // session revision the unlock lands afterwards and repopulates the payload — a destroyed
+    // vault still handing out the private key, which is the worst outcome this has.
+    const pending = vault.unlock('hunter22');
+    await vault.destroy();
+    expect(await pending).toBe(false);
+
+    expect(vault.isLocked()).toBe(true);
+    expect(await vault.exists()).toBe(false);
+    await expect(vault.withPrivkey('acct_1', async () => 'x')).rejects.toThrow(/locked/i);
+  });
+
+  test('an explicit lock beats an unlock that is already in flight', async () => {
+    const vault = new Vault({ store: new MemoryStore(), kdf: fastKdf });
+    await vault.create('hunter22', [account]);
+    vault.lock();
+
+    const pending = vault.unlock('hunter22');
+    vault.lock();
+    expect(await pending).toBe(false);
+    expect(vault.isLocked()).toBe(true);
+  });
+
+  test('a lock taken during the derivation is not undone when it finishes', async () => {
+    const store = new MemoryStore();
+    const kdf = gatedKdf();
+    const vault = new Vault({ store, kdf: fastKdf });
+    await vault.create('hunter22', [account]);
+    vault.lock();
+
+    const gatedVault = new Vault({ store, kdf });
+    const pending = gatedVault.unlock('hunter22');
+    await kdf.entered;
+    // Lock-on-blur, a panic lock, or the auto-lock firing: all land here, inside the window.
+    gatedVault.lock();
+    kdf.release();
+
+    expect(await pending).toBe(false);
+    expect(gatedVault.isLocked()).toBe(true);
+    await expect(gatedVault.withPrivkey('acct_1', async () => 'x')).rejects.toThrow(/locked/i);
+  });
+
+  test('an overtaken unlock is not charged to the brute-force guard', async () => {
+    // The password was right; the user just locked the vault. Counting it would walk an
+    // ordinary lock-on-blur towards a lockout.
+    const store = new MemoryStore();
+    const vault = new Vault({ store, kdf: fastKdf });
+    await vault.create('hunter22', [account]);
+    vault.lock();
+
+    const pending = vault.unlock('hunter22');
+    vault.lock();
+    expect(await pending).toBe(false);
+    expect(await store.get(UNLOCK_GUARD_KEY)).toBeUndefined();
+  });
+
+  test('locking during a signing callback zeroes the key the callback is holding', async () => {
+    const vault = new Vault({ store: new MemoryStore(), kdf: fastKdf });
+    await vault.create('hunter22', [account]);
+    await vault.withPrivkey('acct_1', async (key) => {
+      expect(bytesToHex(key)).toBe(account.privkey);
+      vault.lock();
+      // Otherwise the callback signs on with live key material while isLocked() says true.
+      expect(Array.from(key)).toEqual(new Array(32).fill(0));
+    });
+  });
+
+  test('creating a vault clears the lockout left by the one it replaces', async () => {
+    // Five wrong guesses, then "forgot my password, start over" — the new vault must not
+    // inherit a lockout the user cannot wait out of their own setup flow.
+    const store = new MemoryStore();
+    const vault = new Vault({ store, kdf: fastKdf, now: () => 1000 });
+    await vault.create('hunter22', [account]);
+    vault.lock();
+    for (let i = 0; i < 5; i++) await vault.unlock('wrong');
+
+    await vault.create('next-one', [account]);
+    expect(await store.get(UNLOCK_GUARD_KEY)).toBeUndefined();
+    vault.lock();
+    expect(await vault.unlock('next-one')).toBe(true);
   });
 });
