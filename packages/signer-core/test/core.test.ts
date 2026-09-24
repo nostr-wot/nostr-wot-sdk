@@ -415,6 +415,37 @@ describe('switching accounts', () => {
     expect(approval.presented[0]!.account.pubkey).toBe(PUBKEY_1);
   });
 
+  test('getPublicKey answers the pubkey the user was shown, never a later one', async () => {
+    // The identity port names acct_1 while the request is resolved and re-checked after the
+    // prompt, then flips. Nothing awaits between that re-check and the answer, so the only way
+    // to see acct_2 here is to ask the port again at execution time instead of answering from
+    // the snapshot the user approved.
+    const one = account('acct_1', PRIVKEY_1);
+    const two = account('acct_2', PRIVKEY_2);
+    let calls = 0;
+    const identity: IdentityPort = {
+      async getActiveAccount() {
+        calls += 1;
+        return toSafeAccount(calls <= 2 ? one : two);
+      },
+    };
+    const { core, approval } = await fixture(true, { accounts: [one, two], identity });
+    expect(await core.handle(req('getPublicKey'))).toBe(PUBKEY_1);
+    expect(approval.presented[0]!.account.pubkey).toBe(PUBKEY_1);
+  });
+
+  test('a cooldown earned by one account never answers for another, even when the host forgets to notify the switch', async () => {
+    const two = [account('acct_1', PRIVKEY_1), account('acct_2', PRIVKEY_2)];
+    const { core, approval, vault } = await fixture(true, { accounts: two });
+    expect(await core.handle(req('getPublicKey'))).toBe(PUBKEY_1);
+    expect(approval.presented).toHaveLength(1);
+    // The host switches the vault's active account and does NOT call onActiveAccountChanged.
+    await vault.setActiveAccountId('acct_2');
+    expect(await core.handle(req('getPublicKey'))).toBe(PUBKEY_2);
+    expect(approval.presented).toHaveLength(2);
+    expect(approval.presented[1]!.account.pubkey).toBe(PUBKEY_2);
+  });
+
   test('signEvent refuses to sign with an account other than the one shown', async () => {
     const two = [account('acct_1', PRIVKEY_1), account('acct_2', PRIVKEY_2)];
     const { core, approval, vault } = await fixture(true, { accounts: two });
