@@ -273,6 +273,9 @@ export class Vault {
             // A session that moved under us is not a failed save; it is a lock winning, and
             // the lock has already zeroed everything.
             if (revision !== this.#sessionRevision) return false;
+            // Ends the session like every other lock does, so an unlock queued against this
+            // one is told it has been overtaken rather than marching on into the same failure.
+            this.#invalidateSession();
             this.#lockNow();
             this.#noteLockStateChanged();
             throw error;
@@ -338,7 +341,13 @@ export class Vault {
     if (next.length === 0) throw new Error('New password is required');
     assertPassword(next, 'Password');
     if (!(await this.unlock(current))) return false;
-    await this.#run(() => this.#resealNow(next));
+    // Captured after the unlock that verified `current` and before the re-seal queues, so a
+    // lock landing inside the re-seal's own derivation — which the auto-lock that unlock just
+    // armed can do on its own, no adversary required — cancels it instead of installing a live
+    // vault key into a vault the user has locked. Throws rather than returning false: false
+    // means the current password was wrong, and this was not that.
+    const revision = this.#sessionRevision;
+    await this.#run(() => this.#resealNow(next, revision));
     return true;
   }
 
@@ -391,12 +400,19 @@ export class Vault {
     const account = payload.accounts.find((candidate) => candidate.id === id);
     if (!account?.privkeyBytes) throw new Error('No private key for this account');
 
+    const revision = this.#sessionRevision;
     const key = new Uint8Array(account.privkeyBytes);
     // Registered so a lock taken mid-callback reaches this copy too. Otherwise a callback that
     // is already running signs on with live key material while `isLocked()` says true.
     this.#liveKeys.add(key);
     try {
-      return await fn(key);
+      const result = await fn(key);
+      // Zeroing the copy is necessary and not sufficient. NIP-44, HMAC and AES-GCM all accept
+      // 32 zero bytes without complaint, so a callback that read the key after the lock landed
+      // would hand back a publishable signature or ciphertext computed under a zero key, with
+      // nothing anywhere to notice. Whatever it produced under a revoked session is void.
+      this.#assertRevision(revision);
+      return result;
     } finally {
       this.#liveKeys.delete(key);
       key.fill(0);
@@ -426,7 +442,9 @@ export class Vault {
 
   /** Move the active account and persist it. The account has to be in the vault. */
   async setActiveAccountId(id: string): Promise<void> {
+    const revision = this.#sessionRevision;
     return this.#run(async () => {
+      this.#assertRevision(revision);
       const payload = this.#payload;
       if (!payload) throw new Error('Vault is locked');
       if (!payload.accounts.some((account) => account.id === id)) {
@@ -434,7 +452,7 @@ export class Vault {
       }
       if (payload.activeAccountId === id) return;
       payload.activeAccountId = id;
-      await this.#saveNow();
+      await this.#saveNow(revision);
     });
   }
 
@@ -541,8 +559,8 @@ export class Vault {
    * key was actually derived at, never the constant: a record that claims 600000 over a key
    * derived at 210000 is a vault nobody can open again.
    */
-  async #saveNow(revision?: number): Promise<void> {
-    if (revision !== undefined) this.#assertRevision(revision);
+  async #saveNow(revision: number): Promise<void> {
+    this.#assertRevision(revision);
     const payload = this.#payload;
     const held = this.#held;
     if (!payload || !held) throw new Error('Vault is locked');
@@ -565,15 +583,15 @@ export class Vault {
    * Both the transparent upgrade and the password change end up here. The session stays open
    * across it: the payload is untouched, only the record and the held key change.
    */
-  async #resealNow(password: string, revision?: number): Promise<void> {
-    if (revision !== undefined) this.#assertRevision(revision);
+  async #resealNow(password: string, revision: number): Promise<void> {
+    this.#assertRevision(revision);
     const payload = this.#payload;
     if (!payload) throw new Error('Vault is locked');
 
     const capture = this.#capturingKdf();
     try {
       const record = await sealPayload(toStoragePayload(payload), password, capture.kdf);
-      if (revision !== undefined) this.#assertRevision(revision);
+      this.#assertRevision(revision);
       await this.#store.set(VAULT_STORAGE_KEY, record);
       this.#adoptKey(capture.take());
       this.#armAutoLock();

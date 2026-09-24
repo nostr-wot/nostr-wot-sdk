@@ -15,7 +15,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from '@noble/ciphers/utils.js';
 import type { Account } from '@nostr-wot/accounts';
-import { MemoryStore } from '@nostr-wot/storage';
+import { MemoryStore, type KeyValueStore } from '@nostr-wot/storage';
 import { Vault } from '../src/vault.js';
 import { openRecord } from '../src/record.js';
 import { encrypt, noblePbkdf2, type Pbkdf2Port } from '../src/crypto.js';
@@ -539,9 +539,10 @@ describe('racing the session', () => {
    * unlock is genuinely mid-flight rather than merely queued behind one. At the shipping work
    * factor that window is about a second wide in real life.
    */
-  function gatedKdf(): Pbkdf2Port & { entered: Promise<void>; release: () => void } {
+  function gatedKdf(gateCall = 1): Pbkdf2Port & { entered: Promise<void>; release: () => void } {
     let markEntered!: () => void;
     let release!: () => void;
+    let calls = 0;
     const entered = new Promise<void>((resolve) => {
       markEntered = resolve;
     });
@@ -552,8 +553,13 @@ describe('racing the session', () => {
       entered,
       release,
       async derive(password, salt, iterations) {
-        markEntered();
-        await gate;
+        calls += 1;
+        // `gateCall` picks WHICH derivation to park in: a password change derives twice, and
+        // the interesting window is the second one, inside the re-seal.
+        if (calls === gateCall) {
+          markEntered();
+          await gate;
+        }
         return fastKdf.derive(password, salt, iterations);
       },
     };
@@ -624,12 +630,19 @@ describe('racing the session', () => {
   test('locking during a signing callback zeroes the key the callback is holding', async () => {
     const vault = new Vault({ store: new MemoryStore(), kdf: fastKdf });
     await vault.create('hunter22', [account]);
-    await vault.withPrivkey('acct_1', async (key) => {
-      expect(bytesToHex(key)).toBe(account.privkey);
-      vault.lock();
-      // Otherwise the callback signs on with live key material while isLocked() says true.
-      expect(Array.from(key)).toEqual(new Array(32).fill(0));
-    });
+    let observed: number[] = [];
+    // The call is void as well as zeroed: whatever the callback computed after the lock landed
+    // was computed under a revoked session, so it must not come back as a result.
+    await expect(
+      vault.withPrivkey('acct_1', async (key) => {
+        expect(bytesToHex(key)).toBe(account.privkey);
+        vault.lock();
+        // Otherwise the callback signs on with live key material while isLocked() says true.
+        observed = Array.from(key);
+        return 'a signature over zeroes';
+      }),
+    ).rejects.toThrow(/session/i);
+    expect(observed).toEqual(new Array(32).fill(0));
   });
 
   test('creating a vault clears the lockout left by the one it replaces', async () => {
@@ -645,5 +658,104 @@ describe('racing the session', () => {
     expect(await store.get(UNLOCK_GUARD_KEY)).toBeUndefined();
     vault.lock();
     expect(await vault.unlock('next-one')).toBe(true);
+  });
+});
+
+describe('racing the session, round two', () => {
+  /** As above: park inside a chosen derivation until the test lets it through. */
+  function gatedKdf(gateCall = 1): Pbkdf2Port & { entered: Promise<void>; release: () => void } {
+    let markEntered!: () => void;
+    let release!: () => void;
+    let calls = 0;
+    const entered = new Promise<void>((resolve) => {
+      markEntered = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return {
+      entered,
+      release,
+      async derive(password, salt, iterations) {
+        calls += 1;
+        if (calls === gateCall) {
+          markEntered();
+          await gate;
+        }
+        return fastKdf.derive(password, salt, iterations);
+      },
+    };
+  }
+
+  test('a signing callback that outlives a lock does not return a result', async () => {
+    // Zeroing the copy mid-callback is necessary but not sufficient: NIP-44, HMAC and AES-GCM
+    // all accept 32 zero bytes without complaint, so returning the value would hand the caller
+    // a publishable signature or ciphertext computed under a zero key, with nothing to notice.
+    const vault = new Vault({ store: new MemoryStore(), kdf: fastKdf });
+    await vault.create('hunter22', [account]);
+
+    const pending = vault.withPrivkey('acct_1', async (key) => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      return bytesToHex(key);
+    });
+    vault.lock();
+    await expect(pending).rejects.toThrow(/session|locked/i);
+  });
+
+  test('a lock during a password change is not undone by it', async () => {
+    const store = new MemoryStore();
+    const setup = new Vault({ store, kdf: fastKdf });
+    await setup.create('hunter22', [account]);
+    setup.lock();
+
+    // Derivation 1 is the unlock that verifies the current password; derivation 2 is the
+    // re-seal under the new one. The re-seal is where the ~1 second window lives, and the
+    // auto-lock armed by that very unlock can fire inside it — no adversary required.
+    const kdf = gatedKdf(2);
+    const vault = new Vault({ store, kdf });
+    const pending = vault.changePassword('hunter22', 'next-one');
+    await kdf.entered;
+    vault.lock();
+    kdf.release();
+
+    await expect(pending).rejects.toThrow(/session/i);
+    expect(vault.isLocked()).toBe(true);
+    // The record was never rewritten, so the password the user still has is the one that works.
+    expect(await vault.unlock('hunter22')).toBe(true);
+  });
+
+  test('a failed cache-key save ends the session for anything queued behind it', async () => {
+    const backing = new MemoryStore();
+    // A record from before the cacheKey field: unlocking has to mint one and save it.
+    await writeLegacyRecord(
+      backing,
+      { accounts: [account], activeAccountId: 'acct_1' } as VaultPayload,
+      'hunter22',
+      fastKdf,
+      VAULT_PBKDF2_ITERATIONS,
+    );
+    let failWrites = true;
+    const store: KeyValueStore = {
+      get: (key) => backing.get(key),
+      set: async (key, value) => {
+        if (failWrites && key === VAULT_STORAGE_KEY) throw new Error('storage is full');
+        return backing.set(key, value);
+      },
+      remove: (key) => backing.remove(key),
+      keys: () => backing.keys(),
+    };
+
+    const vault = new Vault({ store, kdf: fastKdf });
+    const first = vault.unlock('hunter22');
+    const second = vault.unlock('hunter22');
+
+    await expect(first).rejects.toThrow(/storage is full/);
+    // The first unlock locked the vault; the second was queued against that same session and
+    // must be told so rather than marching on as if nothing had happened.
+    expect(await second).toBe(false);
+    expect(vault.isLocked()).toBe(true);
+
+    failWrites = false;
+    expect(await vault.unlock('hunter22')).toBe(true);
   });
 });
