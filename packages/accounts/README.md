@@ -115,8 +115,11 @@ Decoding also accepts the legacy local-only `0x01` format the extension used to 
 (PBKDF2-SHA256 at 210 000 iterations plus AES-256-GCM), so older backups still import. Nothing
 writes that format any more.
 
-The `logn` argument on `encryptNcryptsec` exists for tests. Lowering it lowers the cost of
-guessing the password.
+The `logn` argument on `encryptNcryptsec` can only raise the scrypt cost above the default
+(`MIN_LOG_N = DEFAULT_LOG_N = 16`, 64 MiB, what the extension writes and NIP-49 recommends);
+anything lower is refused. A backup leaves the device and can be guessed at offline
+indefinitely, so the cost of a guess is its whole protection. `decryptNcryptsec` still opens a
+backup another client wrote at a lower cost, since that file is theirs to have written weakly.
 
 ## The committed derivation fixture
 

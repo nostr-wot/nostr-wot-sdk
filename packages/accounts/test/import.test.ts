@@ -3,9 +3,13 @@ import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
 import { pbkdf2 } from '@noble/hashes/pbkdf2.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { gcm } from '@noble/ciphers/aes.js';
+import { scrypt } from '@noble/hashes/scrypt.js';
+import { xchacha20poly1305 } from '@noble/ciphers/chacha.js';
 import { bech32 } from '@scure/base';
 import {
+  DEFAULT_LOG_N,
   LEGACY_PBKDF2_ITERATIONS,
+  MIN_LOG_N,
   VERSION_LEGACY,
   decryptNcryptsec,
   detectImportKind,
@@ -54,7 +58,7 @@ describe('parseImportInput', () => {
 
   test('a bech32 string with a bad checksum is rejected for every prefix', () => {
     expect(parseImportInput(flipLastChar(nsecEncode(KEY)))).toBe(null);
-    expect(parseImportInput(flipLastChar(encryptNcryptsec(KEY, 'hunter22', 8)))).toBe(null);
+    expect(parseImportInput(flipLastChar(encryptNcryptsec(KEY, 'hunter22', 16)))).toBe(null);
     expect(parseImportInput(flipLastChar(npubEncode(PUBKEY_HEX)))).toBe(null);
   });
 
@@ -64,7 +68,7 @@ describe('parseImportInput', () => {
   });
 
   test('an ncryptsec is recognised before anything else claims it', () => {
-    const parsed = parseImportInput(encryptNcryptsec(KEY, 'hunter22', 8));
+    const parsed = parseImportInput(encryptNcryptsec(KEY, 'hunter22', 16));
     expect(parsed?.kind).toBe('ncryptsec');
   });
 
@@ -164,22 +168,23 @@ describe('detectImportKind', () => {
 });
 
 describe('NIP-49 ncryptsec', () => {
-  test('an ncryptsec round trips through its password', () => {
+  test('an ncryptsec round trips through its password', { timeout: 60_000 }, () => {
     const key = new Uint8Array(32).fill(4);
-    const encoded = encryptNcryptsec(key, 'hunter22', 8);
+    const encoded = encryptNcryptsec(key, 'hunter22', 16);
     expect(encoded.startsWith('ncryptsec1')).toBe(true);
     expect(decryptNcryptsec(encoded, 'hunter22')).toEqual(key);
     expect(() => decryptNcryptsec(encoded, 'wrong')).toThrow();
   });
 
-  test('the password is NFKC-normalized, so both spellings open the same key', () => {
+  test('the password is NFKC-normalized, so both spellings open the same key', { timeout: 60_000 }, () => {
     // U+00E9 versus e + U+0301: the same text, two encodings.
-    const encoded = encryptNcryptsec(KEY, 'café', 8);
+    const encoded = encryptNcryptsec(KEY, 'café', 16);
     expect(decryptNcryptsec(encoded, 'café')).toEqual(KEY);
   });
 
   test('only 32-byte keys can be encrypted', () => {
-    expect(() => encryptNcryptsec(new Uint8Array(31), 'hunter22', 8)).toThrow();
+    // Checked before any derivation, so this costs nothing.
+    expect(() => encryptNcryptsec(new Uint8Array(31), 'hunter22', 16)).toThrow();
   });
 
   // The two tests below run their KDFs at the shipping work factor: scrypt at N = 2^16 twice,
@@ -189,6 +194,38 @@ describe('NIP-49 ncryptsec', () => {
   test('the default scrypt cost factor round trips', { timeout: 60_000 }, () => {
     const encoded = encryptNcryptsec(KEY, 'hunter22');
     expect(decryptNcryptsec(encoded, 'hunter22')).toEqual(KEY);
+  });
+
+  /**
+   * The floor is the default. A backup is the one artefact of this system that leaves the
+   * device and can be guessed at offline for as long as anyone likes, so the cost of a guess
+   * is the whole protection; the parameter can raise it and can never lower it below what
+   * the shipping extension writes and NIP-49 recommends (2^16, 64 MiB).
+   */
+  test('the encoder refuses a cost factor below the floor, which is the default', () => {
+    expect(MIN_LOG_N).toBe(16);
+    expect(DEFAULT_LOG_N).toBe(MIN_LOG_N);
+    for (const logn of [1, 8, 15]) {
+      expect(() => encryptNcryptsec(KEY, 'hunter22', logn)).toThrow(/cost factor/i);
+    }
+  });
+
+  test('the decoder still opens a v2 backup another client wrote below the floor', () => {
+    // Built independently from the NIP-49 layout, at log_n = 8, which the encoder refuses.
+    const salt = new Uint8Array(16).fill(3);
+    const nonce = new Uint8Array(24).fill(5);
+    const key = scrypt(new TextEncoder().encode('hunter22'), salt, { N: 1 << 8, r: 8, p: 1, dkLen: 32 });
+    const ciphertext = xchacha20poly1305(key, nonce, new Uint8Array([0x02])).encrypt(KEY);
+    const payload = new Uint8Array(91);
+    payload[0] = 0x02;
+    payload[1] = 8;
+    payload.set(salt, 2);
+    payload.set(nonce, 18);
+    payload[42] = 0x02;
+    payload.set(ciphertext, 43);
+    const weak = bech32.encode('ncryptsec', bech32.toWords(payload), 5000);
+    expect(decryptNcryptsec(weak, 'hunter22')).toEqual(KEY);
+    expect(parseImportInput(weak)?.kind).toBe('ncryptsec');
   });
 
   test('a legacy 0x01 backup written by the extension still opens', { timeout: 60_000 }, () => {

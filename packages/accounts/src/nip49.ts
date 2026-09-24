@@ -27,7 +27,16 @@ import { bech32Decode, bech32Encode } from './bech32.js';
 
 export const VERSION_V2 = 0x02;
 export const VERSION_LEGACY = 0x01;
+/**
+ * The scrypt cost the encoder writes and the lowest it accepts: 2^16, 64 MiB, the value the
+ * shipping extension writes and the one NIP-49 recommends. A backup is the one artefact of
+ * this system that leaves the device and can be guessed at offline for as long as anyone
+ * likes, so the cost of a guess is its whole protection. The parameter on `encryptNcryptsec`
+ * can raise it and cannot lower it. The DECODER accepts any cost from 1 up, because other
+ * clients' backups are theirs to have written weakly and still need to import.
+ */
 export const DEFAULT_LOG_N = 16;
+export const MIN_LOG_N = 16;
 export const MAX_LOG_N = 22;
 export const SCRYPT_R = 8;
 export const SCRYPT_P = 1;
@@ -57,13 +66,14 @@ function deriveScryptKey(password: string, salt: Uint8Array, logN: number): Uint
 /**
  * Encrypt a private key with a password and encode it as an ncryptsec (NIP-49 v2).
  *
- * `logn` is the scrypt cost exponent; leave it alone outside tests. The default is what
- * the extension writes, and lowering it lowers the cost of guessing the password.
+ * `logn` is the scrypt cost exponent, {@link DEFAULT_LOG_N} unless a host chooses to stretch
+ * harder; anything below {@link MIN_LOG_N} is refused, because the cost of a guess is the
+ * only thing standing between a backup file and the key inside it.
  */
 export function encryptNcryptsec(privkey: Uint8Array, password: string, logn: number = DEFAULT_LOG_N): string {
   if (privkey.length !== PRIVKEY_BYTES) throw new Error('Invalid private key length');
-  if (!Number.isInteger(logn) || logn < 1 || logn > MAX_LOG_N) {
-    throw new Error('Unsupported scrypt cost factor');
+  if (!Number.isInteger(logn) || logn < MIN_LOG_N || logn > MAX_LOG_N) {
+    throw new Error(`Unsupported scrypt cost factor: log_n must be between ${MIN_LOG_N} and ${MAX_LOG_N}`);
   }
 
   let key: Uint8Array | null = null;
