@@ -27,10 +27,11 @@
     "packages/ui",
     "packages/auth",
     "packages/sdk",
-    "packages/pq"
+    "packages/pq",
+    "packages/signer-core"
   ],
   "scripts": {
-    "build": "npm run build -w @nostr-wot/storage && npm run build -w @nostr-wot/permissions && npm run build -w @nostr-wot/accounts && npm run build -w @nostr-wot/vault && npm run build -w @nostr-wot/pq && npm run build -w @nostr-wot/data && npm run build -w @nostr-wot/relay && npm run build -w @nostr-wot/signers && npm run build -w @nostr-wot/blossom && npm run build -w @nostr-wot/dm && npm run build -w @nostr-wot/wallet && npm run build -w @nostr-wot/wot && npm run build -w @nostr-wot/graph && npm run build -w @nostr-wot/ui && npm run build -w @nostr-wot/auth && npm run build -w nostr-wot-sdk",
+    "build": "npm run build -w @nostr-wot/storage && npm run build -w @nostr-wot/permissions && npm run build -w @nostr-wot/accounts && npm run build -w @nostr-wot/vault && npm run build -w @nostr-wot/pq && npm run build -w @nostr-wot/data && npm run build -w @nostr-wot/relay && npm run build -w @nostr-wot/signers && npm run build -w @nostr-wot/blossom && npm run build -w @nostr-wot/dm && npm run build -w @nostr-wot/wallet && npm run build -w @nostr-wot/wot && npm run build -w @nostr-wot/graph && npm run build -w @nostr-wot/ui && npm run build -w @nostr-wot/auth && npm run build -w nostr-wot-sdk && npm run build -w @nostr-wot/signer-core",
     "dev": "npm run dev -ws --if-present",
     "test": "npm run test -ws --if-present",
     "test:run": "npm run test:run -ws --if-present",

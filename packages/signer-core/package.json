@@ -1,0 +1,64 @@
+{
+  "name": "@nostr-wot/signer-core",
+  "version": "0.1.0",
+  "description": "The platform-neutral signing pipeline every @nostr-wot host shares: one request contract for every transport, the permission gate, the approval queue and the activity log, over the vault.",
+  "author": "Leon Acosta <leon@nostr-wot.com>",
+  "license": "MIT",
+  "keywords": [
+    "nostr",
+    "signer",
+    "nip-07",
+    "nip-46",
+    "nip-55",
+    "permissions",
+    "platform-neutral"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nostr-wot/nostr-wot-sdk.git",
+    "directory": "packages/signer-core"
+  },
+  "homepage": "https://github.com/nostr-wot/nostr-wot-sdk/tree/main/packages/signer-core",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:run": "vitest run"
+  },
+  "dependencies": {
+    "@nostr-wot/accounts": "^0.1.0",
+    "@nostr-wot/permissions": "^0.1.0",
+    "@nostr-wot/signers": "^1.2.0",
+    "@nostr-wot/vault": "^0.1.0",
+    "nostr-tools": "^2.24.1"
+  },
+  "devDependencies": {
+    "@nostr-wot/storage": "^0.1.0",
+    "tsup": "^8.0.1",
+    "typescript": "^5.3.0",
+    "vitest": "^4.0.18"
+  },
+  "sideEffects": false
+}

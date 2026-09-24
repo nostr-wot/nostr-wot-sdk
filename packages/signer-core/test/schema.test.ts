@@ -1,0 +1,206 @@
+/**
+ * The boundary. Everything a transport hands the pipeline goes through `validateRequest`, and
+ * nothing past it re-validates, so this is the one place a malformed request can be stopped.
+ */
+import { describe, test, expect } from 'vitest';
+import {
+  validateRequest,
+  SignerError,
+  MAX_EVENT_TAGS,
+  MAX_TAG_VALUES,
+  MAX_CRYPTO_PLAINTEXT_BYTES,
+  MAX_CRYPTO_CIPHERTEXT_LENGTH,
+  MAX_EVENT_BYTES,
+  type SignerRequest,
+} from '../src/index.js';
+
+const PUBKEY = 'ab'.repeat(32);
+
+function base(method: SignerRequest['method'], params: Record<string, unknown>): SignerRequest {
+  return {
+    id: 'req_1',
+    origin: { kind: 'web', identifier: 'example.com' },
+    method,
+    params,
+    receivedAt: 1,
+  };
+}
+
+const invalid = (input: unknown) => {
+  expect(() => validateRequest(input)).toThrow(SignerError);
+  try {
+    validateRequest(input);
+  } catch (error) {
+    expect((error as SignerError).code).toBe('invalid_request');
+    return (error as SignerError).message;
+  }
+  throw new Error('unreachable');
+};
+
+describe('the envelope', () => {
+  test('accepts a well-formed request and copies it', () => {
+    const input = base('getPublicKey', {});
+    const { request } = validateRequest(input);
+    expect(request).toEqual(input);
+    expect(request).not.toBe(input);
+    expect(request.origin).not.toBe(input.origin);
+  });
+
+  test('keeps the optional origin fields', () => {
+    const input = base('getPublicKey', {});
+    input.origin = { kind: 'nip46', identifier: PUBKEY, displayName: 'Client', icon: 'https://x/i.png' };
+    expect(validateRequest(input).request.origin).toEqual(input.origin);
+  });
+
+  test.each([
+    ['null', null],
+    ['a string', 'req'],
+    ['a missing id', { ...base('getPublicKey', {}), id: undefined }],
+    ['an empty id', { ...base('getPublicKey', {}), id: '' }],
+    ['a numeric id', { ...base('getPublicKey', {}), id: 7 }],
+    ['an unknown method', { ...base('getPublicKey', {}), method: 'getPrivateKey' }],
+    ['a missing origin', { ...base('getPublicKey', {}), origin: undefined }],
+    ['an unknown origin kind', { ...base('getPublicKey', {}), origin: { kind: 'tor', identifier: 'x' } }],
+    ['an empty identifier', { ...base('getPublicKey', {}), origin: { kind: 'web', identifier: '' } }],
+    ['a non-string displayName', { ...base('getPublicKey', {}), origin: { kind: 'web', identifier: 'x', displayName: 3 } }],
+    ['a non-numeric receivedAt', { ...base('getPublicKey', {}), receivedAt: 'now' }],
+    ['a NaN receivedAt', { ...base('getPublicKey', {}), receivedAt: Number.NaN }],
+    ['non-object params', { ...base('getPublicKey', {}), params: 'x' }],
+    ['array params', { ...base('getPublicKey', {}), params: [] }],
+  ])('rejects %s', (_, input) => {
+    invalid(input);
+  });
+});
+
+describe('signEvent', () => {
+  const event = (overrides: Record<string, unknown> = {}) => ({
+    kind: 1,
+    content: 'hello',
+    tags: [['t', 'x']],
+    ...overrides,
+  });
+
+  test('accepts a template and copies it deeply', () => {
+    const input = base('signEvent', { event: event({ created_at: 5, pubkey: PUBKEY }) });
+    const validated = validateRequest(input);
+    expect(validated.params).toEqual({
+      method: 'signEvent',
+      event: { kind: 1, content: 'hello', tags: [['t', 'x']], created_at: 5, pubkey: PUBKEY },
+    });
+    const source = (input.params as { event: { tags: string[][] } }).event;
+    source.tags[0]!.push('mutated');
+    source.tags.push(['p', 'added']);
+    expect(validated.params.method === 'signEvent' && validated.params.event.tags).toEqual([['t', 'x']]);
+    expect((validated.request.params as { event: { tags: string[][] } }).event.tags).toEqual([['t', 'x']]);
+  });
+
+  test('drops fields that are not part of a template', () => {
+    const input = base('signEvent', { event: event({ id: 'forged', sig: 'forged', extra: 1 }) });
+    const { params, request } = validateRequest(input);
+    expect(params.method === 'signEvent' && params.event).not.toHaveProperty('sig');
+    expect(params.method === 'signEvent' && params.event).not.toHaveProperty('id');
+    expect((request.params as { event: object }).event).not.toHaveProperty('extra');
+  });
+
+  test.each([
+    ['no event', {}],
+    ['a null event', { event: null }],
+    ['a string kind', { event: event({ kind: '1' }) }],
+    ['a negative kind', { event: event({ kind: -1 }) }],
+    ['a fractional kind', { event: event({ kind: 1.5 }) }],
+    ['a NaN kind', { event: event({ kind: Number.NaN }) }],
+    ['a kind above 16 bits', { event: event({ kind: 70_000 }) }],
+    ['a missing content', { event: { kind: 1, tags: [] } }],
+    ['a numeric content', { event: event({ content: 1 }) }],
+    ['a missing tags', { event: { kind: 1, content: '' } }],
+    ['tags as an object', { event: event({ tags: {} }) }],
+    ['a tag that is a string', { event: event({ tags: ['t'] }) }],
+    ['a tag holding a number', { event: event({ tags: [['t', 1]] }) }],
+    ['an empty tag', { event: event({ tags: [[]] }) }],
+    ['a fractional created_at', { event: event({ created_at: 1.5 }) }],
+    ['a negative created_at', { event: event({ created_at: -1 }) }],
+    ['an uppercase author', { event: event({ pubkey: PUBKEY.toUpperCase() }) }],
+    ['a short author', { event: event({ pubkey: PUBKEY.slice(2) }) }],
+  ])('rejects %s', (_, params) => {
+    invalid(base('signEvent', params));
+  });
+
+  test('bounds the tag count', () => {
+    const tags = Array.from({ length: MAX_EVENT_TAGS }, () => ['t']);
+    expect(() => validateRequest(base('signEvent', { event: event({ tags }) }))).not.toThrow();
+    tags.push(['t']);
+    expect(invalid(base('signEvent', { event: event({ tags }) }))).toMatch(/tags/i);
+  });
+
+  test('bounds the values in one tag', () => {
+    const tag = Array.from({ length: MAX_TAG_VALUES }, () => 'v');
+    expect(() => validateRequest(base('signEvent', { event: event({ tags: [tag] }) }))).not.toThrow();
+    tag.push('v');
+    expect(invalid(base('signEvent', { event: event({ tags: [tag] }) }))).toMatch(/tag/i);
+  });
+
+  test('bounds the whole event', () => {
+    const content = 'x'.repeat(MAX_EVENT_BYTES);
+    expect(invalid(base('signEvent', { event: event({ content }) }))).toMatch(/large/i);
+  });
+
+  test('measures the event in bytes, not characters', () => {
+    // Four bytes per character: a quarter of the byte limit in characters is over it.
+    const content = '\u{1F511}'.repeat(MAX_EVENT_BYTES / 4);
+    expect(invalid(base('signEvent', { event: event({ content }) }))).toMatch(/large/i);
+  });
+});
+
+describe('the crypto methods', () => {
+  test.each(['nip04Encrypt', 'nip44Encrypt'] as const)('%s takes a pubkey and a plaintext', (method) => {
+    const { params } = validateRequest(base(method, { pubkey: PUBKEY, plaintext: 'hi', extra: 1 }));
+    expect(params).toEqual({ method, pubkey: PUBKEY, plaintext: 'hi' });
+  });
+
+  test.each(['nip04Decrypt', 'nip44Decrypt'] as const)('%s takes a pubkey and a ciphertext', (method) => {
+    const { params } = validateRequest(base(method, { pubkey: PUBKEY, ciphertext: 'c2VjcmV0' }));
+    expect(params).toEqual({ method, pubkey: PUBKEY, ciphertext: 'c2VjcmV0' });
+  });
+
+  test.each([
+    ['an uppercase pubkey', { pubkey: PUBKEY.toUpperCase(), plaintext: 'x' }],
+    ['a 63 character pubkey', { pubkey: PUBKEY.slice(1), plaintext: 'x' }],
+    ['a 65 character pubkey', { pubkey: PUBKEY + 'a', plaintext: 'x' }],
+    ['an npub', { pubkey: 'npub1' + 'q'.repeat(58), plaintext: 'x' }],
+    ['a missing pubkey', { plaintext: 'x' }],
+    ['a missing plaintext', { pubkey: PUBKEY }],
+    ['a numeric plaintext', { pubkey: PUBKEY, plaintext: 1 }],
+  ])('encrypt rejects %s', (_, params) => {
+    invalid(base('nip44Encrypt', params));
+  });
+
+  test.each([
+    ['a missing ciphertext', { pubkey: PUBKEY }],
+    ['an empty ciphertext', { pubkey: PUBKEY, ciphertext: '' }],
+    ['an object ciphertext', { pubkey: PUBKEY, ciphertext: {} }],
+  ])('decrypt rejects %s', (_, params) => {
+    invalid(base('nip44Decrypt', params));
+  });
+
+  test('bounds the plaintext in bytes', () => {
+    const ok = 'x'.repeat(MAX_CRYPTO_PLAINTEXT_BYTES);
+    expect(() => validateRequest(base('nip44Encrypt', { pubkey: PUBKEY, plaintext: ok }))).not.toThrow();
+    expect(invalid(base('nip44Encrypt', { pubkey: PUBKEY, plaintext: ok + 'x' }))).toMatch(/plaintext/i);
+    const multibyte = '\u{1F511}'.repeat(MAX_CRYPTO_PLAINTEXT_BYTES / 4 + 1);
+    expect(invalid(base('nip44Encrypt', { pubkey: PUBKEY, plaintext: multibyte }))).toMatch(/plaintext/i);
+  });
+
+  test('bounds the ciphertext length', () => {
+    const ok = 'x'.repeat(MAX_CRYPTO_CIPHERTEXT_LENGTH);
+    expect(() => validateRequest(base('nip44Decrypt', { pubkey: PUBKEY, ciphertext: ok }))).not.toThrow();
+    expect(invalid(base('nip44Decrypt', { pubkey: PUBKEY, ciphertext: ok + 'x' }))).toMatch(/ciphertext/i);
+  });
+});
+
+describe('the parameterless methods', () => {
+  test.each(['getPublicKey', 'getRelays'] as const)('%s ignores whatever params it is given', (method) => {
+    const { params, request } = validateRequest(base(method, { anything: true }));
+    expect(params).toEqual({ method });
+    expect(request.params).toEqual({});
+  });
+});
