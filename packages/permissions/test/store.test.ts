@@ -63,16 +63,16 @@ describe('storage compatibility with the browser extension', () => {
     });
     const permissions = new Permissions(store);
 
-    expect(await permissions.check('example.com', 'signEvent', 1)).toBe('allow');
-    expect(await permissions.check('example.com', 'nip44Encrypt')).toBe('deny');
-    expect(await permissions.check('example.com', 'signEvent', 2)).toBe('ask');
-    expect(await permissions.check('other.com', 'signEvent', 1)).toBe('ask');
+    expect(await permissions.check('example.com', 'signEvent', 1, 'acct')).toBe('allow');
+    expect(await permissions.check('example.com', 'nip44Encrypt', undefined, 'acct')).toBe('deny');
+    expect(await permissions.check('example.com', 'signEvent', 2, 'acct')).toBe('ask');
+    expect(await permissions.check('other.com', 'signEvent', 1, 'acct')).toBe('ask');
   });
 
   test('a save writes the shape the extension expects', async () => {
     const store = new MemoryStore();
     const permissions = new Permissions(store);
-    await permissions.save('example.com', 'signEvent', 1, 'allow');
+    await permissions.save('example.com', 'signEvent', 1, 'allow', 'acct');
 
     expect(await raw(store)).toEqual({
       'example.com': { _default: { 'signEvent:1': 'allow' } },
@@ -115,7 +115,7 @@ describe('mode-based resolution', () => {
     const store = new MemoryStore();
     const permissions = new Permissions(store);
 
-    await permissions.save('example.com', 'signEvent', 1, 'allow');
+    await permissions.save('example.com', 'signEvent', 1, 'allow', 'acct');
     await permissions.setUseGlobalDefaults(false);
     await permissions.save('example.com', 'signEvent', 1, 'deny', 'acct');
 
@@ -139,43 +139,43 @@ describe('mode-based resolution', () => {
 describe('save, saveDirect and getAll', () => {
   test('approving a DM kind covers the whole send flow but no other kind', async () => {
     const permissions = new Permissions(new MemoryStore());
-    await permissions.save('chat.com', 'signEvent', 4, 'allow');
+    await permissions.save('chat.com', 'signEvent', 4, 'allow', 'acct');
 
-    expect(await permissions.check('chat.com', 'signEvent', 4)).toBe('allow');
-    expect(await permissions.check('chat.com', 'signEvent', 1059)).toBe('allow');
-    expect(await permissions.check('chat.com', 'nip04Encrypt')).toBe('allow');
-    expect(await permissions.check('chat.com', 'nip44Encrypt')).toBe('allow');
-    expect(await permissions.check('chat.com', 'signEvent', 1)).toBe('ask');
+    expect(await permissions.check('chat.com', 'signEvent', 4, 'acct')).toBe('allow');
+    expect(await permissions.check('chat.com', 'signEvent', 1059, 'acct')).toBe('allow');
+    expect(await permissions.check('chat.com', 'nip04Encrypt', undefined, 'acct')).toBe('allow');
+    expect(await permissions.check('chat.com', 'nip44Encrypt', undefined, 'acct')).toBe('allow');
+    expect(await permissions.check('chat.com', 'signEvent', 1, 'acct')).toBe('ask');
   });
 
   test('saveDirect writes a key verbatim', async () => {
     const store = new MemoryStore();
     const permissions = new Permissions(store);
-    await permissions.saveDirect('chat.com', 'signEvent:1111', 'allow');
+    await permissions.saveDirect('chat.com', 'signEvent:1111', 'allow', 'acct');
 
     expect(await raw(store)).toEqual({ 'chat.com': { _default: { 'signEvent:1111': 'allow' } } });
   });
 
   test('getAll and getForOrigin report the active bucket', async () => {
     const permissions = new Permissions(new MemoryStore());
-    await permissions.save('a.com', 'signEvent', 1, 'allow');
-    await permissions.save('b.com', 'getPublicKey', null, 'deny');
+    await permissions.save('a.com', 'signEvent', 1, 'allow', 'acct');
+    await permissions.save('b.com', 'getPublicKey', null, 'deny', 'acct');
 
-    expect(await permissions.getAll()).toEqual({
+    expect(await permissions.getAll('acct')).toEqual({
       'a.com': { 'signEvent:1': 'allow' },
       'b.com': { getPublicKey: 'deny' },
     });
-    expect(await permissions.getForOrigin('a.com')).toEqual({ 'signEvent:1': 'allow' });
-    expect(await permissions.getForOrigin('nowhere.com')).toEqual({});
+    expect(await permissions.getForOrigin('a.com', 'acct')).toEqual({ 'signEvent:1': 'allow' });
+    expect(await permissions.getForOrigin('nowhere.com', 'acct')).toEqual({});
   });
 
   test('an origin is any caller label, not only a hostname', async () => {
     const permissions = new Permissions(new MemoryStore());
-    await permissions.save('com.example.android', 'signEvent', 1, 'allow');
-    await permissions.save('npub1deadbeef', 'signEvent', 1, 'deny');
+    await permissions.save('com.example.android', 'signEvent', 1, 'allow', 'acct');
+    await permissions.save('npub1deadbeef', 'signEvent', 1, 'deny', 'acct');
 
-    expect(await permissions.check('com.example.android', 'signEvent', 1)).toBe('allow');
-    expect(await permissions.check('npub1deadbeef', 'signEvent', 1)).toBe('deny');
+    expect(await permissions.check('com.example.android', 'signEvent', 1, 'acct')).toBe('allow');
+    expect(await permissions.check('npub1deadbeef', 'signEvent', 1, 'acct')).toBe('deny');
   });
 
   test('a stored hostname rule still covers the matching https origin', async () => {
@@ -186,12 +186,12 @@ describe('save, saveDirect and getAll', () => {
       signerPermissions: { 'example.com': { _default: { 'signEvent:1': 'allow' } } },
     });
     const permissions = new Permissions(store);
-    expect(await permissions.check('https://example.com', 'signEvent', 1)).toBe('allow');
+    expect(await permissions.check('https://example.com', 'signEvent', 1, 'acct')).toBe('allow');
 
     // An exact-origin rule overrides the legacy hostname rule for the same key.
-    await permissions.save('https://example.com', 'signEvent', 1, 'deny');
-    expect(await permissions.check('https://example.com', 'signEvent', 1)).toBe('deny');
-    expect(await permissions.check('example.com', 'signEvent', 1)).toBe('allow');
+    await permissions.save('https://example.com', 'signEvent', 1, 'deny', 'acct');
+    expect(await permissions.check('https://example.com', 'signEvent', 1, 'acct')).toBe('deny');
+    expect(await permissions.check('example.com', 'signEvent', 1, 'acct')).toBe('allow');
   });
 });
 
@@ -199,11 +199,11 @@ describe('clearing', () => {
   test('clear with no origin removes everything', async () => {
     const store = new MemoryStore();
     const permissions = new Permissions(store);
-    await permissions.save('a.com', 'signEvent', 1, 'allow');
-    await permissions.clear();
+    await permissions.save('a.com', 'signEvent', 1, 'allow', 'acct');
+    await permissions.clear(undefined, 'acct');
 
     expect(await store.get(PERMISSIONS_STORAGE_KEY)).toBeUndefined();
-    expect(await permissions.check('a.com', 'signEvent', 1)).toBe('ask');
+    expect(await permissions.check('a.com', 'signEvent', 1, 'acct')).toBe('ask');
   });
 
   test('clear touches only the active mode bucket', async () => {
@@ -213,7 +213,7 @@ describe('clearing', () => {
       },
     });
     const permissions = new Permissions(store);
-    await permissions.clear('a.com');
+    await permissions.clear('a.com', 'acct');
 
     expect(await raw(store)).toEqual({ 'a.com': { acct: { 'signEvent:1': 'allow' } } });
   });
@@ -261,7 +261,7 @@ describe('copyPermissions and setupNewAccountPermissions', () => {
     expect(tree['a.com']?.acct).toEqual({ 'signEvent:1': 'allow' });
 
     // A copy, not a reference: editing the source later must not move the copy.
-    await permissions.saveDirect('a.com', 'signEvent:1', 'deny');
+    await permissions.saveDirect('a.com', 'signEvent:1', 'deny', 'acct');
     expect((await raw(store))['a.com']?.acct).toEqual({ 'signEvent:1': 'allow' });
   });
 
@@ -291,7 +291,7 @@ describe('copyPermissions and setupNewAccountPermissions', () => {
     const permissions = new Permissions(store);
 
     // Global mode: this grant lives in the shared _default bucket.
-    await permissions.save('a.com', 'signEvent', 1, 'allow');
+    await permissions.save('a.com', 'signEvent', 1, 'allow', 'acct');
     await permissions.setupNewAccountPermissions('new', ['old'], null);
 
     expect(await permissions.getUseGlobalDefaults()).toBe(false);
@@ -302,8 +302,8 @@ describe('copyPermissions and setupNewAccountPermissions', () => {
 
   test('copying from an existing account gives the new one the same answers', async () => {
     const permissions = new Permissions(new MemoryStore());
-    await permissions.save('a.com', 'signEvent', 1, 'allow');
-    await permissions.save('a.com', 'getPublicKey', null, 'deny');
+    await permissions.save('a.com', 'signEvent', 1, 'allow', 'acct');
+    await permissions.save('a.com', 'getPublicKey', null, 'deny', 'acct');
     await permissions.setupNewAccountPermissions('new', ['old'], 'old');
 
     expect(await permissions.check('a.com', 'signEvent', 1, 'new')).toBe('allow');
@@ -345,7 +345,7 @@ describe('migrations', () => {
     const permissions = new Permissions(store);
     await permissions.migrateToPerKind();
 
-    expect(await permissions.getForOrigin('a.com')).toEqual({
+    expect(await permissions.getForOrigin('a.com', 'acct')).toEqual({
       'signEvent:1': 'allow',
       sendMessages: 'allow',
       readMessages: 'deny',
@@ -376,7 +376,7 @@ describe('migrations', () => {
       'a.com': { _default: { signEvent: 'deny', 'signEvent:1': 'allow' }, acct: { '*': 'deny' } },
       'flat.com': { _default: { signEvent: 'deny' } },
     });
-    expect(await permissions.check('a.com', 'signEvent', 1)).toBe('deny');
+    expect(await permissions.check('a.com', 'signEvent', 1, 'acct')).toBe('deny');
     await permissions.setUseGlobalDefaults(false);
     expect(await permissions.check('a.com', 'getPublicKey', undefined, 'acct')).toBe('deny');
     // And it survives the next bump too: running everything again changes nothing.
@@ -422,7 +422,7 @@ describe('migrations', () => {
     const permissions = new Permissions(store);
     await permissions.migrateForwardToAsk();
 
-    expect(await permissions.getForOrigin('a.com')).toEqual({
+    expect(await permissions.getForOrigin('a.com', 'acct')).toEqual({
       'signEvent:1': 'ask',
       'signEvent:0': 'allow',
     });
@@ -433,7 +433,7 @@ describe('migrations', () => {
       const permissions = new Permissions(seeded({ 'chat.com': { _default: { 'signEvent:4': 'allow' } } }));
       await permissions.migrateDmKindsToSendMessages();
 
-      expect(await permissions.getForOrigin('chat.com')).toEqual({ sendMessages: 'allow' });
+      expect(await permissions.getForOrigin('chat.com', 'acct')).toEqual({ sendMessages: 'allow' });
     });
 
     test('merges several DM kinds most-restrictive-wins', async () => {
@@ -446,7 +446,7 @@ describe('migrations', () => {
       );
       await permissions.migrateDmKindsToSendMessages();
 
-      expect(await permissions.getForOrigin('chat.com')).toEqual({ sendMessages: 'deny' });
+      expect(await permissions.getForOrigin('chat.com', 'acct')).toEqual({ sendMessages: 'deny' });
     });
 
     test('the ranking is deny over ask over allow', async () => {
@@ -455,7 +455,7 @@ describe('migrations', () => {
       );
       await permissions.migrateDmKindsToSendMessages();
 
-      expect(await permissions.getForOrigin('chat.com')).toEqual({ sendMessages: 'ask' });
+      expect(await permissions.getForOrigin('chat.com', 'acct')).toEqual({ sendMessages: 'ask' });
     });
 
     test('an existing sendMessages deny survives a less restrictive DM kind', async () => {
@@ -464,7 +464,7 @@ describe('migrations', () => {
       );
       await permissions.migrateDmKindsToSendMessages();
 
-      expect(await permissions.getForOrigin('chat.com')).toEqual({ sendMessages: 'deny' });
+      expect(await permissions.getForOrigin('chat.com', 'acct')).toEqual({ sendMessages: 'deny' });
     });
 
     test('a more restrictive DM kind escalates an existing sendMessages allow', async () => {
@@ -473,16 +473,16 @@ describe('migrations', () => {
       );
       await permissions.migrateDmKindsToSendMessages();
 
-      expect(await permissions.getForOrigin('chat.com')).toEqual({ sendMessages: 'deny' });
+      expect(await permissions.getForOrigin('chat.com', 'acct')).toEqual({ sendMessages: 'deny' });
     });
 
     test('non-DM kinds are untouched and an origin without DM kinds is a no-op', async () => {
       const store = new MemoryStore();
       const permissions = new Permissions(store);
-      await permissions.saveDirect('chat.com', 'signEvent:1', 'allow');
+      await permissions.saveDirect('chat.com', 'signEvent:1', 'allow', 'acct');
       await permissions.migrateDmKindsToSendMessages();
 
-      expect(await permissions.getForOrigin('chat.com')).toEqual({ 'signEvent:1': 'allow' });
+      expect(await permissions.getForOrigin('chat.com', 'acct')).toEqual({ 'signEvent:1': 'allow' });
     });
 
     test('every DM kind is migrated in every bucket', async () => {
@@ -528,9 +528,9 @@ describe('concurrency and the cache', () => {
     const permissions = new Permissions(store);
 
     await Promise.all([
-      permissions.save('a.com', 'signEvent', 1, 'allow'),
-      permissions.save('a.com', 'signEvent', 2, 'deny'),
-      permissions.saveDirect('a.com', 'getPublicKey', 'allow'),
+      permissions.save('a.com', 'signEvent', 1, 'allow', 'acct'),
+      permissions.save('a.com', 'signEvent', 2, 'deny', 'acct'),
+      permissions.saveDirect('a.com', 'getPublicKey', 'allow', 'acct'),
     ]);
 
     expect(await raw(store)).toEqual({
@@ -544,7 +544,7 @@ describe('concurrency and the cache', () => {
 
     await Promise.all(
       Array.from({ length: 12 }, (_unused, index) =>
-        permissions.save(`site${index}.com`, 'signEvent', 1, 'allow'),
+        permissions.save(`site${index}.com`, 'signEvent', 1, 'allow', 'acct'),
       ),
     );
 
@@ -556,9 +556,9 @@ describe('concurrency and the cache', () => {
     const permissions = new Permissions(withoutSubscribe(backing));
 
     // Populate the cache, then write, then read again.
-    expect(await permissions.check('a.com', 'signEvent', 1)).toBe('ask');
-    await permissions.save('a.com', 'signEvent', 1, 'allow');
-    expect(await permissions.check('a.com', 'signEvent', 1)).toBe('allow');
+    expect(await permissions.check('a.com', 'signEvent', 1, 'acct')).toBe('ask');
+    await permissions.save('a.com', 'signEvent', 1, 'allow', 'acct');
+    expect(await permissions.check('a.com', 'signEvent', 1, 'acct')).toBe('allow');
 
     expect(await permissions.getUseGlobalDefaults()).toBe(true);
     await permissions.setUseGlobalDefaults(false);
@@ -569,11 +569,11 @@ describe('concurrency and the cache', () => {
     const store = new MemoryStore();
     const permissions = new Permissions(store);
 
-    expect(await permissions.check('a.com', 'signEvent', 1)).toBe('ask');
+    expect(await permissions.check('a.com', 'signEvent', 1, 'acct')).toBe('ask');
 
     // Another context (another tab, another process) writes the same key.
     await store.set(PERMISSIONS_STORAGE_KEY, { 'a.com': { _default: { 'signEvent:1': 'allow' } } });
-    expect(await permissions.check('a.com', 'signEvent', 1)).toBe('allow');
+    expect(await permissions.check('a.com', 'signEvent', 1, 'acct')).toBe('allow');
 
     await store.set(GLOBAL_DEFAULTS_KEY, false);
     expect(await permissions.getUseGlobalDefaults()).toBe(false);
@@ -582,21 +582,21 @@ describe('concurrency and the cache', () => {
   test('dispose stops listening', async () => {
     const store = new MemoryStore();
     const permissions = new Permissions(store);
-    expect(await permissions.check('a.com', 'signEvent', 1)).toBe('ask');
+    expect(await permissions.check('a.com', 'signEvent', 1, 'acct')).toBe('ask');
 
     permissions.dispose();
     await store.set(PERMISSIONS_STORAGE_KEY, { 'a.com': { _default: { 'signEvent:1': 'allow' } } });
 
     // Stale, because nothing invalidated the cache: the point is that dispose worked.
-    expect(await permissions.check('a.com', 'signEvent', 1)).toBe('ask');
+    expect(await permissions.check('a.com', 'signEvent', 1, 'acct')).toBe('ask');
     permissions.invalidateCache();
-    expect(await permissions.check('a.com', 'signEvent', 1)).toBe('allow');
+    expect(await permissions.check('a.com', 'signEvent', 1, 'acct')).toBe('allow');
   });
 
   test('a store with no subscribe is usable', async () => {
     const permissions = new Permissions(withoutSubscribe(new MemoryStore()));
-    await permissions.save('a.com', 'signEvent', 1, 'allow');
-    expect(await permissions.check('a.com', 'signEvent', 1)).toBe('allow');
+    await permissions.save('a.com', 'signEvent', 1, 'allow', 'acct');
+    expect(await permissions.check('a.com', 'signEvent', 1, 'acct')).toBe('allow');
     expect(() => permissions.dispose()).not.toThrow();
   });
 });
@@ -622,15 +622,15 @@ describe('a revocation is not reversible by a concurrent write', () => {
     const backing = new MemoryStore();
     const permissions = new Permissions(slowWrites(backing, 20));
 
-    await permissions.saveDirect('evil.com', 'signEvent:1', 'allow');
+    await permissions.saveDirect('evil.com', 'signEvent:1', 'allow', 'acct');
 
     // The save loads the tree first and writes it back last. Unlocked, its write lands
     // after the removal and resurrects every grant the user had just revoked.
-    await Promise.all([permissions.saveDirect('good.com', 'signEvent:1', 'allow'), permissions.clear()]);
+    await Promise.all([permissions.saveDirect('good.com', 'signEvent:1', 'allow', 'acct'), permissions.clear(undefined, 'acct')]);
 
     expect(await backing.get(PERMISSIONS_STORAGE_KEY)).toBeUndefined();
-    expect(await permissions.check('evil.com', 'signEvent', 1)).toBe('ask');
-    expect(await permissions.check('good.com', 'signEvent', 1)).toBe('ask');
+    expect(await permissions.check('evil.com', 'signEvent', 1, 'acct')).toBe('ask');
+    expect(await permissions.check('good.com', 'signEvent', 1, 'acct')).toBe('ask');
   });
 });
 
@@ -658,15 +658,15 @@ describe('a failed write never leaves the cache more permissive than the disk', 
     const permissions = new Permissions(store);
 
     arm(true);
-    await expect(permissions.save('a.com', 'signEvent', 1, 'allow')).rejects.toThrow('quota exceeded');
+    await expect(permissions.save('a.com', 'signEvent', 1, 'allow', 'acct')).rejects.toThrow('quota exceeded');
 
     expect(await backing.get(PERMISSIONS_STORAGE_KEY)).toBeUndefined();
-    expect(await permissions.check('a.com', 'signEvent', 1)).toBe('ask');
+    expect(await permissions.check('a.com', 'signEvent', 1, 'acct')).toBe('ask');
 
     // And the instance still works once the store recovers.
     arm(false);
-    await permissions.save('a.com', 'signEvent', 1, 'allow');
-    expect(await permissions.check('a.com', 'signEvent', 1)).toBe('allow');
+    await permissions.save('a.com', 'signEvent', 1, 'allow', 'acct');
+    expect(await permissions.check('a.com', 'signEvent', 1, 'acct')).toBe('allow');
   });
 
   test('a deny that failed to persist is not answered from the cache either', async () => {
@@ -675,10 +675,10 @@ describe('a failed write never leaves the cache more permissive than the disk', 
     const permissions = new Permissions(store);
 
     arm(true);
-    await expect(permissions.save('a.com', 'signEvent', 1, 'deny')).rejects.toThrow('quota exceeded');
+    await expect(permissions.save('a.com', 'signEvent', 1, 'deny', 'acct')).rejects.toThrow('quota exceeded');
 
     expect(await backing.get(PERMISSIONS_STORAGE_KEY)).toBeUndefined();
-    expect(await permissions.check('a.com', 'signEvent', 1)).toBe('ask');
+    expect(await permissions.check('a.com', 'signEvent', 1, 'acct')).toBe('ask');
   });
 
   /**
@@ -712,16 +712,16 @@ describe('a failed write never leaves the cache more permissive than the disk', 
     const permissions = new Permissions(store);
 
     gated = true;
-    const saving = permissions.save('a.com', 'signEvent', 1, 'allow');
+    const saving = permissions.save('a.com', 'signEvent', 1, 'allow', 'acct');
     await started; // the store write is now genuinely in flight
 
-    expect(await permissions.check('a.com', 'signEvent', 1)).toBe('ask');
-    expect(await permissions.getForOrigin('a.com')).toEqual({});
+    expect(await permissions.check('a.com', 'signEvent', 1, 'acct')).toBe('ask');
+    expect(await permissions.getForOrigin('a.com', 'acct')).toEqual({});
 
     releaseWrite();
     await saving;
 
-    expect(await permissions.check('a.com', 'signEvent', 1)).toBe('allow');
+    expect(await permissions.check('a.com', 'signEvent', 1, 'acct')).toBe('allow');
   });
 
   test('a check during an in-flight save that then FAILS never saw the decision at all', async () => {
@@ -750,13 +750,13 @@ describe('a failed write never leaves the cache more permissive than the disk', 
     const permissions = new Permissions(store);
 
     gated = true;
-    const saving = permissions.save('a.com', 'signEvent', 1, 'allow');
+    const saving = permissions.save('a.com', 'signEvent', 1, 'allow', 'acct');
     await started;
 
-    expect(await permissions.check('a.com', 'signEvent', 1)).toBe('ask');
+    expect(await permissions.check('a.com', 'signEvent', 1, 'acct')).toBe('ask');
     releaseWrite();
     await expect(saving).rejects.toThrow('quota exceeded');
-    expect(await permissions.check('a.com', 'signEvent', 1)).toBe('ask');
+    expect(await permissions.check('a.com', 'signEvent', 1, 'acct')).toBe('ask');
   });
 
   test('a failed write does not strand a stored grant behind a phantom', async () => {
@@ -765,10 +765,10 @@ describe('a failed write never leaves the cache more permissive than the disk', 
     const permissions = new Permissions(store);
 
     arm(true);
-    await expect(permissions.save('a.com', 'signEvent', 1, 'deny')).rejects.toThrow('quota exceeded');
+    await expect(permissions.save('a.com', 'signEvent', 1, 'deny', 'acct')).rejects.toThrow('quota exceeded');
 
     // What is on disk is still the allow, and that is what the cache must report.
-    expect(await permissions.check('a.com', 'signEvent', 1)).toBe('allow');
+    expect(await permissions.check('a.com', 'signEvent', 1, 'acct')).toBe('allow');
   });
 });
 
@@ -777,38 +777,40 @@ describe('per-account mode fails closed without an accountId', () => {
     const store = new MemoryStore();
     const permissions = new Permissions(store);
 
-    await permissions.save('a.com', 'signEvent', 1, 'allow');
+    await permissions.save('a.com', 'signEvent', 1, 'allow', 'acct');
     await permissions.setUseGlobalDefaults(false);
 
-    expect(await permissions.check('a.com', 'signEvent', 1)).toBe('ask');
+    expect(await permissions.check('a.com', 'signEvent', 1, 'acct')).toBe('ask');
     expect(await permissions.check('a.com', 'signEvent', 1, '')).toBe('ask');
     expect(await permissions.check('a.com', 'signEvent', 1, 'acct')).toBe('ask');
-    expect(await permissions.getForOrigin('a.com')).toEqual({});
-    expect(await permissions.getAll()).toEqual({});
+    expect(await permissions.getForOrigin('a.com', 'acct')).toEqual({});
+    expect(await permissions.getAll('acct')).toEqual({});
 
     // The _default bucket is still there, just out of reach until the mode says otherwise.
     expect(await raw(store)).toEqual({ 'a.com': { _default: { 'signEvent:1': 'allow' } } });
   });
 
   test('a write with nowhere to go is refused rather than landing in _default', async () => {
+    // Omitting the id is a compile error now (see contracts.test-d.ts); the empty string is
+    // the runtime half, for a caller that built an id from a variable and got nothing.
     const store = new MemoryStore();
     const permissions = new Permissions(store);
     await permissions.setUseGlobalDefaults(false);
 
-    await expect(permissions.save('a.com', 'signEvent', 1, 'allow')).rejects.toThrow(/accountId/);
-    await expect(permissions.saveDirect('a.com', 'getPublicKey', 'allow')).rejects.toThrow(/accountId/);
-    await expect(permissions.clear('a.com')).rejects.toThrow(/accountId/);
+    await expect(permissions.save('a.com', 'signEvent', 1, 'allow', '')).rejects.toThrow(/accountId/);
+    await expect(permissions.saveDirect('a.com', 'getPublicKey', 'allow', '')).rejects.toThrow(/accountId/);
+    await expect(permissions.clear('a.com', '')).rejects.toThrow(/accountId/);
     expect(await raw(store)).toEqual({});
   });
 
   test('global mode keeps the fallback, where _default is the right bucket by definition', async () => {
     const permissions = new Permissions(new MemoryStore());
-    await permissions.save('a.com', 'signEvent', 1, 'allow');
+    await permissions.save('a.com', 'signEvent', 1, 'allow', 'acct');
 
-    expect(await permissions.check('a.com', 'signEvent', 1)).toBe('allow');
+    expect(await permissions.check('a.com', 'signEvent', 1, 'acct')).toBe('allow');
     expect(await permissions.check('a.com', 'signEvent', 1, '')).toBe('allow');
     expect(await permissions.check('a.com', 'signEvent', 1, 'anyone')).toBe('allow');
-    expect(await permissions.getAll()).toEqual({ 'a.com': { 'signEvent:1': 'allow' } });
+    expect(await permissions.getAll('acct')).toEqual({ 'a.com': { 'signEvent:1': 'allow' } });
   });
 });
 
@@ -817,27 +819,27 @@ describe('the one place an allow beats a deny', () => {
     const store = seeded({ 'example.com': { _default: { 'signEvent:1': 'deny' } } });
     const permissions = new Permissions(store);
 
-    expect(await permissions.check('https://example.com', 'signEvent', 1)).toBe('deny');
+    expect(await permissions.check('https://example.com', 'signEvent', 1, 'acct')).toBe('deny');
 
     // Deliberate, and the only exception to deny-wins in the system: an exact-origin rule
     // is a later and more specific statement about the same key than the legacy hostname
     // rule it replaces, so it replaces it before the cascade ever runs.
-    await permissions.save('https://example.com', 'signEvent', 1, 'allow');
-    expect(await permissions.check('https://example.com', 'signEvent', 1)).toBe('allow');
+    await permissions.save('https://example.com', 'signEvent', 1, 'allow', 'acct');
+    expect(await permissions.check('https://example.com', 'signEvent', 1, 'acct')).toBe('allow');
 
     // The legacy rule itself is untouched, and still governs the bare hostname.
-    expect(await permissions.check('example.com', 'signEvent', 1)).toBe('deny');
+    expect(await permissions.check('example.com', 'signEvent', 1, 'acct')).toBe('deny');
   });
 
   test('a legacy deny on a DIFFERENT key still wins, because the cascade still runs', async () => {
     const store = seeded({ 'example.com': { _default: { '*': 'deny' } } });
     const permissions = new Permissions(store);
 
-    await permissions.save('https://example.com', 'signEvent', 1, 'allow');
+    await permissions.save('https://example.com', 'signEvent', 1, 'allow', 'acct');
 
     // The exact origin overrode nothing: the wildcard deny is a different key, survives
     // the merge, and denies.
-    expect(await permissions.check('https://example.com', 'signEvent', 1)).toBe('deny');
+    expect(await permissions.check('https://example.com', 'signEvent', 1, 'acct')).toBe('deny');
   });
 });
 
@@ -850,7 +852,7 @@ describe('a dead permission key is refused, not silently stored', () => {
     // cannot drift apart without this failing.
     expect(DM_SIGN_KINDS.size).toBeGreaterThan(0);
     for (const kind of DM_SIGN_KINDS) {
-      await expect(permissions.saveDirect('chat.com', `signEvent:${kind}`, 'deny')).rejects.toThrow(
+      await expect(permissions.saveDirect('chat.com', `signEvent:${kind}`, 'deny', 'acct')).rejects.toThrow(
         /sendMessages/,
       );
     }
@@ -865,16 +867,16 @@ describe('a dead permission key is refused, not silently stored', () => {
 
   test('save still accepts the same kinds, because it maps them first', async () => {
     const permissions = new Permissions(new MemoryStore());
-    await permissions.save('chat.com', 'signEvent', 4, 'deny');
+    await permissions.save('chat.com', 'signEvent', 4, 'deny', 'acct');
 
-    expect(await permissions.getForOrigin('chat.com')).toEqual({ sendMessages: 'deny' });
-    expect(await permissions.check('chat.com', 'signEvent', 4)).toBe('deny');
+    expect(await permissions.getForOrigin('chat.com', 'acct')).toEqual({ sendMessages: 'deny' });
+    expect(await permissions.check('chat.com', 'signEvent', 4, 'acct')).toBe('deny');
   });
 
   test('non-DM signEvent keys are still accepted verbatim', async () => {
     const permissions = new Permissions(new MemoryStore());
-    await permissions.saveDirect('a.com', 'signEvent:1', 'allow');
-    expect(await permissions.check('a.com', 'signEvent', 1)).toBe('allow');
+    await permissions.saveDirect('a.com', 'signEvent:1', 'allow', 'acct');
+    expect(await permissions.check('a.com', 'signEvent', 1, 'acct')).toBe('allow');
   });
 });
 
@@ -889,11 +891,11 @@ describe('an empty label is refused by every mutating path', () => {
     const store = seeded({ 'a.com': { _default: { 'signEvent:1': 'allow' } } });
     const permissions = new Permissions(store);
 
-    await expect(permissions.clear('')).rejects.toThrow(/origin must not be empty/);
+    await expect(permissions.clear('', 'acct')).rejects.toThrow(/origin must not be empty/);
     expect(await raw(store)).toEqual({ 'a.com': { _default: { 'signEvent:1': 'allow' } } });
 
     // Omitting it entirely still means everything, as ruled.
-    await permissions.clear();
+    await permissions.clear(undefined, 'acct');
     expect(await store.get(PERMISSIONS_STORAGE_KEY)).toBeUndefined();
   });
 
@@ -928,7 +930,7 @@ describe('an empty label is refused by every mutating path', () => {
   test('setupNewAccountPermissions("") throws instead of silently skipping the wizard', async () => {
     const store = new MemoryStore();
     const permissions = new Permissions(store);
-    await permissions.save('a.com', 'signEvent', 1, 'allow');
+    await permissions.save('a.com', 'signEvent', 1, 'allow', 'acct');
 
     await expect(permissions.setupNewAccountPermissions('', ['old'], null)).rejects.toThrow(
       /new account id must not be empty/,
@@ -943,13 +945,13 @@ describe('an empty label is refused by every mutating path', () => {
     const store = new MemoryStore();
     const permissions = new Permissions(store);
 
-    await expect(permissions.save('', 'signEvent', 1, 'allow')).rejects.toThrow(
+    await expect(permissions.save('', 'signEvent', 1, 'allow', 'acct')).rejects.toThrow(
       /origin must not be empty/,
     );
-    await expect(permissions.saveDirect('', 'getPublicKey', 'allow')).rejects.toThrow(
+    await expect(permissions.saveDirect('', 'getPublicKey', 'allow', 'acct')).rejects.toThrow(
       /origin must not be empty/,
     );
-    await expect(permissions.saveDirect('a.com', '', 'allow')).rejects.toThrow(
+    await expect(permissions.saveDirect('a.com', '', 'allow', 'acct')).rejects.toThrow(
       /permission key must not be empty/,
     );
     expect(await raw(store)).toEqual({});
@@ -965,8 +967,8 @@ describe('an empty label is refused by every mutating path', () => {
       seeded({ 'a.com': { _default: { 'signEvent:1': 'allow' } } }),
     );
 
-    expect(await permissions.check('', 'signEvent', 1)).toBe('ask');
-    expect(await permissions.getForOrigin('')).toEqual({});
+    expect(await permissions.check('', 'signEvent', 1, 'acct')).toBe('ask');
+    expect(await permissions.getForOrigin('', 'acct')).toEqual({});
     expect(await permissions.getForOriginRaw('')).toEqual({});
   });
 });
@@ -979,7 +981,7 @@ describe('the injected logger', () => {
     });
     const permissions = new Permissions(store, { logger });
 
-    expect(await permissions.check('a.com', 'signEvent', 1)).toBe('deny');
+    expect(await permissions.check('a.com', 'signEvent', 1, 'acct')).toBe('deny');
     expect(logger.warn).toHaveBeenCalledTimes(1);
     expect(logger.warn.mock.calls[0]?.[1]).toMatchObject({ origin: 'a.com', key: '*' });
   });
@@ -989,6 +991,6 @@ describe('the injected logger', () => {
       signerPermissions: { 'a.com': { _default: { '*': 'deny' } } },
     });
     const permissions = new Permissions(store);
-    expect(await permissions.check('a.com', 'signEvent', 1)).toBe('deny');
+    expect(await permissions.check('a.com', 'signEvent', 1, 'acct')).toBe('deny');
   });
 });

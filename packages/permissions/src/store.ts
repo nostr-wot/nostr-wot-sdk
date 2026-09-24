@@ -24,11 +24,13 @@
  * four transports feeding it, and an optional parameter that one call site forgets is
  * exactly how a cross-account leak ships.
  *
- * So this implementation fails closed. In per-account mode a missing or empty `accountId`
- * resolves to no bucket at all: reads see an empty bucket and answer `ask`, and writes
- * throw rather than land in `_default`. Global mode keeps the fallback, where `_default` is
- * the correct bucket by definition. The cost is one extra approval prompt on a path that
- * should not occur; the alternative cost is an unauthorized signature.
+ * So this implementation fails closed, at both levels. The `accountId` is REQUIRED on every
+ * read and write, so forgetting it is a compile error rather than a behaviour. And at
+ * runtime, in per-account mode an empty `accountId` resolves to no bucket at all: reads see
+ * an empty bucket and answer `ask`, and writes throw rather than land in `_default`. Global
+ * mode keeps the fallback, where `_default` is the correct bucket by definition. The cost is
+ * one extra approval prompt on a path that should not occur; the alternative cost is an
+ * unauthorized signature.
  *
  * Nothing here decides how a request is *routed* — local signing versus a remote signer is
  * the signer's business, not the permission's. A permission answers one question: may this
@@ -171,14 +173,17 @@ export class Permissions {
    *
    * @param origin - the caller: a web origin, an Android package name, a remote signer key
    * @param method - the wire method, for example `signEvent` or `nip44Decrypt`
-   * @param kind - the event kind, when the method is `signEvent`
-   * @param accountId - the active account; ignored while global defaults are on
+   * @param kind - the event kind, when the method is `signEvent`; `undefined` otherwise
+   * @param accountId - the account the request is for. Required at the type level: a caller
+   *   that forgets it compiles fine, works in global mode, and in per-account mode prompts
+   *   forever while every remembered approval reads as an internal error. Ignored while
+   *   global defaults are on, which is exactly why forgetting it goes unnoticed.
    */
   async check(
     origin: string,
     method: string,
-    kind?: number,
-    accountId?: string,
+    kind: number | undefined,
+    accountId: string,
   ): Promise<PermissionDecision> {
     const bucket = await this.getForOrigin(origin, accountId);
     const { decision, key } = resolveDetailed(bucket, method, kind);
@@ -190,7 +195,7 @@ export class Permissions {
   }
 
   /** Every origin's rules in the active bucket: `{ origin: { permissionKey: decision } }`. */
-  async getAll(accountId?: string): Promise<Record<string, PermissionBucket>> {
+  async getAll(accountId: string): Promise<Record<string, PermissionBucket>> {
     const bucket = await this.#activeBucket(accountId);
     if (bucket === null) return {};
     const perms = await this.#load();
@@ -203,7 +208,7 @@ export class Permissions {
   }
 
   /** One origin's effective rules in the active bucket, legacy scopes folded in. */
-  async getForOrigin(origin: string, accountId?: string): Promise<PermissionBucket> {
+  async getForOrigin(origin: string, accountId: string): Promise<PermissionBucket> {
     const bucket = await this.#activeBucket(accountId);
     if (bucket === null) return {};
     return originPermissionBucket(await this.#load(), origin, bucket);
@@ -252,7 +257,7 @@ export class Permissions {
     method: string,
     kind: number | null,
     decision: PermissionDecision,
-    accountId?: string,
+    accountId: string,
   ): Promise<void> {
     await this.saveDirect(origin, permissionKey(method, kind), decision, accountId);
   }
@@ -269,7 +274,7 @@ export class Permissions {
     origin: string,
     key: string,
     decision: PermissionDecision,
-    accountId?: string,
+    accountId: string,
   ): Promise<void> {
     requireLabel(origin, 'origin');
     requireLabel(key, 'permission key');
@@ -302,7 +307,7 @@ export class Permissions {
    * reversible: the save had already loaded the tree, so writing it back resurrected every
    * grant the user had just revoked.
    */
-  async clear(origin?: string, accountId?: string): Promise<void> {
+  async clear(origin: string | undefined, accountId: string): Promise<void> {
     if (origin !== undefined) requireLabel(origin, 'origin');
     if (!origin) {
       await this.#lock.run(async () => {
@@ -613,17 +618,18 @@ export class Permissions {
    * Which bucket the current mode reads and writes, or `null` when there is none.
    *
    * In global mode that is always `_default`. In per-account mode it is the account's own
-   * bucket, and a missing or empty `accountId` yields `null` rather than falling back to
-   * `_default` — see the divergence note in the module doc. `null` reads as an empty
-   * bucket, so the answer is `ask`, and it refuses a write outright.
+   * bucket, and an empty `accountId` yields `null` rather than falling back to `_default` —
+   * see the divergence note in the module doc. `null` reads as an empty bucket, so the
+   * answer is `ask`, and it refuses a write outright. The type makes the id required; this
+   * is the runtime half, for a caller that built an empty one from a variable.
    */
-  async #activeBucket(accountId?: string): Promise<string | null> {
+  async #activeBucket(accountId: string): Promise<string | null> {
     if (await this.getUseGlobalDefaults()) return DEFAULT_BUCKET;
     return accountId || null;
   }
 
   /** The bucket to write into, or an error: a write with nowhere to go is a caller bug. */
-  async #writeBucket(accountId?: string): Promise<string> {
+  async #writeBucket(accountId: string): Promise<string> {
     const bucket = await this.#activeBucket(accountId);
     if (bucket === null) {
       throw new Error(
