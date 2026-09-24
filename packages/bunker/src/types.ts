@@ -83,7 +83,7 @@ export interface BunkerServerOptions {
 
 /** What {@link BunkerServer.createBunkerUri} returns. */
 export interface BunkerUri {
-  /** `bunker://<connection-pubkey>?relay=...&secret=...` — hand this to the client. */
+  /** `bunker://<connection-pubkey>?relay=...&secret=...`: hand this to the client. */
   uri: string;
   /** The pairing secret bound into the URI. */
   secret: string;
