@@ -39,6 +39,16 @@ export function iterationsFor(password: string): number {
  * on the common unlock path, which uses the hardware wrapped key rather than the password.
  */
 export interface Pbkdf2Port {
+  /**
+   * Derive a {@link VAULT_KEY_BYTES}-byte key.
+   *
+   * **The caller takes ownership of the returned buffer and will zero it** once it is finished
+   * with it — `sealPayload` and `openRecord` both do, in a `finally`, because a derived vault
+   * key left on the heap is the thing this whole module exists to avoid. An implementation must
+   * therefore hand back a buffer it does not retain: allocate a fresh one per call, and never
+   * return a cached, pooled or shared array, or a view into one. The default
+   * {@link noblePbkdf2} allocates fresh through `pbkdf2Async`.
+   */
   derive(password: string, salt: Uint8Array, iterations: number): Promise<Uint8Array>;
 }
 

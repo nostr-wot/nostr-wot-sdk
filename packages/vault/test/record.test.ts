@@ -27,6 +27,11 @@ const account: Account = {
  * `sealPayload` and `openRecord` must both take the count from the record, so a port that
  * ignores the iterations argument would fail the round trip rather than pass it.
  */
+const noblePbkdf2Fast = {
+  derive: (password: string, salt: Uint8Array, iterations: number) =>
+    noblePbkdf2.derive(password, salt, Math.min(iterations, 1)),
+};
+
 const fastKdf = {
   derive: (password: string, salt: Uint8Array, iterations: number) =>
     noblePbkdf2.derive(password, salt, Math.min(iterations, 1)),
@@ -40,9 +45,11 @@ describe('sealing a record', () => {
       fastKdf,
     );
     expect(record.version).toBe(1);
-    const opened = await openRecord(record, 'hunter22', fastKdf);
-    expect(opened.accounts[0]).toEqual(account);
-    expect(opened.activeAccountId).toBe('acct_1');
+    const { payload, cacheKeyMinted } = await openRecord(record, 'hunter22', fastKdf);
+    expect(payload.accounts[0]).toEqual(account);
+    expect(payload.activeAccountId).toBe('acct_1');
+    // sealPayload always writes a cacheKey, so reading one back never has to mint one.
+    expect(cacheKeyMinted).toBe(false);
   });
 
   test('the wrong password does not open the record', async () => {
@@ -77,8 +84,8 @@ describe('sealing a record', () => {
    */
   test('a payload with no cache key gets a fresh 32 byte one', async () => {
     const record = await sealPayload({ accounts: [], activeAccountId: null }, 'hunter22', fastKdf);
-    const opened = await openRecord(record, 'hunter22', fastKdf);
-    expect(base64ToBytes(opened.cacheKey!).length).toBe(32);
+    const { payload } = await openRecord(record, 'hunter22', fastKdf);
+    expect(base64ToBytes(payload.cacheKey!).length).toBe(32);
   });
 
   test('a payload that has a cache key keeps exactly that one', async () => {
@@ -88,13 +95,15 @@ describe('sealing a record', () => {
       'hunter22',
       fastKdf,
     );
-    expect((await openRecord(record, 'hunter22', fastKdf)).cacheKey).toBe(cacheKey);
+    const opened = await openRecord(record, 'hunter22', fastKdf);
+    expect(opened.payload.cacheKey).toBe(cacheKey);
+    expect(opened.cacheKeyMinted).toBe(false);
   });
 
   test('the empty password still encrypts rather than storing plaintext', async () => {
     const record = await sealPayload({ accounts: [account], activeAccountId: null }, '', fastKdf);
     expect(record.ciphertext).not.toContain('abandon');
-    expect((await openRecord(record, '', fastKdf)).accounts[0]).toEqual(account);
+    expect((await openRecord(record, '', fastKdf)).payload.accounts[0]).toEqual(account);
   });
 });
 
@@ -114,13 +123,13 @@ describe('opening a record', () => {
     const { iterations, ...legacy } = sealed;
     expect(iterations).toBe(600_000);
     expect(Object.hasOwn(legacy, 'iterations')).toBe(false);
-    const opened = await openRecord(legacy, 'hunter22', {
+    const { payload } = await openRecord(legacy, 'hunter22', {
       derive: (p, s, it) => {
         expect(it).toBe(210_000);
         return noblePbkdf2.derive(p, s, it);
       },
     });
-    expect(opened.accounts[0]).toEqual(account);
+    expect(payload.accounts[0]).toEqual(account);
   });
 
   test('it derives at the count the record names, not the one the password implies', async () => {
@@ -171,9 +180,21 @@ describe('opening a record', () => {
     };
     const a = await openRecord(record, 'hunter22', noblePbkdf2);
     const b = await openRecord(record, 'hunter22', noblePbkdf2);
-    expect(base64ToBytes(a.cacheKey!).length).toBe(32);
+    expect(base64ToBytes(a.payload.cacheKey!).length).toBe(32);
     // Fresh, not a constant: the same record read twice must not mint the same key.
-    expect(a.cacheKey).not.toBe(b.cacheKey);
-    expect(a.accounts[0]).toEqual(account);
+    expect(a.payload.cacheKey).not.toBe(b.payload.cacheKey);
+    expect(a.payload.accounts[0]).toEqual(account);
+
+    // And the caller is TOLD, so it can re-seal. Without this flag a host mints a different
+    // key on every unlock and the private cache written under the previous one silently stops
+    // decrypting — no error, just data that never comes back.
+    expect(a.cacheKeyMinted).toBe(true);
+    expect(b.cacheKeyMinted).toBe(true);
+
+    // Acting on the flag is what makes it stop: re-seal, and the next open is stable.
+    const resealed = await sealPayload(a.payload, 'hunter22', noblePbkdf2Fast);
+    const after = await openRecord(resealed, 'hunter22', noblePbkdf2Fast);
+    expect(after.cacheKeyMinted).toBe(false);
+    expect(after.payload.cacheKey).toBe(a.payload.cacheKey);
   });
 });

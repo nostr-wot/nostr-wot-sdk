@@ -19,6 +19,7 @@ export { iterationsFor, noblePbkdf2, encrypt, decrypt } from './crypto.js';
 
 export type {
   MemoryAccount,
+  OpenedRecord,
   MemoryVaultPayload,
   VaultPayload,
   VaultRecord,

@@ -67,13 +67,15 @@ describe('a vault the extension wrote opens here', () => {
   });
 
   test('openRecord reproduces the exact payload, secrets and all', async () => {
-    const opened = await openRecord(record, expected.password, noblePbkdf2);
-    expect(opened).toEqual(expected.payload);
+    const { payload, cacheKeyMinted } = await openRecord(record, expected.password, noblePbkdf2);
+    expect(payload).toEqual(expected.payload);
+    // The extension's create() always writes a cacheKey, so reading one back never mints.
+    expect(cacheKeyMinted).toBe(false);
   }, 30_000);
 
   test('the seeded account keeps its mnemonic and the imported one keeps its walletConfig', async () => {
-    const opened = await openRecord(record, expected.password, noblePbkdf2);
-    const [seeded, imported] = opened.accounts;
+    const { payload } = await openRecord(record, expected.password, noblePbkdf2);
+    const [seeded, imported] = payload.accounts;
     expect(seeded!.mnemonic).toBe(expected.payload.accounts[0]!.mnemonic);
     expect(imported!.mnemonic).toBeNull();
     // A field this package does not model, carried through the memory projection untouched.
@@ -91,8 +93,8 @@ describe('a vault the extension wrote opens here', () => {
    */
   test('a record with no iterations field still opens, at the legacy count', async () => {
     expect(Object.hasOwn(legacyRecord, 'iterations')).toBe(false);
-    const opened = await openRecord(legacyRecord, legacyExpected.password, noblePbkdf2);
-    expect(opened).toEqual(legacyExpected.payload);
+    const { payload } = await openRecord(legacyRecord, legacyExpected.password, noblePbkdf2);
+    expect(payload).toEqual(legacyExpected.payload);
   }, 30_000);
 
   test('deriving at the strong count would not open the legacy record', async () => {

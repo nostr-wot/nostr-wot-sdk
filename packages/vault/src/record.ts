@@ -16,7 +16,7 @@ import {
 } from './constants.js';
 import { decrypt, encrypt, iterationsFor, type Pbkdf2Port } from './crypto.js';
 import { base64ToBytes, bytesToBase64 } from './serialization.js';
-import type { VaultPayload, VaultRecord } from './types.js';
+import type { OpenedRecord, VaultPayload, VaultRecord } from './types.js';
 
 /**
  * Encrypt a payload into the record that goes to storage.
@@ -41,8 +41,16 @@ export async function sealPayload(
   const iterations = iterationsFor(password);
   const key = await kdf.derive(password, salt, iterations);
   const cacheKey = payload.cacheKey || bytesToBase64(randomBytes(VAULT_KEY_BYTES));
-  const { iv, ciphertext } = encrypt(key, JSON.stringify({ ...payload, cacheKey }));
-  key.fill(0);
+  let iv: Uint8Array;
+  let ciphertext: Uint8Array;
+  // try/finally, not a trailing fill: `encrypt` throws on a key that is not 256 bits, which is
+  // reachable through a third-party `Pbkdf2Port`, and a thrown error must not leave the derived
+  // key sitting un-zeroed on the heap.
+  try {
+    ({ iv, ciphertext } = encrypt(key, JSON.stringify({ ...payload, cacheKey })));
+  } finally {
+    key.fill(0);
+  }
   return {
     version: VAULT_VERSION,
     iterations,
@@ -66,13 +74,16 @@ export async function sealPayload(
  *
  * A decrypted payload with no `cacheKey` gets a fresh random one, as the extension's `unlock()`
  * does — the field was added after the format shipped, so the caller should never have to
- * handle its absence.
+ * handle its absence. When that happens the result says so with `cacheKeyMinted`, and the
+ * caller MUST re-seal and store the record. A host that ignores it mints a different key on
+ * every unlock, and the private cache written under the previous one silently never decrypts
+ * again. The extension branches on exactly this (`if (!parsed.cacheKey)` then save).
  */
 export async function openRecord(
   record: VaultRecord,
   password: string,
   kdf: Pbkdf2Port,
-): Promise<VaultPayload> {
+): Promise<OpenedRecord> {
   const salt = base64ToBytes(record.salt);
   const iv = base64ToBytes(record.iv);
   const ciphertext = base64ToBytes(record.ciphertext);
@@ -87,9 +98,18 @@ export async function openRecord(
     key.fill(0);
   }
   const parsed = JSON.parse(json) as VaultPayload;
+  const cacheKeyMinted = !parsed.cacheKey;
+  // The payload is rebuilt field by field rather than spread, so an unknown TOP-LEVEL key in
+  // the decrypted JSON is dropped while an unknown key on an ACCOUNT rides through
+  // `toMemoryAccount`/`toStorageAccount` untouched. The asymmetry is deliberate: it is exactly
+  // what the extension's `unlock()` does, and matching the extension beats being tidy. Changing
+  // it here would put fields in a record that the extension never wrote.
   return {
-    cacheKey: parsed.cacheKey || bytesToBase64(randomBytes(VAULT_KEY_BYTES)),
-    accounts: parsed.accounts,
-    activeAccountId: parsed.activeAccountId,
+    payload: {
+      cacheKey: parsed.cacheKey || bytesToBase64(randomBytes(VAULT_KEY_BYTES)),
+      accounts: parsed.accounts,
+      activeAccountId: parsed.activeAccountId,
+    },
+    cacheKeyMinted,
   };
 }

@@ -61,7 +61,9 @@ export function toMemoryAccount(acct: Account): MemoryAccount {
     // `undefined` when the stored account had no `pqKeys` field at all, `null` when it had an
     // explicit null. Both mean "no imported keys"; keeping them apart is what makes the round
     // trip back to storage lossless.
-    ...(Object.hasOwn(acct, 'pqKeys')
+    // `!== undefined` rather than `Object.hasOwn`: a property explicitly set to `undefined` is
+    // "own" but means the same thing as absent, and JSON.stringify drops it either way.
+    ...(acct.pqKeys !== undefined
       ? {
           pqPublic: pqKeys
             ? {
@@ -85,7 +87,9 @@ export function toStorageAccount(acct: MemoryAccount): Account {
     ...rest,
     privkey: privkeyBytes ? bytesToHex(privkeyBytes) : null,
     mnemonic: mnemonicBytes ? new TextDecoder().decode(mnemonicBytes) : null,
-    ...(Object.hasOwn(acct, 'pqPublic')
+    // See the note in toMemoryAccount: `undefined` means absent, and `Object.hasOwn` would call
+    // a hand-built `{ pqPublic: undefined }` present and write back an explicit `pqKeys: null`.
+    ...(acct.pqPublic !== undefined
       ? {
           pqKeys:
             pqPublic && pqKemSecretBytes && pqDsaSecretBytes

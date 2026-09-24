@@ -43,6 +43,21 @@ export interface VaultPayload {
 }
 
 /**
+ * What `openRecord` gives back: the payload, plus whether it had to invent a cache key.
+ *
+ * The flag is not a convenience. A record whose plaintext has no `cacheKey` predates the
+ * field, and the reader mints one so the caller never has to handle its absence — but a minted
+ * key only becomes the vault's cache key once the record is re-sealed and stored. A host that
+ * ignores `cacheKeyMinted` mints a different key on every unlock, and everything written to the
+ * private cache under the previous one silently stops decrypting, with no error anywhere.
+ */
+export interface OpenedRecord {
+  payload: VaultPayload;
+  /** True when the decrypted payload carried no `cacheKey`. The caller must re-seal and store. */
+  cacheKeyMinted: boolean;
+}
+
+/**
  * An account while the vault is unlocked.
  *
  * Every secret is a `Uint8Array` rather than a string so that `lock()` can zero it. A

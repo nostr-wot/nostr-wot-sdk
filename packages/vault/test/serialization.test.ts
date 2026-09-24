@@ -117,6 +117,21 @@ describe('memory account conversion', () => {
     expect(toStorageAccount(toMemoryAccount(withUnknown))).toEqual(withUnknown);
   });
 
+  /**
+   * `Object.hasOwn` would call an explicitly-`undefined` property present and write back an
+   * explicit `pqKeys: null`. Nothing `toMemoryAccount` produces looks like this, but a
+   * hand-built memory account does, and `undefined` means absent everywhere else in JS.
+   */
+  test('an explicitly undefined pq field is treated as absent, not as null', () => {
+    const mem = { ...toMemoryAccount(seeded), pqPublic: undefined };
+    expect(Object.hasOwn(mem, 'pqPublic')).toBe(true);
+    expect(Object.hasOwn(toStorageAccount(mem), 'pqKeys')).toBe(false);
+    expect(toStorageAccount(mem)).toEqual(seeded);
+
+    const acct = { ...seeded, pqKeys: undefined } as Account;
+    expect(Object.hasOwn(toMemoryAccount(acct), 'pqPublic')).toBe(false);
+  });
+
   test('an explicit null pqKeys stays an explicit null', () => {
     const explicitNull: Account = { ...seeded, pqKeys: null };
     const out = toStorageAccount(toMemoryAccount(explicitNull));

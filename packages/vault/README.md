@@ -83,8 +83,15 @@ PBKDF2 `iterations` the record was written with.
 
 ```ts
 const record = await sealPayload({ accounts, activeAccountId }, password, noblePbkdf2);
-const payload = await openRecord(record, password, noblePbkdf2);
+const { payload, cacheKeyMinted } = await openRecord(record, password, noblePbkdf2);
+if (cacheKeyMinted) await store(await sealPayload(payload, password, noblePbkdf2));
 ```
+
+`cacheKeyMinted` is not optional to handle. A record whose plaintext has no `cacheKey` predates
+the field; the reader invents one so the caller never has to handle its absence, but the invented
+key only becomes the vault's cache key once the record is re-sealed and stored. A host that
+ignores the flag mints a different key on every unlock, and everything written to the private
+cache under the previous one silently stops decrypting.
 
 `iterations` is optional, and that is not an oversight. Records written before the work factor
 was raised carry no such field and were every one of them written at 210000, so `openRecord`
