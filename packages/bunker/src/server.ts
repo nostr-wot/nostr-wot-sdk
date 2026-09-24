@@ -13,38 +13,55 @@ import {
   type ResponsePayload,
 } from "./codec";
 import { createBunkerUri, parseNostrConnectUri } from "./uri";
-import type {
-  BunkerHandler,
-  BunkerLogger,
-  BunkerRequest,
-  BunkerRequestContext,
-  BunkerServerOptions,
-  BunkerUri,
-  NostrConnectPairing,
+import {
+  BunkerError,
+  type BunkerErrorMapper,
+  type BunkerHandler,
+  type BunkerLogger,
+  type BunkerRequest,
+  type BunkerRequestContext,
+  type BunkerServerOptions,
+  type BunkerUri,
+  type NostrConnectPairing,
 } from "./types";
 
 const DEFAULTS = {
   requireSecret: true,
+  handlerTimeoutMs: 120_000,
   reconnectDelayMs: 3000,
   maxReconnectDelayMs: 60_000,
   maxClockSkewSec: 300,
-  seenCapacity: 2048,
+  seenCapacity: 256,
+  strangerCapacity: 256,
 };
+
+/** The owner tag for relays the host configured, as opposed to a client's own. */
+const SERVER_OWNER = "server";
 
 interface ClientState {
   connectedAt: number;
   secret?: string;
+  /** Where this client listens. Its responses go here and nowhere else. */
+  relays: string[];
+  convKey: Uint8Array;
+  seen: BoundedSet;
 }
 
 interface SecretState {
-  /** The client that consumed this secret; a different client is refused. */
+  /** Relays advertised alongside this secret (a `bunker://` URI's, or a `nostrconnect://` URI's). */
+  relays: string[];
+  /** The client that presented this secret first. Set synchronously, before any approval awaits. */
   clientPubkey?: string;
+  /** True once the handler approved that client's `connect`. */
+  confirmed: boolean;
 }
 
 interface RelaySubscription {
   closer: SubCloser | null;
   timer: ReturnType<typeof setTimeout> | null;
   failures: number;
+  /** `SERVER_OWNER` and/or client pubkeys. The subscription lives while this is non-empty. */
+  owners: Set<string>;
 }
 
 /** Insertion-ordered set with a hard cap: the oldest entry goes first. */
@@ -76,6 +93,11 @@ class BoundedSet {
  *   - the **user key** never enters this package. `get_public_key` is forwarded
  *     to the handler like any other request, and the handler answers with it.
  *
+ * Relays are kept per client. A client's responses go to the relays it was
+ * paired on (the `bunker://` URI's for a bunker-initiated pairing, the
+ * `nostrconnect://` URI's for a client-initiated one) and to no relay another
+ * client introduced. `switch_relays` answers with that same per-client set.
+ *
  * Built-ins the transport answers itself: `connect` (secret verification, then
  * the handler decides), `ping`, `switch_relays`. Everything else, including
  * methods this package has never heard of, goes to the handler.
@@ -84,6 +106,7 @@ export class BunkerServer {
   readonly #sk: Uint8Array;
   readonly #pubkey: string;
   readonly #handler: BunkerHandler;
+  readonly #mapError: BunkerErrorMapper;
   readonly #log: BunkerLogger;
   readonly #opts: typeof DEFAULTS;
   readonly #relayPool: RelayPool;
@@ -91,9 +114,8 @@ export class BunkerServer {
   readonly #subs = new Map<string, RelaySubscription>();
   readonly #clients = new Map<string, ClientState>();
   readonly #secrets = new Map<string, SecretState>();
-  readonly #convKeys = new Map<string, Uint8Array>();
-  readonly #seenEvents: BoundedSet;
-  readonly #seenRequests: BoundedSet;
+  /** Dedup windows for senders that have not connected; bounded in both dimensions. */
+  readonly #strangers = new Map<string, BoundedSet>();
   #started = false;
   #stopped = false;
 
@@ -104,16 +126,17 @@ export class BunkerServer {
     if (this.#sk.length !== 32) throw new Error("connectionSecretKey must be 32 bytes");
     this.#pubkey = getPublicKey(this.#sk);
     this.#handler = options.handler;
+    this.#mapError = options.mapError ?? defaultMapError;
     this.#log = options.logger ?? {};
     this.#opts = {
       requireSecret: options.requireSecret ?? DEFAULTS.requireSecret,
+      handlerTimeoutMs: options.handlerTimeoutMs ?? DEFAULTS.handlerTimeoutMs,
       reconnectDelayMs: options.reconnectDelayMs ?? DEFAULTS.reconnectDelayMs,
       maxReconnectDelayMs: options.maxReconnectDelayMs ?? DEFAULTS.maxReconnectDelayMs,
       maxClockSkewSec: options.maxClockSkewSec ?? DEFAULTS.maxClockSkewSec,
       seenCapacity: options.seenCapacity ?? DEFAULTS.seenCapacity,
+      strangerCapacity: options.strangerCapacity ?? DEFAULTS.strangerCapacity,
     };
-    this.#seenEvents = new BoundedSet(this.#opts.seenCapacity);
-    this.#seenRequests = new BoundedSet(this.#opts.seenCapacity);
     if (options.relays.length === 0) throw new Error("BunkerServer needs at least one relay");
     this.#ownsPool = !options.pool;
     this.#relayPool = new RelayPool({
@@ -135,9 +158,14 @@ export class BunkerServer {
     return this.#pubkey;
   }
 
-  /** Relays currently listened on. */
+  /** The host-configured relays: the constructor's plus any from `addRelay` or `createBunkerUri`. */
   get relays(): string[] {
     return this.#relayPool.getUrls();
+  }
+
+  /** Every relay currently subscribed on, host-configured and client-introduced alike. */
+  get listeningRelays(): string[] {
+    return [...this.#subs.keys()];
   }
 
   /** Clients that completed `connect` (or were paired via `nostrconnect://`). */
@@ -149,36 +177,54 @@ export class BunkerServer {
     return this.#clients.has(clientPubkey);
   }
 
-  /** Forget a client. Its next request is refused until it connects again. */
+  /** The relays a connected client's responses go to; `[]` for a client that is not connected. */
+  relaysFor(clientPubkey: string): string[] {
+    return [...(this.#clients.get(clientPubkey)?.relays ?? [])];
+  }
+
+  /** Forget a client. Its next request is refused until it connects again; relays only it used are dropped. */
   disconnectClient(clientPubkey: string): void {
+    const client = this.#clients.get(clientPubkey);
+    if (!client) return;
     this.#clients.delete(clientPubkey);
+    for (const url of client.relays) this.#release(url, clientPubkey);
   }
 
   /**
    * Issue a `bunker://` URI with a fresh pairing secret (or the one given).
-   * The secret is bound to the first client that connects with it; another
-   * client presenting the same secret is refused. The same client may present
-   * it again on every reconnect.
+   * The secret is bound to the first client that presents it; another client
+   * presenting the same secret is refused. The same client may present it
+   * again on every reconnect. Relays named here are host-chosen and join the
+   * listening set; the client paired with this secret is answered on them.
    */
   createBunkerUri(options: { relays?: string[]; secret?: string } = {}): BunkerUri {
     const secret = options.secret ?? randomHex(16);
-    const relays = options.relays && options.relays.length > 0 ? options.relays : this.relays;
+    const relays = dedupe(options.relays && options.relays.length > 0 ? options.relays : this.relays);
     for (const url of relays) this.addRelay(url);
-    if (!this.#secrets.has(secret)) this.#secrets.set(secret, {});
+    const existing = this.#secrets.get(secret);
+    if (existing) {
+      existing.relays = relays;
+    } else {
+      this.#secrets.set(secret, { relays, confirmed: false });
+    }
     return { uri: createBunkerUri({ pubkey: this.#pubkey, relays, secret }), secret };
   }
 
   /**
    * Accept a client-generated `nostrconnect://` URI (the QR flow). The handler
    * sees a synthetic `connect` request carrying the URI's secret, perms and
-   * metadata; if it resolves, the client is marked connected, the URI's relays
-   * join the listening set, and the encrypted acknowledgement (`result` set to
-   * the client's secret, as the client verifies) is published where the client
-   * is listening. If the handler rejects, nothing is sent and the rejection
-   * propagates to the caller.
+   * metadata; if it resolves, the client is marked connected, the server
+   * subscribes on the URI's relays for that client alone, and the encrypted
+   * acknowledgement (`result` set to the client's secret, as the client
+   * verifies) is published to those relays. If the handler rejects, nothing is
+   * sent and the rejection propagates to the caller.
    */
   async acceptNostrConnect(uri: string): Promise<NostrConnectPairing> {
     const parsed = parseNostrConnectUri(uri);
+    const existing = this.#secrets.get(parsed.secret);
+    if (existing && existing.clientPubkey !== parsed.clientPubkey) {
+      throw new BunkerError("secret already in use");
+    }
     const metadata: Record<string, string> = {};
     if (parsed.name) metadata.name = parsed.name;
     if (parsed.url) metadata.url = parsed.url;
@@ -189,20 +235,20 @@ export class BunkerServer {
       method: "connect",
       params: [this.#pubkey, parsed.secret, parsed.perms.join(","), JSON.stringify(metadata)],
     };
-    await this.#handler(request, this.#contextFor(request));
+    await this.#runHandler(request);
 
-    for (const url of parsed.relays) this.addRelay(url);
-    this.#secrets.set(parsed.secret, { clientPubkey: parsed.clientPubkey });
-    this.#clients.set(parsed.clientPubkey, { connectedAt: Date.now(), secret: parsed.secret });
+    this.#secrets.set(parsed.secret, { relays: parsed.relays, clientPubkey: parsed.clientPubkey, confirmed: true });
+    await this.#admit(parsed.clientPubkey, parsed.secret, parsed.relays);
     this.#log.info?.("nostrconnect: client paired", { clientPubkey: parsed.clientPubkey, relays: parsed.relays });
-    await this.#send(parsed.clientPubkey, { id: request.id, result: parsed.secret }, dedupe([...parsed.relays, ...this.relays]));
+    await this.#send(parsed.clientPubkey, { id: request.id, result: parsed.secret }, parsed.relays);
     return { ...parsed, requestId: request.id };
   }
 
-  /** Listen on a relay that was not in the initial set. Safe to call repeatedly. */
+  /** Listen on a host-chosen relay that was not in the initial set. Safe to call repeatedly. */
   addRelay(url: string): void {
-    const added = this.#relayPool.addRelay(url);
-    if (added && this.#started && !this.#stopped) this.#subscribe(url);
+    this.#relayPool.addRelay(url);
+    if (this.#started && !this.#stopped) void this.#subscribe(url, SERVER_OWNER);
+    else this.#claim(url, SERVER_OWNER);
   }
 
   /**
@@ -214,34 +260,70 @@ export class BunkerServer {
     if (this.#started) return;
     if (this.#stopped) throw new Error("BunkerServer cannot be restarted after stop()");
     this.#started = true;
-    await Promise.all(this.relays.map((url) => this.#subscribe(url)));
+    for (const url of this.relays) this.#claim(url, SERVER_OWNER);
+    await Promise.all([...this.#subs.keys()].map((url) => this.#subscribe(url)));
   }
 
   /** Close every subscription and, for a pool this server created, the pool. */
   async stop(): Promise<void> {
     if (this.#stopped) return;
     this.#stopped = true;
+    const urls = [...this.#subs.keys()];
     for (const [url, sub] of this.#subs) {
       if (sub.timer) clearTimeout(sub.timer);
       sub.timer = null;
       try {
         sub.closer?.close();
       } catch (err) {
-        this.#log.debug?.("close failed", { relay: url, error: errorMessage(err) });
+        this.#log.debug?.("close failed", { relay: url, error: errorText(err) });
       }
       sub.closer = null;
     }
     this.#subs.clear();
-    if (this.#ownsPool) this.#relayPool.destroy();
+    if (this.#ownsPool) {
+      this.#relayPool.getPool()?.close(urls);
+      this.#relayPool.destroy();
+    }
   }
 
   // ── Subscriptions ──
 
-  #subscribe(url: string): Promise<void> {
+  /** Record `owner`'s interest in `url` without opening anything. */
+  #claim(url: string, owner: string): RelaySubscription {
+    let state = this.#subs.get(url);
+    if (!state) {
+      state = { closer: null, timer: null, failures: 0, owners: new Set() };
+      this.#subs.set(url, state);
+    }
+    state.owners.add(owner);
+    return state;
+  }
+
+  /** Drop `owner`'s interest in `url`; close the subscription when nobody is left. */
+  #release(url: string, owner: string): void {
+    const state = this.#subs.get(url);
+    if (!state) return;
+    state.owners.delete(owner);
+    if (state.owners.size > 0) return;
+    this.#subs.delete(url);
+    if (state.timer) clearTimeout(state.timer);
+    state.timer = null;
+    try {
+      state.closer?.close();
+    } catch (err) {
+      this.#log.debug?.("close failed", { relay: url, error: errorText(err) });
+    }
+    state.closer = null;
+    if (this.#ownsPool) this.#relayPool.getPool()?.close([url]);
+    this.#log.debug?.("relay released", { relay: url });
+  }
+
+  #subscribe(url: string, owner?: string): Promise<void> {
     const pool = this.#relayPool.getPool();
     if (!pool || this.#stopped) return Promise.resolve();
-    const state: RelaySubscription = this.#subs.get(url) ?? { closer: null, timer: null, failures: 0 };
-    this.#subs.set(url, state);
+    const state = owner ? this.#claim(url, owner) : this.#subs.get(url);
+    if (!state) return Promise.resolve();
+    if (state.closer) return Promise.resolve();
 
     return new Promise<void>((resolve) => {
       let settled = false;
@@ -254,7 +336,7 @@ export class BunkerServer {
       let closer: SubCloser | null = null;
       closer = this.#subscribeToPool(pool, url, {
         onevent: (event: NostrEvent) => {
-          this.#onEvent(event);
+          this.#onEvent(event, url);
         },
         oneose: () => {
           state.failures = 0;
@@ -285,7 +367,7 @@ export class BunkerServer {
 
   #scheduleResubscribe(url: string, state: RelaySubscription, reason: string): void {
     if (this.#stopped || state.timer) return;
-    if (!this.relays.includes(url)) return;
+    if (this.#subs.get(url) !== state) return;
     const delay = Math.min(
       this.#opts.reconnectDelayMs * 2 ** Math.min(state.failures, 10),
       this.#opts.maxReconnectDelayMs,
@@ -294,35 +376,33 @@ export class BunkerServer {
     this.#log.warn?.("relay subscription closed; retrying", { relay: url, reason, delayMs: delay });
     state.timer = setTimeout(() => {
       state.timer = null;
-      if (this.#stopped) return;
+      if (this.#stopped || this.#subs.get(url) !== state) return;
       void this.#subscribe(url);
     }, delay);
   }
 
   // ── Inbound ──
 
-  #onEvent(event: NostrEvent): void {
+  #onEvent(event: NostrEvent, sourceRelay: string): void {
     if (this.#stopped) return;
     if (event.kind !== NostrConnect) return;
     if (!event.tags.some((t) => t[0] === "p" && t[1] === this.#pubkey)) return;
-    if (this.#seenEvents.addIfNew(event.id)) return;
+    const clientPubkey = event.pubkey;
+    if (this.#seen(clientPubkey, `e:${event.id}`)) return;
     if (!verifyEvent(event as never)) {
-      this.#log.warn?.("dropped request with invalid signature", { clientPubkey: event.pubkey });
+      this.#log.warn?.("dropped request with invalid signature", { clientPubkey });
       return;
     }
     const skew = Math.abs(Math.floor(Date.now() / 1000) - event.created_at);
     if (skew > this.#opts.maxClockSkewSec) {
-      this.#log.warn?.("dropped request outside the clock-skew limit", {
-        clientPubkey: event.pubkey,
-        skewSec: skew,
-      });
+      this.#log.warn?.("dropped request outside the clock-skew limit", { clientPubkey, skewSec: skew });
       return;
     }
 
-    const clientPubkey = event.pubkey;
+    const convKey = this.#conversationKey(clientPubkey);
     let message: unknown;
     try {
-      message = decryptPayload(event.content, this.#conversationKey(clientPubkey));
+      message = decryptPayload(event.content, convKey);
     } catch {
       this.#log.warn?.("dropped request that could not be decrypted", { clientPubkey });
       return;
@@ -332,70 +412,132 @@ export class BunkerServer {
     if (!request) {
       const id = extractId(message);
       this.#log.warn?.("malformed request", { clientPubkey, id });
-      if (id) void this.#send(clientPubkey, { id, error: "invalid request" });
+      if (id) void this.#send(clientPubkey, { id, error: "invalid request" }, [sourceRelay]);
       return;
     }
 
-    if (this.#seenRequests.addIfNew(`${clientPubkey}:${request.id}`)) {
+    if (this.#seen(clientPubkey, `r:${request.id}`)) {
       this.#log.debug?.("duplicate request ignored", { clientPubkey, id: request.id, method: request.method });
       return;
     }
 
     // Deliberately not awaited: requests are independent and a slow one must
     // not hold up the next.
-    void this.#dispatch(clientPubkey, request);
+    void this.#dispatch(clientPubkey, request, sourceRelay);
   }
 
-  async #dispatch(clientPubkey: string, parsed: ParsedRequest): Promise<void> {
+  /** Per-sender dedup. Connected clients keep their own window; strangers share a bounded pool of them. */
+  #seen(pubkey: string, key: string): boolean {
+    const client = this.#clients.get(pubkey);
+    if (client) return client.seen.addIfNew(key);
+    let set = this.#strangers.get(pubkey);
+    if (!set) {
+      set = new BoundedSet(this.#opts.seenCapacity);
+      this.#strangers.set(pubkey, set);
+      if (this.#strangers.size > this.#opts.strangerCapacity) {
+        const oldest = this.#strangers.keys().next().value;
+        if (oldest !== undefined) this.#strangers.delete(oldest);
+      }
+    }
+    return set.addIfNew(key);
+  }
+
+  async #dispatch(clientPubkey: string, parsed: ParsedRequest, sourceRelay: string): Promise<void> {
     const request: BunkerRequest = { ...parsed, clientPubkey };
-    const context = this.#contextFor(request);
     this.#log.debug?.("request", { clientPubkey, id: request.id, method: request.method });
     let result: string;
     try {
-      if (request.method === "connect") {
-        result = await this.#connect(request, context);
-      } else if (!this.#clients.has(clientPubkey)) {
-        throw new Error("unauthorized: connect first");
-      } else if (request.method === "ping") {
+      if (request.method === "ping") {
         result = "pong";
+      } else if (request.method === "connect") {
+        result = await this.#connect(request, sourceRelay);
+      } else if (!this.#clients.has(clientPubkey)) {
+        throw new BunkerError("unauthorized: connect first");
       } else if (request.method === "switch_relays") {
-        result = JSON.stringify(this.relays);
+        result = JSON.stringify(this.relaysFor(clientPubkey));
       } else {
-        result = await this.#handler(request, context);
-        if (request.method === "logout") this.#clients.delete(clientPubkey);
+        result = await this.#runHandler(request);
       }
     } catch (err) {
-      const error = errorMessage(err);
+      const error = this.#wireError(err, request);
       this.#log.info?.("request refused", { clientPubkey, id: request.id, method: request.method, error });
-      await this.#send(clientPubkey, { id: request.id, error });
+      await this.#send(clientPubkey, { id: request.id, error }, this.#clients.get(clientPubkey)?.relays ?? [sourceRelay]);
       return;
     }
-    await this.#send(clientPubkey, { id: request.id, result });
+    await this.#send(clientPubkey, { id: request.id, result }, this.#clients.get(clientPubkey)?.relays ?? [sourceRelay]);
+    // After the ack, not before: disconnecting first would release the client's
+    // relays and then re-open one of them just to deliver this response.
+    if (request.method === "logout") this.disconnectClient(clientPubkey);
   }
 
-  async #connect(request: BunkerRequest, context: BunkerRequestContext): Promise<string> {
+  async #connect(request: BunkerRequest, sourceRelay: string): Promise<string> {
     const secret = request.params[1] ?? "";
-    let record: SecretState | undefined;
-    if (this.#opts.requireSecret) {
-      record = secret ? this.#secrets.get(secret) : undefined;
-      if (!record) throw new Error("invalid secret");
-      if (record.clientPubkey && record.clientPubkey !== request.clientPubkey) {
-        throw new Error("secret already used by another client");
-      }
-    } else if (secret) {
-      record = this.#secrets.get(secret);
-      if (record?.clientPubkey && record.clientPubkey !== request.clientPubkey) {
-        throw new Error("secret already used by another client");
-      }
+    let record = secret ? this.#secrets.get(secret) : undefined;
+    if (this.#opts.requireSecret && !record) throw new BunkerError("invalid secret");
+    if (record?.clientPubkey && record.clientPubkey !== request.clientPubkey) {
+      throw new BunkerError("secret already used by another client");
     }
-    await this.#handler(request, context);
-    if (record) record.clientPubkey = request.clientPubkey;
-    this.#clients.set(request.clientPubkey, {
-      connectedAt: Date.now(),
-      ...(secret ? { secret } : {}),
-    });
+    // Bind before the approval await, so a second client presenting the same
+    // secret while this one is pending is refused rather than raced in.
+    const claimed = record !== undefined && record.clientPubkey === undefined;
+    if (record && claimed) record.clientPubkey = request.clientPubkey;
+    try {
+      await this.#runHandler(request);
+    } catch (err) {
+      if (record && claimed && !record.confirmed) delete record.clientPubkey;
+      throw err;
+    }
+    if (record) record.confirmed = true;
+    await this.#admit(request.clientPubkey, secret || undefined, record?.relays ?? [sourceRelay]);
     this.#log.info?.("client connected", { clientPubkey: request.clientPubkey });
     return "ack";
+  }
+
+  /** Mark a client connected, pinning its dedup window and its relay set. Resolves once its relays are subscribed. */
+  async #admit(clientPubkey: string, secret: string | undefined, relays: string[]): Promise<void> {
+    const previous = this.#clients.get(clientPubkey);
+    const relaySet = dedupe(relays);
+    const seen = previous?.seen ?? this.#strangers.get(clientPubkey) ?? new BoundedSet(this.#opts.seenCapacity);
+    this.#strangers.delete(clientPubkey);
+    this.#clients.set(clientPubkey, {
+      connectedAt: Date.now(),
+      ...(secret ? { secret } : {}),
+      relays: relaySet,
+      convKey: previous?.convKey ?? conversationKey(this.#sk, clientPubkey),
+      seen,
+    });
+    if (previous) {
+      for (const url of previous.relays) if (!relaySet.includes(url)) this.#release(url, clientPubkey);
+    }
+    if (this.#started && !this.#stopped) {
+      await Promise.all(relaySet.map((url) => this.#subscribe(url, clientPubkey)));
+    } else {
+      for (const url of relaySet) this.#claim(url, clientPubkey);
+    }
+  }
+
+  async #runHandler(request: BunkerRequest): Promise<string> {
+    const context = this.#contextFor(request);
+    const limit = this.#opts.handlerTimeoutMs;
+    if (limit <= 0) return this.#handler(request, context);
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new BunkerError("request timed out")), limit);
+    });
+    try {
+      return await Promise.race([this.#handler(request, context), timeout]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  #wireError(err: unknown, request: BunkerRequest): string {
+    try {
+      const text = this.#mapError(err, request);
+      return typeof text === "string" && text.length > 0 ? text : "request rejected";
+    } catch {
+      return "request rejected";
+    }
   }
 
   #contextFor(request: BunkerRequest): BunkerRequestContext {
@@ -404,39 +546,42 @@ export class BunkerServer {
       sendAuthUrl: async (url: string) => {
         if (authUrlSent) throw new Error("auth_url already sent for this request");
         authUrlSent = true;
-        await this.#send(request.clientPubkey, { id: request.id, result: "auth_url", error: url });
+        const relays = this.#clients.get(request.clientPubkey)?.relays
+          ?? this.#secrets.get(request.params[1] ?? "")?.relays
+          ?? this.relays;
+        await this.#send(request.clientPubkey, { id: request.id, result: "auth_url", error: url }, relays);
       },
     };
   }
 
   // ── Outbound ──
 
-  async #send(clientPubkey: string, payload: ResponsePayload, relays?: string[]): Promise<void> {
+  async #send(clientPubkey: string, payload: ResponsePayload, relays: string[]): Promise<void> {
     if (this.#stopped) return;
     const event = buildResponseEvent(this.#sk, clientPubkey, this.#conversationKey(clientPubkey), payload);
     try {
-      if (relays) {
-        await publishAny(this.#relayPool.getPool(), relays, event);
-      } else {
-        await this.#relayPool.publish(event);
-      }
+      await publishAny(this.#relayPool.getPool(), relays, event);
     } catch (err) {
       this.#log.error?.("response could not be published to any relay", {
         clientPubkey,
         id: payload.id,
-        error: errorMessage(err),
+        relays,
+        error: errorText(err),
       });
     }
   }
 
+  /** Cached for connected clients only; anyone else costs one ECDH per event and nothing afterwards. */
   #conversationKey(peerPubkey: string): Uint8Array {
-    let key = this.#convKeys.get(peerPubkey);
-    if (!key) {
-      key = conversationKey(this.#sk, peerPubkey);
-      this.#convKeys.set(peerPubkey, key);
-    }
-    return key;
+    return this.#clients.get(peerPubkey)?.convKey ?? conversationKey(this.#sk, peerPubkey);
   }
+}
+
+function defaultMapError(err: unknown): string {
+  if (err instanceof Error && (err as { wireVisible?: unknown }).wireVisible === true && err.message) {
+    return err.message;
+  }
+  return "request rejected";
 }
 
 async function publishAny(pool: PoolLike | null, relays: string[], event: NostrEvent): Promise<void> {
@@ -476,8 +621,8 @@ function randomHex(byteLength: number): string {
   return bytesToHex(bytes);
 }
 
-function errorMessage(err: unknown): string {
-  if (err instanceof Error) return err.message || "request rejected";
-  if (typeof err === "string" && err) return err;
-  return "request rejected";
+/** For the log only; never sent to a client. */
+function errorText(err: unknown): string {
+  if (err instanceof Error) return err.message || err.name;
+  return typeof err === "string" ? err : "unknown error";
 }

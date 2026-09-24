@@ -28,8 +28,20 @@ export interface BunkerRequestContext {
  * Resolves with the NIP-46 `result` string, or rejects; a rejection becomes an
  * `error` response. The second argument is optional: a one-argument function is
  * a valid handler.
+ *
+ * What the remote client sees on rejection is decided by `mapError`
+ * (see {@link BunkerServerOptions.mapError}). By default only a
+ * {@link BunkerError}'s message crosses the wire; any other throw is reduced
+ * to `"request rejected"`, so a vault, keychain or parser exception never
+ * leaves the device. Throw `BunkerError` for text the caller should read.
  */
 export type BunkerHandler = (request: BunkerRequest, context: BunkerRequestContext) => Promise<string>;
+
+/**
+ * Maps a handler rejection to the `error` string sent to the client. Return
+ * text you are happy for a remote party to read.
+ */
+export type BunkerErrorMapper = (error: unknown, request: BunkerRequest) => string;
 
 /**
  * Optional logger. Nothing secret ever reaches it: no keys, no plaintext, no
@@ -71,14 +83,42 @@ export interface BunkerServerOptions {
    * `connect` is still forwarded to the handler, which then owns admission entirely.
    */
   requireSecret?: boolean;
+  /**
+   * Turns a handler rejection into the wire-visible `error` string. The
+   * default forwards a {@link BunkerError}'s message and replaces everything
+   * else with `"request rejected"`.
+   */
+  mapError?: BunkerErrorMapper;
+  /**
+   * A handler that has not settled after this long is answered with
+   * `error: "request timed out"` and its eventual result is discarded.
+   * Default 120000 ms. `0` disables the limit.
+   */
+  handlerTimeoutMs?: number;
   /** Delay before re-subscribing to a relay that dropped. Default 3000 ms; doubles per failure up to `maxReconnectDelayMs`. */
   reconnectDelayMs?: number;
   /** Upper bound for the reconnect backoff. Default 60000 ms. */
   maxReconnectDelayMs?: number;
   /** Requests whose `created_at` is further than this from now are dropped. Default 300 s. */
   maxClockSkewSec?: number;
-  /** How many recent request ids / event ids to remember for deduplication. Default 2048. */
+  /** Recent request ids and event ids remembered per client for deduplication. Default 256. */
   seenCapacity?: number;
+  /** How many not-yet-connected senders keep a deduplication window at once. Default 256. */
+  strangerCapacity?: number;
+}
+
+/**
+ * An error whose message is meant for the remote client. The default
+ * `mapError` forwards it verbatim; every other throw is replaced with
+ * `"request rejected"`. Detected by the `wireVisible` marker rather than
+ * `instanceof`, so a copy of this class bundled elsewhere still counts.
+ */
+export class BunkerError extends Error {
+  readonly wireVisible = true as const;
+  constructor(message: string) {
+    super(message);
+    this.name = "BunkerError";
+  }
 }
 
 /** What {@link BunkerServer.createBunkerUri} returns. */
