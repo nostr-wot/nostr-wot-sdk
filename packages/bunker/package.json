@@ -1,0 +1,68 @@
+{
+  "name": "@nostr-wot/bunker",
+  "version": "0.1.0",
+  "description": "NIP-46 responder (the bunker / remote-signer side of Nostr Connect): listens on relays for kind 24133 requests, decrypts them, hands them to an injected handler, publishes encrypted responses.",
+  "author": "Leon Acosta <leon@nostr-wot.com>",
+  "license": "MIT",
+  "keywords": [
+    "nostr",
+    "nip-46",
+    "bunker",
+    "nostr-connect",
+    "remote-signer",
+    "signer"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nostr-wot/nostr-wot-sdk.git",
+    "directory": "packages/bunker"
+  },
+  "homepage": "https://github.com/nostr-wot/nostr-wot-sdk/tree/main/packages/bunker",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:run": "vitest run"
+  },
+  "dependencies": {
+    "@nostr-wot/relay": "^0.1.1"
+  },
+  "peerDependencies": {
+    "nostr-tools": ">=2.0.0"
+  },
+  "devDependencies": {
+    "@nostr-wot/signers": "^1.2.0",
+    "@types/ws": "^8.18.1",
+    "nostr-tools": "^2.24.1",
+    "typescript": "^5.3.0",
+    "vitest": "^4.0.18",
+    "ws": "^8.18.3"
+  },
+  "sideEffects": false
+}
