@@ -39,6 +39,7 @@
 import type { KeyValueStore } from '@nostr-wot/storage';
 import {
   DEFAULT_BUCKET,
+  DM_SIGN_KINDS,
   GLOBAL_DEFAULTS_KEY,
   MIGRATION_VERSION,
   MIGRATION_VERSION_KEY,
@@ -61,8 +62,11 @@ export interface PermissionsOptions {
   logger?: PermissionLogger;
 }
 
-/** The DM-kind keys {@link Permissions.migrateDmKindsToSendMessages} folds away. */
-const DM_PERMISSION_KEYS = ['signEvent:4', 'signEvent:13', 'signEvent:14', 'signEvent:1059'];
+/**
+ * The DM-kind keys {@link Permissions.migrateDmKindsToSendMessages} folds away, derived
+ * from {@link DM_SIGN_KINDS} rather than restated, so the two cannot drift apart.
+ */
+const DM_PERMISSION_KEYS = [...DM_SIGN_KINDS].map((kind) => `signEvent:${kind}`);
 
 /**
  * How restrictive each decision is. Used only when merging two rules into one, where the
@@ -237,7 +241,7 @@ export class Permissions {
     }
     await this.#lock.run(async () => {
       const bucket = await this.#writeBucket(accountId);
-      const perms = await this.#load();
+      const perms = await this.#draft();
       if (!perms[origin]) perms[origin] = {};
       if (!perms[origin][bucket]) perms[origin][bucket] = {};
       perms[origin][bucket][key] = decision;
@@ -265,7 +269,7 @@ export class Permissions {
     }
     await this.#lock.run(async () => {
       const bucket = await this.#writeBucket(accountId);
-      const perms = await this.#load();
+      const perms = await this.#draft();
       for (const scope of siteScopes(origin)) {
         if (!perms[scope]) continue;
         delete perms[scope][bucket];
@@ -286,7 +290,7 @@ export class Permissions {
   async clearAllForOrigin(origin: string): Promise<void> {
     if (!origin) return;
     await this.#lock.run(async () => {
-      const perms = await this.#load();
+      const perms = await this.#draft();
       for (const scope of siteScopes(origin)) delete perms[scope];
       await this.#commit(perms);
     });
@@ -296,7 +300,7 @@ export class Permissions {
   async clearForAccount(accountId: string): Promise<void> {
     if (!accountId || accountId === DEFAULT_BUCKET) return;
     await this.#lock.run(async () => {
-      const perms = await this.#load();
+      const perms = await this.#draft();
       let changed = false;
       for (const origin of Object.keys(perms)) {
         if (perms[origin][accountId]) {
@@ -312,14 +316,25 @@ export class Permissions {
   /**
    * Copies every origin's rules from one bucket into another.
    *
+   * `null` is the documented way to say "the default bucket". An empty string is not: it
+   * type-checks, so a caller that builds an id from a variable and gets an empty one would
+   * otherwise silently copy the dormant `_default` bucket into a fresh account — handing it
+   * the shared grants that per-account mode exists to withhold. That is a caller bug, and
+   * it throws, the same way a per-account write with no `accountId` does.
+   *
    * @param fromAccountId - the source account, or null for {@link DEFAULT_BUCKET}
    * @param toAccountId - the target account
    */
   async copyPermissions(fromAccountId: string | null, toAccountId: string): Promise<void> {
+    if (fromAccountId === '') {
+      throw new Error(
+        'copyPermissions needs a source account id or null: refusing to read the shared _default bucket for an empty id',
+      );
+    }
     if (!toAccountId) return;
     await this.#lock.run(async () => {
-      const from = fromAccountId || DEFAULT_BUCKET;
-      const perms = await this.#load();
+      const from = fromAccountId ?? DEFAULT_BUCKET;
+      const perms = await this.#draft();
       let changed = false;
       for (const origin of Object.keys(perms)) {
         const source = perms[origin][from];
@@ -400,7 +415,7 @@ export class Permissions {
    */
   async migrateToPerKind(): Promise<void> {
     await this.#lock.run(async () => {
-      const perms = await this.#load();
+      const perms = await this.#draft();
       let changed = false;
       for (const origin of Object.keys(perms)) {
         const target = perms[origin];
@@ -437,7 +452,7 @@ export class Permissions {
    */
   async migrateToPerAccount(): Promise<void> {
     await this.#lock.run(async () => {
-      const perms = await this.#load();
+      const perms = await this.#draft();
       let changed = false;
       for (const origin of Object.keys(perms)) {
         const originData = perms[origin];
@@ -469,7 +484,7 @@ export class Permissions {
    */
   async migrateForwardToAsk(): Promise<void> {
     await this.#lock.run(async () => {
-      const perms = await this.#load();
+      const perms = await this.#draft();
       let changed = false;
       for (const origin of Object.keys(perms)) {
         for (const bucket of Object.keys(perms[origin])) {
@@ -496,7 +511,7 @@ export class Permissions {
    */
   async migrateDmKindsToSendMessages(): Promise<void> {
     await this.#lock.run(async () => {
-      const perms = await this.#load();
+      const perms = await this.#draft();
       let changed = false;
       for (const origin of Object.keys(perms)) {
         const target = perms[origin];
@@ -558,12 +573,27 @@ export class Permissions {
   }
 
   /**
-   * Writes the tree back and drops the cache, so the next read sees what was stored.
+   * A private copy of the tree for a mutator to edit.
    *
-   * The cache is dropped in a `finally`, because the tree handed in here is the cached
-   * object and has already been mutated. A store whose write rejects would otherwise leave
-   * an approval in memory that never reached disk, and an authorization cache that is more
-   * permissive than the disk behind it fails open.
+   * Every write works on one of these, so the cache is never the thing being edited. Reads
+   * are not serialized against writes — a `check` can land at any moment — and if a mutator
+   * edited the cache directly, a `check` arriving while the store write was still in flight
+   * would answer from a decision that had not been persisted yet. For an authorization
+   * cache that window is the whole problem: it is briefly more permissive than the disk
+   * behind it. Editing a copy closes it, because the cache only ever changes when
+   * {@link #commit} drops it, after the write has actually landed.
+   */
+  async #draft(): Promise<PermissionMap> {
+    return structuredClone(await this.#load());
+  }
+
+  /**
+   * Writes a draft back and drops the cache, so the next read reloads from the store.
+   *
+   * The drop is in a `finally` as belt and braces. The draft is not the cached object, so a
+   * rejected write already leaves the cache untouched and correct; invalidating anyway
+   * means a partially-applied write from a store that fails in some less tidy way still
+   * cannot leave a stale answer behind.
    */
   async #commit(perms: PermissionMap): Promise<void> {
     try {

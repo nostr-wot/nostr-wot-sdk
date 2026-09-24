@@ -14,6 +14,8 @@ import {
   PERMISSIONS_STORAGE_KEY,
   GLOBAL_DEFAULTS_KEY,
   DEFAULT_BUCKET,
+  DM_SIGN_KINDS,
+  permissionKey,
   siteScopes,
   type PermissionMap,
 } from '../src/index.js';
@@ -261,6 +263,27 @@ describe('copyPermissions and setupNewAccountPermissions', () => {
     // A copy, not a reference: editing the source later must not move the copy.
     await permissions.saveDirect('a.com', 'signEvent:1', 'deny');
     expect((await raw(store))['a.com']?.acct).toEqual({ 'signEvent:1': 'allow' });
+  });
+
+  test('an empty source id is a caller bug, not a request for the default bucket', async () => {
+    const store = seeded({ 'a.com': { _default: { 'signEvent:1': 'allow' } } });
+    const permissions = new Permissions(store);
+    await permissions.setUseGlobalDefaults(false);
+
+    // '' type-checks against `string | null` but is not the documented default signal.
+    // Without the guard it copies the dormant global bucket into the new account.
+    await expect(permissions.copyPermissions('', 'newacct')).rejects.toThrow(/source account id/);
+
+    expect(await permissions.check('a.com', 'signEvent', 1, 'newacct')).toBe('ask');
+    expect(await raw(store)).toEqual({ 'a.com': { _default: { 'signEvent:1': 'allow' } } });
+  });
+
+  test('null still means the default bucket', async () => {
+    const store = seeded({ 'a.com': { _default: { 'signEvent:1': 'allow' } } });
+    const permissions = new Permissions(store);
+    await permissions.copyPermissions(null, 'newacct');
+
+    expect((await raw(store))['a.com']?.newacct).toEqual({ 'signEvent:1': 'allow' });
   });
 
   test('a fresh account is isolated while the existing account keeps what it had', async () => {
@@ -625,6 +648,84 @@ describe('a failed write never leaves the cache more permissive than the disk', 
     expect(await permissions.check('a.com', 'signEvent', 1)).toBe('ask');
   });
 
+  /**
+   * Reads are deliberately not serialized against writes, so a `check` can land at any
+   * point during a save. It must never see a decision that has not reached the store yet:
+   * the whole window between "mutated in memory" and "written to disk" is time in which an
+   * authorization cache would be answering more permissively than the disk behind it.
+   */
+  test('a check during an in-flight save does not observe the decision early', async () => {
+    const backing = new MemoryStore();
+    let releaseWrite!: () => void;
+    let writeStarted!: () => void;
+    const parked = new Promise<void>((resolve) => (releaseWrite = resolve));
+    const started = new Promise<void>((resolve) => (writeStarted = resolve));
+    let gated = false;
+
+    const store: KeyValueStore = {
+      get: (key) => backing.get(key),
+      set: async (key, value) => {
+        if (gated) {
+          gated = false;
+          writeStarted();
+          await parked;
+        }
+        return backing.set(key, value);
+      },
+      remove: (key) => backing.remove(key),
+      keys: () => backing.keys(),
+      subscribe: (listener) => backing.subscribe(listener),
+    };
+    const permissions = new Permissions(store);
+
+    gated = true;
+    const saving = permissions.save('a.com', 'signEvent', 1, 'allow');
+    await started; // the store write is now genuinely in flight
+
+    expect(await permissions.check('a.com', 'signEvent', 1)).toBe('ask');
+    expect(await permissions.getForOrigin('a.com')).toEqual({});
+
+    releaseWrite();
+    await saving;
+
+    expect(await permissions.check('a.com', 'signEvent', 1)).toBe('allow');
+  });
+
+  test('a check during an in-flight save that then FAILS never saw the decision at all', async () => {
+    const backing = new MemoryStore();
+    let releaseWrite!: () => void;
+    let writeStarted!: () => void;
+    const parked = new Promise<void>((resolve) => (releaseWrite = resolve));
+    const started = new Promise<void>((resolve) => (writeStarted = resolve));
+    let gated = false;
+
+    const store: KeyValueStore = {
+      get: (key) => backing.get(key),
+      set: async (key, value) => {
+        if (gated) {
+          gated = false;
+          writeStarted();
+          await parked;
+          throw new Error('quota exceeded');
+        }
+        return backing.set(key, value);
+      },
+      remove: (key) => backing.remove(key),
+      keys: () => backing.keys(),
+      subscribe: (listener) => backing.subscribe(listener),
+    };
+    const permissions = new Permissions(store);
+
+    gated = true;
+    const saving = permissions.save('a.com', 'signEvent', 1, 'allow');
+    await started;
+
+    expect(await permissions.check('a.com', 'signEvent', 1)).toBe('ask');
+    releaseWrite();
+    await expect(saving).rejects.toThrow('quota exceeded');
+    expect(await permissions.check('a.com', 'signEvent', 1)).toBe('ask');
+  });
+
   test('a failed write does not strand a stored grant behind a phantom', async () => {
     const backing = seeded({ 'a.com': { _default: { 'signEvent:1': 'allow' } } });
     const { store, arm } = brittle(backing);
@@ -712,10 +813,21 @@ describe('a dead permission key is refused, not silently stored', () => {
     const store = new MemoryStore();
     const permissions = new Permissions(store);
 
-    for (const key of ['signEvent:4', 'signEvent:13', 'signEvent:14', 'signEvent:1059']) {
-      await expect(permissions.saveDirect('chat.com', key, 'deny')).rejects.toThrow(/sendMessages/);
+    // Driven off DM_SIGN_KINDS rather than a hand list, so the guard and the constant
+    // cannot drift apart without this failing.
+    expect(DM_SIGN_KINDS.size).toBeGreaterThan(0);
+    for (const kind of DM_SIGN_KINDS) {
+      await expect(permissions.saveDirect('chat.com', `signEvent:${kind}`, 'deny')).rejects.toThrow(
+        /sendMessages/,
+      );
     }
     expect(await raw(store)).toEqual({});
+  });
+
+  test('every kind the guard rejects is one permissionKey would have collapsed', () => {
+    for (const kind of DM_SIGN_KINDS) {
+      expect(permissionKey('signEvent', kind)).toBe('sendMessages');
+    }
   });
 
   test('save still accepts the same kinds, because it maps them first', async () => {
