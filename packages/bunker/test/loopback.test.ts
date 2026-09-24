@@ -347,6 +347,75 @@ describe("BunkerServer loopback", () => {
       expect(denying.isConnected(clientPubkey)).toBe(false);
       expect(relay.received.length).toBe(before);
     });
+
+    it("an auth_url during a nostrconnect approval reaches the client's relay and never the host's", async () => {
+      const clientRelay = await TestRelay.start();
+      cleanups.push(() => clientRelay.close());
+      const authUrl = "https://bunker.test/approve/qr";
+      const challenging = new BunkerServer({
+        connectionSecretKey: generateSecretKey(),
+        relays: [relay.url],
+        handler: async (req, ctx) => {
+          if (req.method === "connect") await ctx.sendAuthUrl(authUrl);
+          return signerHandler(user)(req, ctx);
+        },
+      });
+      await challenging.start();
+      cleanups.push(() => challenging.stop());
+
+      const aSk = generateSecretKey();
+      const aPubkey = getPublicKey(aSk);
+      const aPool = new SimplePool();
+      const uri = `nostrconnect://${aPubkey}?relay=${encodeURIComponent(clientRelay.url)}&secret=qr-auth`;
+      const abort = new AbortController();
+      const ready = BunkerSigner.fromURI(aSk, uri, { pool: aPool }, abort.signal);
+      cleanups.push(async () => {
+        abort.abort();
+        await ready.then((s) => s.close()).catch(() => {});
+        aPool.close([clientRelay.url]);
+      });
+      await clientRelay.waitForSubscriber(aPubkey);
+      await challenging.acceptNostrConnect(uri);
+      const a = await ready;
+      expect(await a.getPublicKey()).toBe(userPubkey);
+
+      const toA = (e: { tags: string[][] }) => e.tags.some((t) => t[0] === "p" && t[1] === aPubkey);
+      const fromServerToA = clientRelay.received.filter((e) => e.pubkey === challenging.connectionPubkey && toA(e));
+      const convKey = nip44.utils.getConversationKey(aSk, challenging.connectionPubkey);
+      const payloads = fromServerToA.map((e) => JSON.parse(nip44.decrypt(e.content, convKey)));
+      expect(payloads[0]).toEqual({ id: payloads[0].id, result: "auth_url", error: authUrl });
+      expect(payloads[1]).toEqual({ id: payloads[0].id, result: "qr-auth" });
+      expect(relay.received.filter(toA)).toEqual([]);
+    });
+
+    it("two concurrent acceptNostrConnect calls with one secret admit exactly one client", async () => {
+      const gates = new Map<string, ReturnType<typeof deferred<string>>>();
+      const aPubkey = getPublicKey(generateSecretKey());
+      const bPubkey = getPublicKey(generateSecretKey());
+      const racing = new BunkerServer({
+        connectionSecretKey: generateSecretKey(),
+        relays: [relay.url],
+        handler: async (req, ctx) => {
+          if (req.method !== "connect") return signerHandler(user)(req, ctx);
+          if (req.clientPubkey === bPubkey) return "ack"; // the intruder's approval is instant
+          const gate = deferred<string>();
+          gates.set(req.clientPubkey, gate);
+          return gate.promise;
+        },
+      });
+      await racing.start();
+      cleanups.push(() => racing.stop());
+      const uriFor = (pk: string) => `nostrconnect://${pk}?relay=${encodeURIComponent(relay.url)}&secret=shared-secret`;
+
+      const acceptA = racing.acceptNostrConnect(uriFor(aPubkey));
+      const deadline = Date.now() + 3000;
+      while (!gates.has(aPubkey) && Date.now() < deadline) await wait(10);
+      expect(gates.has(aPubkey)).toBe(true); // A's approval is pending
+      await expect(racing.acceptNostrConnect(uriFor(bPubkey))).rejects.toThrow("secret already in use");
+      gates.get(aPubkey)!.resolve("ack");
+      await acceptA;
+      expect(racing.connectedClients).toEqual([aPubkey]);
+    });
   });
 
   describe("request semantics", () => {
@@ -562,6 +631,93 @@ describe("BunkerServer loopback", () => {
       await second.close();
     });
 
+    it("rejecting one of a client's two pending connects does not free the secret for another client", async () => {
+      const gates = new Map<string, ReturnType<typeof deferred<string>>>();
+      const racing = new BunkerServer({
+        connectionSecretKey: generateSecretKey(),
+        relays: [relay.url],
+        handler: async (req) => {
+          if (req.method !== "connect") return signerHandler(user)(req, {} as never);
+          if (req.clientPubkey === b.pubkey) return "ack"; // the intruder's approval is instant
+          const gate = deferred<string>();
+          gates.set(req.id, gate);
+          return gate.promise;
+        },
+      });
+      await racing.start();
+      cleanups.push(() => racing.stop());
+      const { secret } = racing.createBunkerUri();
+      const a = new RawClient([relay.url], racing.connectionPubkey);
+      const b = new RawClient([relay.url], racing.connectionPubkey);
+      cleanups.push(() => a.close(), () => b.close());
+      await Promise.all([a.listen(), b.listen()]);
+      const untilGate = async (id: string) => {
+        const deadline = Date.now() + 3000;
+        while (!gates.has(id) && Date.now() < deadline) await wait(10);
+        expect(gates.has(id)).toBe(true);
+      };
+
+      await a.send("ca1", "connect", [racing.connectionPubkey, secret]);
+      await untilGate("ca1");
+      await a.send("ca2", "connect", [racing.connectionPubkey, secret]);
+      await untilGate("ca2");
+      gates.get("ca1")!.reject(new BunkerError("user declined"));
+      expect(await a.waitFor("ca1")).toEqual({ id: "ca1", error: "user declined" });
+
+      await b.send("cb", "connect", [racing.connectionPubkey, secret]);
+      expect(await b.waitFor("cb")).toEqual({ id: "cb", error: "secret already used by another client" });
+
+      gates.get("ca2")!.resolve("ack");
+      expect(await a.waitFor("ca2")).toEqual({ id: "ca2", result: "ack" });
+      expect(racing.connectedClients).toEqual([a.pubkey]);
+    });
+
+    it("a response that lands after logout is dropped rather than re-opening the released relay", async () => {
+      const clientRelay = await TestRelay.start();
+      cleanups.push(() => clientRelay.close());
+      const gate = deferred<void>();
+      const signEntered = deferred<void>();
+      const slow = new BunkerServer({
+        connectionSecretKey: generateSecretKey(),
+        relays: [relay.url],
+        handler: async (req, ctx) => {
+          if (req.method === "sign_event") {
+            signEntered.resolve();
+            await gate.promise;
+          }
+          return signerHandler(user)(req, ctx);
+        },
+      });
+      await slow.start();
+      cleanups.push(() => slow.stop());
+
+      const aSk = generateSecretKey();
+      const aPool = new SimplePool();
+      const uri = `nostrconnect://${getPublicKey(aSk)}?relay=${encodeURIComponent(clientRelay.url)}&secret=late`;
+      const abort = new AbortController();
+      const ready = BunkerSigner.fromURI(aSk, uri, { pool: aPool, skipSwitchRelays: true } as never, abort.signal);
+      cleanups.push(async () => {
+        abort.abort();
+        await ready.then((s) => s.close()).catch(() => {});
+        aPool.close([clientRelay.url]);
+      });
+      await clientRelay.waitForSubscriber(getPublicKey(aSk));
+      await slow.acceptNostrConnect(uri);
+      const a = await ready;
+
+      const pending = a.signEvent({ kind: 1, content: "in flight", tags: [], created_at: 1 }).catch(() => null);
+      await signEntered.promise;
+      await a.logout();
+      expect(slow.listeningRelays).toEqual([relay.url]);
+      const seenSoFar = clientRelay.received.length;
+
+      gate.resolve();
+      await wait(300);
+      expect(clientRelay.received.length).toBe(seenSoFar);
+      expect(clientRelay.connections).toBeLessThanOrEqual(1); // A's own pool socket at most, never the server's
+      void pending;
+    });
+
     it("a redelivered request (same id, fresh event) is answered exactly once", async () => {
       const raw = new RawClient([relay.url], connectionPubkey);
       cleanups.push(() => raw.close());
@@ -610,27 +766,49 @@ describe("BunkerServer loopback", () => {
     });
 
     it("a flood of strangers cannot evict a connected client's replay window", async () => {
-      const raw = new RawClient([relay.url], connectionPubkey);
+      // seenCapacity: 64 is the same knob the original single global window used, so 200
+      // junk events are three times what a shared window can hold. A per-client window
+      // keeps the client's own ids regardless of how many strangers show up.
+      const bounded = new BunkerServer({
+        connectionSecretKey: generateSecretKey(),
+        relays: [relay.url],
+        seenCapacity: 64,
+        handler: async (req, ctx) => {
+          handlerCalls.push(req);
+          return signerHandler(user)(req, ctx);
+        },
+      });
+      await bounded.start();
+      cleanups.push(() => bounded.stop());
+      const raw = new RawClient([relay.url], bounded.connectionPubkey);
       cleanups.push(() => raw.close());
       await raw.listen();
-      const { secret } = server.createBunkerUri();
-      await raw.send("c1", "connect", [connectionPubkey, secret]);
+      const { secret } = bounded.createBunkerUri();
+      await raw.send("c1", "connect", [bounded.connectionPubkey, secret]);
       await raw.waitFor("c1");
       await raw.send("once", "get_public_key", []);
       expect(await raw.waitFor("once")).toEqual({ id: "once", result: userPubkey });
 
-      // 600 fresh keypairs, each one validly signed and p-tagged, more than twice the stranger capacity.
+      // Anyone can encrypt to the server's public key, so the junk is 200 well-formed
+      // requests from 200 fresh keypairs: exactly what reaches the request-id window.
       const pool = new SimplePool();
       cleanups.push(() => pool.close([relay.url]));
       const accepted: Promise<unknown>[] = [];
-      for (let i = 0; i < 600; i++) {
+      for (let i = 0; i < 200; i++) {
+        const sk = generateSecretKey();
+        const convKey = nip44.utils.getConversationKey(sk, bounded.connectionPubkey);
         const junk = finalizeEvent(
-          { kind: NostrConnect, created_at: Math.floor(Date.now() / 1000), tags: [["p", connectionPubkey]], content: "junk" },
-          generateSecretKey(),
+          {
+            kind: NostrConnect,
+            created_at: Math.floor(Date.now() / 1000),
+            tags: [["p", bounded.connectionPubkey]],
+            content: nip44.encrypt(JSON.stringify({ id: `junk-${i}`, method: "ping", params: [] }), convKey),
+          },
+          sk,
         );
         accepted.push(Promise.any(pool.publish([relay.url], junk)));
       }
-      await Promise.all(accepted); // every junk event is in the relay before the replay
+      await Promise.all(accepted); // every junk request is in the relay before the replay
       await raw.send("once", "get_public_key", []); // the same request id again, a fresh event
       await raw.send("after", "ping", []);
       await raw.waitFor("after");
