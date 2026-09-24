@@ -1,0 +1,37 @@
+{
+  "password": "correct horse battery staple",
+  "payload": {
+    "cacheKey": "KysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKys=",
+    "accounts": [
+      {
+        "id": "acct_seeded",
+        "name": "Main",
+        "type": "generated",
+        "pubkey": "abababababababababababababababababababababababababababababababab",
+        "privkey": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art",
+        "nip46Config": null,
+        "readOnly": false,
+        "createdAt": 1727136000000,
+        "derivationIndex": 0,
+        "derivationPath": "m/44'/1237'/0'/0/0"
+      },
+      {
+        "id": "acct_imported",
+        "name": "Imported nsec",
+        "type": "nsec",
+        "pubkey": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+        "privkey": "0101010101010101010101010101010101010101010101010101010101010101",
+        "mnemonic": null,
+        "nip46Config": null,
+        "readOnly": false,
+        "createdAt": 1727136500000,
+        "walletConfig": {
+          "provider": "nwc",
+          "connectionString": "nostr+walletconnect://deadbeef"
+        }
+      }
+    ],
+    "activeAccountId": "acct_seeded"
+  }
+}

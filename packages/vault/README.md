@@ -76,6 +76,50 @@ interface Pbkdf2Port {
 It is not on the common unlock path, which uses the hardware wrapped key rather than the
 password.
 
+## The record format
+
+A vault on disk is one `VaultRecord`: `version`, base64 `salt` / `iv` / `ciphertext`, and the
+PBKDF2 `iterations` the record was written with.
+
+```ts
+const record = await sealPayload({ accounts, activeAccountId }, password, noblePbkdf2);
+const payload = await openRecord(record, password, noblePbkdf2);
+```
+
+`iterations` is optional, and that is not an oversight. Records written before the work factor
+was raised carry no such field and were every one of them written at 210000, so `openRecord`
+falls back to that count rather than recomputing from the password. Recomputing would derive at
+600000 and refuse to open exactly the oldest vaults in the field.
+
+`openRecord` reads the count off the record for the same reason: raising the constant must never
+lock anyone out. `sealPayload` writes the current count, so a record re-sealed after an unlock
+comes back at full strength.
+
+## Memory accounts
+
+An unlocked account holds its secrets as `Uint8Array`, not as strings, so `lock()` can zero
+them. A JavaScript string cannot be overwritten: an nsec held as one stays readable in the heap
+until the collector happens to reclaim it.
+
+```ts
+const mem = toMemoryAccount(stored);   // privkeyBytes, mnemonicBytes, pqKemSecretBytes, pqDsaSecretBytes
+zeroMemoryAccount(mem);                // every byte of key material is now zero
+const back = toStorageAccount(mem);    // lossless, including fields this package does not model
+```
+
+The round trip carries unknown fields through untouched. The browser extension stores
+`walletConfig` on an account and this package deliberately does not model it; a host that read a
+vault, dropped the field and saved would silently destroy the user's wallet connection.
+
+## The golden vector
+
+`test/fixtures/extension-vault-v1.json` was produced by `scripts/generate-extension-fixture.mjs`,
+which imports nothing from `src/` and instead reimplements the browser extension's own writer
+against Node's WebCrypto. The test suite opens it with `openRecord` and, in the other direction,
+decrypts a `sealPayload` record with WebCrypto directly. Two independent implementations agreeing
+on the bytes is the only evidence that means anything; a fixture sealed by the code under test
+would stay green through a format change that breaks every vault in the field.
+
 ## License
 
 MIT

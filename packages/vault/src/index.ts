@@ -16,3 +16,22 @@ export {
 } from './constants.js';
 export type { Pbkdf2Port } from './crypto.js';
 export { iterationsFor, noblePbkdf2, encrypt, decrypt } from './crypto.js';
+
+export type {
+  MemoryAccount,
+  MemoryVaultPayload,
+  VaultPayload,
+  VaultRecord,
+} from './types.js';
+export {
+  base64ToBytes,
+  bytesToBase64,
+  bytesToHex,
+  hexToBytes,
+  toMemoryAccount,
+  toMemoryPayload,
+  toStorageAccount,
+  toStoragePayload,
+  zeroMemoryAccount,
+} from './serialization.js';
+export { openRecord, sealPayload } from './record.js';
