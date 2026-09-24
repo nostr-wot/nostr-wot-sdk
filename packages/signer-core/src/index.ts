@@ -45,3 +45,4 @@ export {
 
 export { SignerError, type SignerErrorCode } from './errors.js';
 export { validateRequest, utf8ByteLength } from './schema.js';
+export { ApprovalQueue, type ApprovalQueueOptions, type TrackInput } from './queue.js';
