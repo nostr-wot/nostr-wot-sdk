@@ -153,6 +153,21 @@ decrypts a `sealPayload` record with WebCrypto directly. Two independent impleme
 on the bytes is the only evidence that means anything; a fixture sealed by the code under test
 would stay green through a format change that breaks every vault in the field.
 
+## Host requirements
+
+The `@nostr-wot` shared packages (`storage`, `accounts`, `vault`, `permissions`, `signer-core`)
+run on one rule: nothing platform-specific is reached for, and what a host must supply is
+injected or declared. Two globals are declared requirements of the family rather than
+avoided, because `@noble/hashes` and `@noble/ciphers` use them internally and the vault and
+accounts packages use them for the same UTF-8 conversions: **`TextEncoder`** and
+**`TextDecoder`**. Node, browsers and Hermes all have them; a host that somehow lacks one
+polyfills it before importing. Everything else these packages need beyond ES2022 is injected
+as a port. `structuredClone`, WebCrypto, the DOM and the WebExtension namespaces are never
+used, and `packages/vault/test/boundaries.test.ts` plus the ESLint config enforce that.
+
+This package uses `TextEncoder` and `TextDecoder` directly: for the password and the plaintext
+in `crypto.ts`, and for the mnemonic and NIP-46 secrets in `serialization.ts`.
+
 ## License
 
 MIT

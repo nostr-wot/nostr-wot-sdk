@@ -89,6 +89,18 @@ function requireLabel(value: string, what: string): string {
 }
 
 /**
+ * A deep copy of a permission tree, or of one origin's buckets.
+ *
+ * The tree is plain JSON — string keys, string values, nothing else — so a JSON round trip is
+ * an exact clone of it and needs nothing from the host. That is the whole reason to prefer it
+ * over a structured clone: this package runs on runtimes that do not all start with the same
+ * globals, and a clone of JSON data should not be the thing that decides where it runs.
+ */
+function cloneJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+/**
  * How restrictive each decision is. Used only when merging two rules into one, where the
  * conservative choice is the one the user is least likely to be surprised by: someone who
  * once denied a DM-related signature stays denied.
@@ -194,13 +206,13 @@ export class Permissions {
 
   /** The whole stored tree, every bucket, as a copy. For settings screens and diffs. */
   async getAllRaw(): Promise<PermissionMap> {
-    return structuredClone(await this.#load());
+    return cloneJson(await this.#load());
   }
 
   /** One origin's buckets, all of them, as a copy. Read under the label a write would use. */
   async getForOriginRaw(origin: string): Promise<OriginPermissions> {
     const perms = await this.#load();
-    return structuredClone(perms[storageLabel(origin)] ?? {});
+    return cloneJson(perms[storageLabel(origin)] ?? {});
   }
 
   /**
@@ -626,7 +638,7 @@ export class Permissions {
    * {@link #commit} drops it, after the write has actually landed.
    */
   async #draft(): Promise<PermissionMap> {
-    return structuredClone(await this.#load());
+    return cloneJson(await this.#load());
   }
 
   /**

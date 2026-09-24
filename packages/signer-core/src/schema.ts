@@ -68,9 +68,14 @@ function requireNonNegativeInteger(value: unknown, what: string, max = Number.MA
 }
 
 /**
- * UTF-8 length without `TextEncoder`, which not every host we target has at startup.
- * Surrogate pairs are one code point of four bytes; a lone surrogate is counted as the three
- * bytes an encoder would emit for U+FFFD.
+ * UTF-8 length counted, not encoded.
+ *
+ * `TextEncoder` is a declared host requirement of these packages and would give the same
+ * number; it is not used here because it would allocate an encoded copy of untrusted input in
+ * order to measure it, at the one place whose job is to bound what gets materialised. The
+ * character count is checked before this runs, so the input is already known to be small, and
+ * counting keeps it that way. Surrogate pairs are one code point of four bytes; a lone
+ * surrogate is counted as the three bytes an encoder would emit for U+FFFD.
  */
 export function utf8ByteLength(text: string): number {
   let bytes = 0;

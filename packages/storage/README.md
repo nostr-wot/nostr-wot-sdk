@@ -69,6 +69,21 @@ they can, which keeps the mapping from `(prefix, key)` to storage key injective 
 `namespaced(s, 'a').set('b:c', …)` and `namespaced(s, 'a:b').set('c', …)` would both write
 `a:b:c` and silently clobber each other.
 
+## Host requirements
+
+The `@nostr-wot` shared packages (`storage`, `accounts`, `vault`, `permissions`, `signer-core`)
+run on one rule: nothing platform-specific is reached for, and what a host must supply is
+injected or declared. Two globals are declared requirements of the family rather than
+avoided, because `@noble/hashes` and `@noble/ciphers` use them internally and the vault and
+accounts packages use them for the same UTF-8 conversions: **`TextEncoder`** and
+**`TextDecoder`**. Node, browsers and Hermes all have them; a host that somehow lacks one
+polyfills it before importing. Everything else these packages need beyond ES2022 is injected
+as a port. `structuredClone`, WebCrypto, the DOM and the WebExtension namespaces are never
+used, and `packages/vault/test/boundaries.test.ts` plus the ESLint config enforce that.
+
+This package itself uses neither `TextEncoder` nor `TextDecoder`; `MemoryStore` clones with a JSON
+round trip, which is also what every real backend does on the way to disk.
+
 ## License
 
 MIT

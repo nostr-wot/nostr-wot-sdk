@@ -3,13 +3,16 @@ import type { KeyValueStore } from './types.js';
 /**
  * Deep copy, so nothing stored can be reached by a reference the caller kept.
  *
- * `structuredClone` is the platform-neutral one: a plain global on every runtime we
- * target (Node 17+, current web engines, Hermes), and unlike a JSON round trip it
- * preserves `Map`, `Set`, `Date`, `Uint8Array` and cyclic references — which matters,
- * because keys and ciphertext travel through this store as byte arrays.
+ * A JSON round trip, on purpose. Every real backend this port stands in for — extension
+ * storage, a keychain entry, a file — serialises as JSON, so this is the copy those backends
+ * make too: a `Uint8Array` comes back as an object, a `Date` as a string, `undefined` values
+ * vanish. Nothing in the `@nostr-wot` packages stores anything but JSON (keys and ciphertext
+ * travel as base64), and a test that stored something else here would pass against this
+ * store and fail against every real one. It also needs nothing from the host, where a
+ * structured clone is a newer global than some target runtimes start with.
  */
 function clone<T>(value: T): T {
-  return structuredClone(value);
+  return value === undefined ? value : (JSON.parse(JSON.stringify(value)) as T);
 }
 
 /**

@@ -17,6 +17,15 @@ export const SHARED_PACKAGES = ['storage', 'vault', 'accounts', 'permissions', '
 
 const FRAMEWORKS = ['react', 'react-native'];
 const PLATFORM_GLOBALS = ['browser', 'chrome', 'window', 'localStorage'];
+/**
+ * Not a platform global, but not assumed either: everything the shared packages clone is
+ * JSON, and a JSON round trip does that with no host requirement. `TextEncoder` and
+ * `TextDecoder` are the opposite case, declared host requirements (see each README and
+ * `REQUIRED_HOST_CAPABILITIES` in the boundary test), and are deliberately not listed.
+ */
+const AVOIDABLE_GLOBALS = [
+  { name: 'structuredClone', message: 'Shared packages clone JSON with a JSON round trip, not structuredClone.' },
+];
 
 export default [
   {
@@ -49,6 +58,7 @@ export default [
           name,
           message: `Shared packages are platform-neutral; inject a port instead of using ${name}.`,
         })),
+        ...AVOIDABLE_GLOBALS,
       ],
       'no-restricted-properties': [
         'error',
@@ -67,6 +77,7 @@ export default [
           property: name,
           message: `Shared packages are platform-neutral; inject a port instead of using ${name}.`,
         })),
+        ...AVOIDABLE_GLOBALS.map(({ name, message }) => ({ object: 'globalThis', property: name, message })),
       ],
     },
   },

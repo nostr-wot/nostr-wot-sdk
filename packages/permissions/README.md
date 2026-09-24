@@ -125,6 +125,21 @@ Keys and shape are the browser extension's, unchanged, so a migrated extension r
 `_default`, the retired `forward` value rewritten to `ask`, and DM kinds folded into
 `sendMessages` most-restrictive-wins — then records `_permMigrationVersion`.
 
+## Host requirements
+
+The `@nostr-wot` shared packages (`storage`, `accounts`, `vault`, `permissions`, `signer-core`)
+run on one rule: nothing platform-specific is reached for, and what a host must supply is
+injected or declared. Two globals are declared requirements of the family rather than
+avoided, because `@noble/hashes` and `@noble/ciphers` use them internally and the vault and
+accounts packages use them for the same UTF-8 conversions: **`TextEncoder`** and
+**`TextDecoder`**. Node, browsers and Hermes all have them; a host that somehow lacks one
+polyfills it before importing. Everything else these packages need beyond ES2022 is injected
+as a port. `structuredClone`, WebCrypto, the DOM and the WebExtension namespaces are never
+used, and `packages/vault/test/boundaries.test.ts` plus the ESLint config enforce that.
+
+This package itself uses neither `TextEncoder` nor `TextDecoder`, and clones the permission
+tree with a JSON round trip. Its origin parsing is its own and never consults the host's `URL`.
+
 ## License
 
 MIT

@@ -115,3 +115,19 @@ Pass `handlerTimeoutMs: 0` to the bunker. This pipeline owns the request timeout
 A web identifier is stored as itself: the exact origin (`https://example.com`), or the bare
 hostname older stores used. Every other origin kind is prefixed: `nip46:<pubkey>`,
 `nip55:<package>`, `lan:<device>`, `local:<id>`. See `permissionOrigin`.
+
+## Host requirements
+
+The `@nostr-wot` shared packages (`storage`, `accounts`, `vault`, `permissions`, `signer-core`)
+run on one rule: nothing platform-specific is reached for, and what a host must supply is
+injected or declared. Two globals are declared requirements of the family rather than
+avoided, because `@noble/hashes` and `@noble/ciphers` use them internally and the vault and
+accounts packages use them for the same UTF-8 conversions: **`TextEncoder`** and
+**`TextDecoder`**. Node, browsers and Hermes all have them; a host that somehow lacks one
+polyfills it before importing. Everything else these packages need beyond ES2022 is injected
+as a port. `structuredClone`, WebCrypto, the DOM and the WebExtension namespaces are never
+used, and `packages/vault/test/boundaries.test.ts` plus the ESLint config enforce that.
+
+This package needs them through `@nostr-wot/vault` and `@nostr-wot/accounts`. Its own
+`utf8ByteLength` counts UTF-8 bytes without encoding, not to avoid `TextEncoder` but so the
+boundary never allocates an encoded copy of untrusted input before the size limit has bitten.

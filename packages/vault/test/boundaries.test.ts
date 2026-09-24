@@ -59,7 +59,23 @@ const FORBIDDEN: ReadonlyArray<{ pattern: RegExp; why: string }> = [
   { pattern: /\bwindow\./, why: 'reaches for the DOM `window`' },
   { pattern: /\blocalStorage\b/, why: 'reaches for `localStorage`' },
   { pattern: /\bcrypto\.subtle\b/, why: 'reaches for WebCrypto' },
+  // Everything these packages persist or cache is plain JSON, and a JSON round trip clones
+  // that exactly with no host requirement at all. `structuredClone` is a newer global than
+  // some of the runtimes we target start with, and it was only ever used on JSON here.
+  { pattern: /\bstructuredClone\b/, why: 'uses `structuredClone`; clone JSON with a JSON round trip' },
 ];
+
+/**
+ * Host capabilities the shared packages DO require, declared rather than avoided.
+ *
+ * `TextEncoder` and `TextDecoder` cannot realistically be kept out: `@noble/hashes` and
+ * `@noble/ciphers` use them internally, and the vault and the accounts package use them for
+ * the same UTF-8 conversions. Every runtime we target has them (Node, browsers, Hermes), and a
+ * host that somehow lacks one polyfills it before importing. They are listed here so that a
+ * reader of the FORBIDDEN list does not take their absence for an oversight, and the test
+ * below holds every shared package's README to declaring them.
+ */
+const REQUIRED_HOST_CAPABILITIES = ['TextEncoder', 'TextDecoder'] as const;
 
 const SOURCE_FILE = /\.(ts|tsx|mts|cts|js|mjs|cjs|jsx)$/;
 
@@ -152,6 +168,16 @@ describe('the package list', () => {
     }
   });
 
+  test('every shared package README declares the host capabilities the family requires', () => {
+    for (const pkg of SHARED) {
+      const readme = readFileSync(join(PACKAGES, pkg, 'README.md'), 'utf8');
+      for (const capability of REQUIRED_HOST_CAPABILITIES) {
+        expect(readme, `${pkg}/README.md declares ${capability}`).toContain(`\`${capability}\``);
+      }
+      expect(readme, `${pkg}/README.md has a host requirements section`).toMatch(/^## Host requirements$/m);
+    }
+  });
+
   test('the ESLint boundary covers exactly the same packages', async () => {
     const config = (await import(join(ROOT, 'eslint.config.js'))) as {
       SHARED_PACKAGES?: readonly string[];
@@ -192,6 +218,7 @@ describe('the platform boundary', () => {
       'window.location.reload();',
       "localStorage.getItem('vault');",
       'await crypto.subtle.digest("SHA-256", bytes);',
+      'const draft = structuredClone(tree);',
       // A string literal is in scope: closer to code than to prose.
       "const api = 'crypto.subtle';",
       'const key = `${prefix}localStorage`;',
@@ -210,6 +237,9 @@ describe('the platform boundary', () => {
       'const timeWindow = windowMs;',
       'const reactive = true;',
       "import { webcrypto } from 'node:crypto';",
+      // Declared requirements, not violations.
+      "const bytes = new TextEncoder().encode(text);",
+      "const text = new TextDecoder().decode(bytes);",
     ]) {
       expect(hits(source), source).toBe(false);
     }
