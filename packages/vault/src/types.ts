@@ -2,9 +2,8 @@
  * The vault record format, version 1, and the in-memory projection of it.
  *
  * Ported from the browser extension's `src/domain/vault/types.ts` and the record the extension's
- * `create()` writes into the extension's `storage.local` area. These shapes are on-disk format:
- * vaults in the field already have exactly these fields, so a change here is a format version
- * and a migration.
+ * `create()` writes into `browser.storage.local`. These shapes are on-disk format: vaults in the
+ * field already have exactly these fields, so a change here is a format version and a migration.
  */
 import type { Account } from '@nostr-wot/accounts';
 

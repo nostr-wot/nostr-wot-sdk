@@ -6,11 +6,14 @@
  * phone. That only holds while none of their source reaches for something one of those
  * runtimes does not have: the WebExtension namespaces, the DOM, WebCrypto, or a UI framework.
  *
- * This is a plain text scan of every file under each package's `src/`, comments included. A
- * comment that says `chrome.` is not a leak, but the rule is deliberately blunt: the literal
- * tokens do not appear in shared source, full stop, so there is nothing to argue about at
- * review time. Tests and generator scripts are outside the scan on purpose; the vault's
- * WebCrypto compatibility suite has to use `node:crypto`'s webcrypto to mean anything.
+ * This is a text scan of every file under each package's `src/`, with comments stripped
+ * first. The property lives in code, not prose: a comment explaining that the extension
+ * supplies `browser.storage` and the app supplies SecureStore is exactly what a reader needs,
+ * and a rule that forbids writing it works against us. String literals stay in scope; they
+ * are closer to code than to prose, and a false positive there costs one rename. The ESLint
+ * rules in `eslint.config.js` work on the AST and are the primary guard; this scan is the
+ * belt to their braces. Tests and generator scripts are outside the scan on purpose; the
+ * vault's WebCrypto compatibility suite has to use `node:crypto`'s webcrypto to mean anything.
  *
  * The list of scanned packages is cross-checked against the workspace: every workspace has
  * to be classified as either shared or platform-bound, so adding a package without deciding
@@ -59,6 +62,58 @@ const FORBIDDEN: ReadonlyArray<{ pattern: RegExp; why: string }> = [
 ];
 
 const SOURCE_FILE = /\.(ts|tsx|mts|cts|js|mjs|cjs|jsx)$/;
+
+/**
+ * Blank out `//` and `/* *\/` comments, keeping every newline so line numbers survive, and
+ * leaving string and template literals exactly as they are. A `//` inside a regex literal
+ * would be taken for a comment and hide the rest of that line; that errs towards a missed
+ * hit, never a false one, and the AST rules cover that case.
+ */
+export function stripComments(source: string): string {
+  let out = '';
+  let i = 0;
+  const n = source.length;
+  while (i < n) {
+    const ch = source[i]!;
+    const next = source[i + 1];
+    if (ch === '"' || ch === "'" || ch === '`') {
+      // Copy the literal through its closing quote, honouring backslash escapes.
+      const quote = ch;
+      out += ch;
+      i += 1;
+      while (i < n && source[i] !== quote) {
+        if (source[i] === '\\' && i + 1 < n) {
+          out += source[i]! + source[i + 1]!;
+          i += 2;
+          continue;
+        }
+        out += source[i]!;
+        i += 1;
+      }
+      if (i < n) {
+        out += quote;
+        i += 1;
+      }
+      continue;
+    }
+    if (ch === '/' && next === '/') {
+      while (i < n && source[i] !== '\n') i += 1;
+      continue;
+    }
+    if (ch === '/' && next === '*') {
+      i += 2;
+      while (i < n && !(source[i] === '*' && source[i + 1] === '/')) {
+        if (source[i] === '\n') out += '\n';
+        i += 1;
+      }
+      i += 2;
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
 
 function walk(dir: string): string[] {
   return readdirSync(dir)
@@ -110,7 +165,7 @@ describe('the platform boundary', () => {
     const violations: string[] = [];
     for (const pkg of SHARED) {
       for (const file of walk(join(PACKAGES, pkg, 'src'))) {
-        const lines = readFileSync(file, 'utf8').split('\n');
+        const lines = stripComments(readFileSync(file, 'utf8')).split('\n');
         lines.forEach((line, index) => {
           for (const { pattern, why } of FORBIDDEN) {
             const match = pattern.exec(line);
@@ -124,29 +179,46 @@ describe('the platform boundary', () => {
     expect(violations).toEqual([]);
   });
 
-  test('the scan sees a violation when one is planted', () => {
+  const hits = (source: string) =>
+    FORBIDDEN.some(({ pattern }) => pattern.test(stripComments(source)));
+
+  test('the scan sees a violation when one is planted in code', () => {
     // The guard has to be able to fail. A scan whose patterns never fire is indistinguishable
     // from one that is scanning the wrong directory.
-    const planted = [
+    for (const line of [
       "import { useState } from 'react';",
       'const store = browser.storage.local;',
       'chrome.runtime.sendMessage(x);',
       'window.location.reload();',
       "localStorage.getItem('vault');",
       'await crypto.subtle.digest("SHA-256", bytes);',
-      '// this used to go through crypto.subtle',
-    ];
-    for (const line of planted) {
-      expect(FORBIDDEN.some(({ pattern }) => pattern.test(line)), line).toBe(true);
+      // A string literal is in scope: closer to code than to prose.
+      "const api = 'crypto.subtle';",
+      'const key = `${prefix}localStorage`;',
+    ]) {
+      expect(hits(line), line).toBe(true);
     }
-    // ...and stays quiet on things that merely look similar.
-    for (const line of [
+  });
+
+  test('the scan stays quiet on comments and on look-alikes', () => {
+    for (const source of [
+      '// this used to go through crypto.subtle',
+      '/** the extension supplies `browser.storage` here, the app supplies SecureStore */',
+      '/*\n * multi-line: window.location\n * and chrome.runtime\n */\nexport const x = 1;',
+      "const url = 'https://example.test/path'; // window.open used to live here",
       "import { pbkdf2Async } from '@noble/hashes/pbkdf2.js';",
       'const timeWindow = windowMs;',
       'const reactive = true;',
       "import { webcrypto } from 'node:crypto';",
     ]) {
-      expect(FORBIDDEN.some(({ pattern }) => pattern.test(line)), line).toBe(false);
+      expect(hits(source), source).toBe(false);
     }
+  });
+
+  test('stripping keeps line numbers and string contents intact', () => {
+    const source = "const a = '// not a comment';\n/* gone\n   gone */ const b = 2; // tail\nconst c = 3;";
+    const stripped = stripComments(source);
+    expect(stripped.split('\n').length).toBe(source.split('\n').length);
+    expect(stripped).toBe("const a = '// not a comment';\n\n const b = 2; \nconst c = 3;");
   });
 });

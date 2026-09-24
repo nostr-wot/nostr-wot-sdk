@@ -3,8 +3,8 @@
  *
  * Every byte here matches what the browser extension's WebCrypto implementation produces and
  * consumes, because the vaults users already have were written by it. Nothing in this module
- * touches WebCrypto's `SubtleCrypto`, a DOM global or a UI framework, so the same code runs in
- * an extension, in a React Native app and in a Node test.
+ * touches `crypto.subtle`, a DOM global or a UI framework, so the same code runs in an
+ * extension, in a React Native app and in a Node test.
  */
 import { pbkdf2Async } from '@noble/hashes/pbkdf2.js';
 import { sha256 } from '@noble/hashes/sha2.js';

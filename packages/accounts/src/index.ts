@@ -2,8 +2,8 @@
  * `@nostr-wot/accounts` — the Nostr account primitives every `@nostr-wot` host shares.
  *
  * NIP-06 derivation, import classification and NIP-49 encrypted keys, in pure JavaScript.
- * Nothing here touches WebCrypto's `SubtleCrypto`, a DOM global or a UI framework, so the
- * same code runs in a browser extension, in a React Native app and in a Node test.
+ * Nothing here touches `crypto.subtle`, a DOM global or a UI framework, so the same code
+ * runs in a browser extension, in a React Native app and in a Node test.
  */
 export type { Account, AccountType, Nip46Config, PqImportedKeys, SafeAccount } from './types.js';
 export { toSafeAccount } from './types.js';
