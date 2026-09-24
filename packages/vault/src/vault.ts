@@ -3,9 +3,9 @@
  *
  * Ported from the browser extension's `src/services/vault/vault.ts` and the account access it
  * delegates to in `src/services/vault/accountAccess.ts`, with three substitutions and nothing
- * else moved: `browser.storage.local` becomes the injected {@link KeyValueStore}, WebCrypto
- * becomes the injected {@link Pbkdf2Port} plus this package's own AES-GCM, and the extension's
- * module-level singleton becomes an instance. Everything that only makes sense inside a
+ * else moved: the extension's `storage.local` area becomes the injected {@link KeyValueStore},
+ * WebCrypto becomes the injected {@link Pbkdf2Port} plus this package's own AES-GCM, and the
+ * extension's module-level singleton becomes an instance. Everything that only makes sense inside a
  * service worker — the keep-alive alarm, the startup auto-unlock gate, the session-revision
  * revocation — stays with the host.
  *

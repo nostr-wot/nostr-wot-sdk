@@ -2,7 +2,7 @@
  * `@nostr-wot/vault` — the vault cryptography shared by every `@nostr-wot` host.
  *
  * PBKDF2-HMAC-SHA-256 and AES-256-GCM in pure JavaScript, byte compatible with the vaults the
- * browser extension already wrote with WebCrypto, and running where there is no `crypto.subtle`
+ * browser extension already wrote with WebCrypto, and running where there is no `SubtleCrypto`
  * at all.
  */
 export {
