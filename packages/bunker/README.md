@@ -87,7 +87,7 @@ await server.acceptNostrConnect(scannedUri);
 | `logout` | Forwarded to the handler; after the ack the client is forgotten and relays only it used are unsubscribed. A request still in flight at that moment is dropped rather than answered, so no released relay is re-opened for a client that has left. |
 | Deduplication | By request id and by event id, per client. Connected clients keep their own window; senders that have not connected share a bounded pool of windows, so junk from fresh keypairs cannot evict a real client's replay protection. A redelivered request is answered once. |
 | Concurrency | Requests are dispatched independently; a slow `sign_event` never delays a later `get_public_key`. |
-| Relay churn | One subscription per relay. A dropped relay is re-subscribed with backoff while the others keep serving. |
+| Relay churn | One subscription per relay, opened on the relay connection itself (`ensureRelay`) rather than through `pool.subscribe`, because nostr-tools' pool records an event id as seen before it verifies the event, which lets a forged id suppress a genuine request; the reasoning is in a block comment at the call site and must not be "simplified" away. Connection management stays with the pool. A dropped relay is re-subscribed with backoff while the others keep serving. |
 | Clock skew | Requests further than `maxClockSkewSec` (default 300) from now are dropped, as Amber does. |
 | Logging | Optional injected logger; no `console`, and no key, plaintext or ciphertext ever reaches it. |
 

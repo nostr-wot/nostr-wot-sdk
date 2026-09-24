@@ -28,6 +28,7 @@ import {
 const DEFAULTS = {
   requireSecret: true,
   handlerTimeoutMs: 120_000,
+  connectTimeoutMs: 3000,
   reconnectDelayMs: 3000,
   maxReconnectDelayMs: 60_000,
   maxClockSkewSec: 300,
@@ -62,10 +63,34 @@ interface SecretState {
 
 interface RelaySubscription {
   closer: SubCloser | null;
+  /** True while `ensureRelay` is connecting, so a second `#subscribe` does not open a second REQ. */
+  connecting: boolean;
   timer: ReturnType<typeof setTimeout> | null;
   failures: number;
   /** `SERVER_OWNER` and/or client pubkeys. The subscription lives while this is non-empty. */
   owners: Set<string>;
+}
+
+/** The one relay-level subscription shape this package uses (nostr-tools `AbstractRelay.subscribe`). */
+interface RelaySubscriptionParams {
+  onevent: (event: NostrEvent) => void;
+  oneose?: () => void;
+  onclose?: (reason: string) => void;
+  alreadyHaveEvent?: (id: string) => boolean;
+  eoseTimeout?: number;
+}
+
+interface RelayLike {
+  subscribe(filters: unknown[], params: RelaySubscriptionParams): { close(reason?: string): void };
+}
+
+/** A pool that hands out its per-relay connections: nostr-tools' `AbstractSimplePool.ensureRelay`. */
+interface RelayCapablePool extends PoolLike {
+  ensureRelay(url: string, params?: { connectionTimeout?: number }): Promise<RelayLike>;
+}
+
+function hasEnsureRelay(pool: PoolLike): pool is RelayCapablePool {
+  return typeof (pool as { ensureRelay?: unknown }).ensureRelay === "function";
 }
 
 /** Insertion-ordered set with a hard cap: the oldest entry goes first. */
@@ -137,6 +162,7 @@ export class BunkerServer {
     this.#opts = {
       requireSecret: options.requireSecret ?? DEFAULTS.requireSecret,
       handlerTimeoutMs: options.handlerTimeoutMs ?? DEFAULTS.handlerTimeoutMs,
+      connectTimeoutMs: options.connectTimeoutMs ?? DEFAULTS.connectTimeoutMs,
       reconnectDelayMs: options.reconnectDelayMs ?? DEFAULTS.reconnectDelayMs,
       maxReconnectDelayMs: options.maxReconnectDelayMs ?? DEFAULTS.maxReconnectDelayMs,
       maxClockSkewSec: options.maxClockSkewSec ?? DEFAULTS.maxClockSkewSec,
@@ -309,7 +335,7 @@ export class BunkerServer {
     const url = normalizeRelays([rawUrl])[0]!;
     let state = this.#subs.get(url);
     if (!state) {
-      state = { closer: null, timer: null, failures: 0, owners: new Set() };
+      state = { closer: null, connecting: false, timer: null, failures: 0, owners: new Set() };
       this.#subs.set(url, state);
     }
     state.owners.add(owner);
@@ -347,8 +373,105 @@ export class BunkerServer {
     if (!pool || this.#stopped) return Promise.resolve();
     const state = owner ? this.#claim(url, owner) : this.#subs.get(url);
     if (!state) return Promise.resolve();
-    if (state.closer) return Promise.resolve();
+    if (state.closer || state.connecting) return Promise.resolve();
+    this.#opened.add(url);
+    if (hasEnsureRelay(pool)) return this.#subscribeDirect(pool, url, state);
+    // An injected pool without `ensureRelay` (something that is not nostr-tools) has to be
+    // subscribed through its own API. Its deduplication then sits in front of ours; see
+    // #subscribeDirect for what that means.
+    this.#log.warn?.("pool has no ensureRelay; falling back to pool.subscribe and its own deduplication", { relay: url });
+    return this.#subscribeViaPool(pool, url, state);
+  }
 
+  /**
+   * One REQ per relay, opened on the relay connection itself rather than through
+   * `pool.subscribe` / `subscribeMap`. This is deliberate and load-bearing.
+   *
+   * WHAT this avoids: the pool subscription's shared `_knownIds` deduplication.
+   *
+   * WHY it is unsafe here (nostr-tools 2.24.1): `abstract-relay.js:468` calls
+   * `alreadyHaveEvent(id)` with the id lifted from the raw JSON text, and only
+   * `:480` runs `matchFilters` and `verifyEvent`. The id is recorded as seen before
+   * anything checks the event is genuine. An event carrying a real request's `id`
+   * with a broken signature (no key needed, just the right 64 hex characters)
+   * therefore makes the real request drop as a duplicate when it arrives.
+   *
+   * WHY our own callback cannot fix that through the pool: `abstract-pool.js:821-828`
+   *
+   *     const localAlreadyHaveEventHandler = (id) => {
+   *       if (params.alreadyHaveEvent?.(id)) return true;
+   *       const have = _knownIds.has(id);
+   *       _knownIds.add(id);
+   *       return have;
+   *     };
+   *
+   * A caller's `alreadyHaveEvent` can only add suppression; returning `false`
+   * still falls through to `_knownIds.add(id)`. `subscribeMap` installs the same
+   * handler on every relay.
+   *
+   * WHY more relays do not help: that `_knownIds` is one set shared across every
+   * relay in the subscription, so one hostile relay poisons it for all of them.
+   *
+   * WHAT this costs: the same genuine event arriving from three relays is parsed
+   * and verified three times instead of once. That trade is right for this
+   * package: NIP-46 traffic is a handful of events per session, `#onEvent`
+   * verifies every event anyway, and the alternative is a silent channel for
+   * suppressing signing requests. Do not "optimise" this back to `pool.subscribe`.
+   *
+   * WHEN this can go: if nostr-tools adds the id to its set only after
+   * `verifyEvent` succeeds. Checked against 2.24.1; re-check those two files
+   * before removing this.
+   *
+   * Connection management (connect, reconnect backoff, idle close, socket
+   * lifecycle) stays with the pool through `ensureRelay`.
+   */
+  async #subscribeDirect(pool: RelayCapablePool, url: string, state: RelaySubscription): Promise<void> {
+    state.connecting = true;
+    let relay: RelayLike;
+    try {
+      relay = await pool.ensureRelay(url, { connectionTimeout: this.#opts.connectTimeoutMs });
+    } catch (err) {
+      state.connecting = false;
+      this.#scheduleResubscribe(url, state, `connect failed: ${errorText(err)}`);
+      return;
+    }
+    state.connecting = false;
+    // Released or stopped while connecting: the socket is the pool's to keep or idle-close; open nothing.
+    if (this.#stopped || this.#subs.get(url) !== state) return;
+
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const settle = () => {
+        if (!settled) {
+          settled = true;
+          resolve();
+        }
+      };
+      let sub: { close(reason?: string): void } | null = null;
+      const closer: SubCloser = { close: () => sub?.close() };
+      sub = relay.subscribe([{ kinds: [NostrConnect], "#p": [this.#pubkey] }], {
+        // Never suppress on an unverified id. `#seen` in #onEvent, after verification, is the only dedup.
+        alreadyHaveEvent: () => false,
+        onevent: (event) => {
+          this.#onEvent(event, url);
+        },
+        oneose: () => {
+          state.failures = 0;
+          this.#log.debug?.("subscribed", { relay: url });
+          settle();
+        },
+        onclose: (reason) => {
+          if (state.closer === closer) state.closer = null;
+          settle();
+          this.#scheduleResubscribe(url, state, reason);
+        },
+      });
+      state.closer = closer;
+    });
+  }
+
+  /** Fallback for a pool that is not nostr-tools. See #subscribeDirect for why it is not the default. */
+  #subscribeViaPool(pool: PoolLike, url: string, state: RelaySubscription): Promise<void> {
     return new Promise<void>((resolve) => {
       let settled = false;
       const settle = () => {
@@ -357,9 +480,8 @@ export class BunkerServer {
           resolve();
         }
       };
-      this.#opened.add(url);
       let closer: SubCloser | null = null;
-      closer = this.#subscribeToPool(pool, url, {
+      closer = pool.subscribe([url], { kinds: [NostrConnect], "#p": [this.#pubkey] }, {
         onevent: (event: NostrEvent) => {
           this.#onEvent(event, url);
         },
@@ -368,7 +490,7 @@ export class BunkerServer {
           this.#log.debug?.("subscribed", { relay: url });
           settle();
         },
-        onclose: (reasons) => {
+        onclose: (reasons: { url: string; reason: string }[]) => {
           if (state.closer === closer) state.closer = null;
           settle();
           this.#scheduleResubscribe(url, state, reasons.map((r) => r.reason).join("; "));
@@ -376,18 +498,6 @@ export class BunkerServer {
       });
       state.closer = closer;
     });
-  }
-
-  #subscribeToPool(
-    pool: PoolLike,
-    url: string,
-    params: {
-      onevent: (e: NostrEvent) => void;
-      oneose: () => void;
-      onclose: (reasons: { url: string; reason: string }[]) => void;
-    },
-  ): SubCloser {
-    return pool.subscribe([url], { kinds: [NostrConnect], "#p": [this.#pubkey] }, params);
   }
 
   #scheduleResubscribe(url: string, state: RelaySubscription, reason: string): void {
@@ -422,9 +532,10 @@ export class BunkerServer {
       this.#log.warn?.("dropped request outside the clock-skew limit", { clientPubkey, skewSec: skew });
       return;
     }
-    // Only a verified, timely event may occupy a slot in the window. Recording
-    // it earlier would let a corrupted copy from one relay suppress the genuine
-    // event the honest relays deliver.
+    // This is the ONLY deduplication in the path (see #subscribeDirect for why the
+    // pool's is bypassed) and it must stay BELOW the signature and timestamp checks:
+    // recording an unverified id here is exactly the suppression channel that
+    // bypass exists to close. Keyed per sender, so one client cannot shadow another.
     if (this.#seen(clientPubkey, `e:${event.id}`)) return;
 
     const convKey = this.#conversationKey(clientPubkey);

@@ -95,6 +95,8 @@ export interface BunkerServerOptions {
    * Default 120000 ms. `0` disables the limit.
    */
   handlerTimeoutMs?: number;
+  /** How long a relay may take to connect before the attempt counts as failed. Default 3000 ms. */
+  connectTimeoutMs?: number;
   /** Delay before re-subscribing to a relay that dropped. Default 3000 ms; doubles per failure up to `maxReconnectDelayMs`. */
   reconnectDelayMs?: number;
   /** Upper bound for the reconnect backoff. Default 60000 ms. */
