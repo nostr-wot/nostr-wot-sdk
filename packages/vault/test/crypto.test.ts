@@ -11,6 +11,8 @@ import {
   VAULT_VERSION,
   MIN_PASSWORD_LENGTH,
   VAULT_KEY_BYTES,
+  VAULT_SALT_BYTES,
+  VAULT_IV_BYTES,
 } from '../src/constants.js';
 
 describe('vault format version 1 constants', () => {
@@ -26,6 +28,8 @@ describe('vault format version 1 constants', () => {
     expect(LEGACY_VAULT_PBKDF2_ITERATIONS).toBe(210000);
     expect(MIN_PASSWORD_LENGTH).toBe(8);
     expect(VAULT_KEY_BYTES).toBe(32);
+    expect(VAULT_SALT_BYTES).toBe(32);
+    expect(VAULT_IV_BYTES).toBe(12);
   });
 });
 

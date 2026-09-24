@@ -30,12 +30,14 @@ export const MIN_PASSWORD_LENGTH = 8;
 /**
  * Salt length in bytes, drawn fresh per vault.
  *
- * Consumer-facing: this is the number the code that *creates* a vault should draw, so the
- * envelope matches what the browser extension wrote. Nothing in this package enforces it —
- * PBKDF2 accepts a salt of any length, and `noblePbkdf2.derive` will happily take a shorter one.
- * The guard that does exist is on the derived key length, not on this.
+ * 32, not 16. The shipping extension draws `crypto.getRandomValues(new Uint8Array(32))` in
+ * `create()`, so this is the number a vault this package writes has to match for the envelope
+ * to look like the ones already in the field. Nothing in this package enforces it — PBKDF2
+ * accepts a salt of any length, and reading an existing record takes whatever salt the record
+ * carries, which is what lets any older length still open. The guard that does exist is on the
+ * derived key length, not on this.
  */
-export const VAULT_SALT_BYTES = 16;
+export const VAULT_SALT_BYTES = 32;
 
 /** AES-GCM IV length in bytes, drawn fresh per encryption. */
 export const VAULT_IV_BYTES = 12;
