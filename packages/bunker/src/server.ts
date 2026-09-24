@@ -120,6 +120,8 @@ export class BunkerServer {
   readonly #secrets = new Map<string, SecretState>();
   /** Dedup windows for senders that have not connected; bounded in both dimensions. */
   readonly #strangers = new Map<string, BoundedSet>();
+  /** Every relay this server opened a socket to, subscribed or publish-only, so `stop()` can close them all. */
+  readonly #opened = new Set<string>();
   #started = false;
   #stopped = false;
 
@@ -240,7 +242,7 @@ export class BunkerServer {
       params: [this.#pubkey, parsed.secret, parsed.perms.join(","), JSON.stringify(metadata)],
     };
     try {
-      await this.#runHandler(request);
+      await this.#runHandler(request, parsed.relays);
     } catch (err) {
       this.#unbind(record, parsed.secret);
       throw err;
@@ -278,7 +280,7 @@ export class BunkerServer {
   async stop(): Promise<void> {
     if (this.#stopped) return;
     this.#stopped = true;
-    const urls = [...this.#subs.keys()];
+    const urls = dedupe([...this.#subs.keys(), ...this.#opened]);
     for (const [url, sub] of this.#subs) {
       if (sub.timer) clearTimeout(sub.timer);
       sub.timer = null;
@@ -290,6 +292,7 @@ export class BunkerServer {
       sub.closer = null;
     }
     this.#subs.clear();
+    this.#opened.clear();
     if (this.#ownsPool) {
       this.#relayPool.getPool()?.close(urls);
       this.#relayPool.destroy();
@@ -324,8 +327,15 @@ export class BunkerServer {
       this.#log.debug?.("close failed", { relay: url, error: errorText(err) });
     }
     state.closer = null;
-    if (this.#ownsPool) this.#relayPool.getPool()?.close([url]);
+    this.#closeSocket(url);
     this.#log.debug?.("relay released", { relay: url });
+  }
+
+  /** Close a socket nothing subscribes on any more (owned pool only; an injected pool is the host's). */
+  #closeSocket(url: string): void {
+    if (this.#subs.has(url)) return;
+    this.#opened.delete(url);
+    if (this.#ownsPool) this.#relayPool.getPool()?.close([url]);
   }
 
   #subscribe(url: string, owner?: string): Promise<void> {
@@ -343,6 +353,7 @@ export class BunkerServer {
           resolve();
         }
       };
+      this.#opened.add(url);
       let closer: SubCloser | null = null;
       closer = this.#subscribeToPool(pool, url, {
         onevent: (event: NostrEvent) => {
@@ -470,7 +481,7 @@ export class BunkerServer {
       } else if (request.method === "switch_relays") {
         result = JSON.stringify(this.relaysFor(clientPubkey));
       } else {
-        result = await this.#runHandler(request);
+        result = await this.#runHandler(request, this.#clients.get(clientPubkey)?.relays ?? [sourceRelay]);
       }
     } catch (err) {
       const error = this.#wireError(err, request);
@@ -502,8 +513,9 @@ export class BunkerServer {
     const record = secret && this.#secrets.has(secret)
       ? this.#bind(secret, request.clientPubkey, undefined, "secret already used by another client")
       : undefined;
+    const responseRelays = record?.relays ?? [sourceRelay];
     try {
-      await this.#runHandler(request);
+      await this.#runHandler(request, responseRelays);
     } catch (err) {
       if (record) this.#unbind(record, secret);
       throw err;
@@ -512,15 +524,15 @@ export class BunkerServer {
       record.pending -= 1;
       record.confirmed = true;
     }
-    await this.#admit(request.clientPubkey, secret || undefined, record?.relays ?? [sourceRelay]);
+    await this.#admit(request.clientPubkey, secret || undefined, responseRelays);
     this.#log.info?.("client connected", { clientPubkey: request.clientPubkey });
     return "ack";
   }
 
   /**
-   * Bind `secret` to `clientPubkey` (creating the record when `relays` is given)
-   * and count one pending approval. Throws when the secret is held by another
-   * client, pending or confirmed.
+   * Bind `secret` to `clientPubkey` (creating a `nostrconnect` record with
+   * `relays` when none exists) and count one pending approval. Throws when the
+   * secret is held by another client, pending or confirmed.
    */
   #bind(secret: string, clientPubkey: string, relays: string[] | undefined, refusal: string): SecretState {
     let record = this.#secrets.get(secret);
@@ -529,9 +541,9 @@ export class BunkerServer {
       if (!relays) throw new BunkerError("invalid secret");
       record = { relays, confirmed: false, pending: 0, origin: "nostrconnect" };
       this.#secrets.set(secret, record);
-    } else if (relays && !record.confirmed && record.pending === 0) {
-      record.relays = relays;
     }
+    // An existing record's relays are untouched while approval is pending: a
+    // rejected scan must leave no trace, and state never written needs no restoring.
     record.clientPubkey = clientPubkey;
     record.pending += 1;
     return record;
@@ -543,8 +555,12 @@ export class BunkerServer {
     if (record.pending <= 0 && !record.confirmed) {
       record.pending = 0;
       delete record.clientPubkey;
-      // A record that only ever existed for this rejected nostrconnect pairing goes away entirely.
-      if (record.origin === "nostrconnect" && this.#secrets.get(secret) === record) this.#secrets.delete(secret);
+      // A record that only ever existed for this rejected nostrconnect pairing goes away entirely,
+      // along with any socket an auth_url opened to the relays it named.
+      if (record.origin === "nostrconnect" && this.#secrets.get(secret) === record) {
+        this.#secrets.delete(secret);
+        for (const url of record.relays) this.#closeSocket(url);
+      }
     }
   }
 
@@ -571,8 +587,8 @@ export class BunkerServer {
     }
   }
 
-  async #runHandler(request: BunkerRequest): Promise<string> {
-    const context = this.#contextFor(request);
+  async #runHandler(request: BunkerRequest, responseRelays: string[]): Promise<string> {
+    const context = this.#contextFor(request, responseRelays);
     const limit = this.#opts.handlerTimeoutMs;
     if (limit <= 0) return this.#handler(request, context);
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -595,16 +611,14 @@ export class BunkerServer {
     }
   }
 
-  #contextFor(request: BunkerRequest): BunkerRequestContext {
+  /** `responseRelays` is where this request's client listens; it is handed in explicitly rather than looked up. */
+  #contextFor(request: BunkerRequest, responseRelays: string[]): BunkerRequestContext {
     let authUrlSent = false;
     return {
       sendAuthUrl: async (url: string) => {
         if (authUrlSent) throw new Error("auth_url already sent for this request");
         authUrlSent = true;
-        const relays = this.#clients.get(request.clientPubkey)?.relays
-          ?? this.#secrets.get(request.params[1] ?? "")?.relays
-          ?? this.relays;
-        await this.#send(request.clientPubkey, { id: request.id, result: "auth_url", error: url }, relays);
+        await this.#send(request.clientPubkey, { id: request.id, result: "auth_url", error: url }, responseRelays);
       },
     };
   }
@@ -614,6 +628,7 @@ export class BunkerServer {
   async #send(clientPubkey: string, payload: ResponsePayload, relays: string[]): Promise<void> {
     if (this.#stopped) return;
     const event = buildResponseEvent(this.#sk, clientPubkey, this.#conversationKey(clientPubkey), payload);
+    for (const url of relays) this.#opened.add(url);
     try {
       await publishAny(this.#relayPool.getPool(), relays, event);
     } catch (err) {
