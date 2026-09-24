@@ -333,9 +333,10 @@ describe('key material', () => {
     expect(await vault.getActiveAccountId()).toBeNull();
     await vault.unlock('hunter22');
     expect(await vault.getActiveAccountId()).toBe('acct_2');
-    // The default account is the active one, so withPrivkey needs no id.
+    // There is no "the active one" shorthand: a caller names the account, every time.
     await vault.setActiveAccountId('acct_1');
-    expect(await vault.withPrivkey(undefined, async (key) => bytesToHex(key))).toBe(account.privkey);
+    const active = (await vault.getActiveAccountId())!;
+    expect(await vault.withPrivkey(active, async (key) => bytesToHex(key))).toBe(account.privkey);
   });
 });
 

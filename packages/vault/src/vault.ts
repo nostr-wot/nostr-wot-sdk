@@ -460,17 +460,18 @@ export class Vault {
    * The same contract holds for every other scoped accessor on this class: {@link withMnemonic},
    * {@link withImportedPqKeys}, {@link withCacheKey} and {@link withRemoteSignerCredentials}.
    *
-   * @param accountId the account, or undefined for the active one
+   * `accountId` names the account and is required. The extension's copy takes `undefined` to
+   * mean "whatever is active now", which is exactly the substitution the signing pipeline
+   * exists to prevent: a request resolved and shown for one account must be signed by that
+   * account's key, not by whichever one the user has since moved to. A caller that wants the
+   * active account asks {@link getActiveAccountId} and passes the answer, so the choice is
+   * visible at the call site.
+   *
    * @throws if the vault is locked, the account has no private key, or the session was revoked
    *         while `fn` was running
    */
-  async withPrivkey<T>(
-    accountId: string | undefined,
-    fn: (key: Uint8Array) => Promise<T>,
-  ): Promise<T> {
-    const payload = this.#requireOpen();
-    const id = accountId ?? payload.activeAccountId;
-    const account = payload.accounts.find((candidate) => candidate.id === id);
+  async withPrivkey<T>(accountId: string, fn: (key: Uint8Array) => Promise<T>): Promise<T> {
+    const account = this.#findAccount(this.#requireOpen(), accountId);
     if (!account?.privkeyBytes) throw new Error('No private key for this account');
     const key = new Uint8Array(account.privkeyBytes);
     return this.#scoped([key], () => fn(key));
