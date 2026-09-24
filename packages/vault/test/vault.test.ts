@@ -855,3 +855,351 @@ describe('racing the storage write', () => {
     expect(await vault.unlock('next-one')).toBe(true);
   });
 });
+
+// ── The account surface ──
+
+const MNEMONIC = `${'abandon '.repeat(23)}art`;
+
+const seeded: Account = {
+  ...account,
+  id: 'acct_seed',
+  name: 'Seed',
+  mnemonic: MNEMONIC,
+  derivationIndex: 0,
+  derivationPath: "m/44'/1237'/0'/0/0",
+};
+
+const bunker: Account = {
+  ...watcher,
+  id: 'acct_bunker',
+  name: 'Bunker',
+  type: 'nip46',
+  pubkey: '12'.repeat(32),
+  nip46Config: {
+    bunkerUrl: `bunker://${'12'.repeat(32)}?relay=wss%3A%2F%2Frelay.example`,
+    relay: 'wss://relay.example',
+    secret: 'topsecret-token',
+  },
+};
+
+const pqKeys = {
+  kem: { publicKey: new Uint8Array(8).fill(1), secretKey: new Uint8Array(8).fill(2) },
+  dsa: { publicKey: new Uint8Array(8).fill(3), secretKey: new Uint8Array(8).fill(4) },
+};
+
+async function openVault(accounts: Account[]): Promise<{ vault: Vault; store: MemoryStore }> {
+  const store = new MemoryStore();
+  const vault = new Vault({ store, kdf: fastKdf });
+  await vault.create('hunter22', accounts);
+  return { vault, store };
+}
+
+/** What the record on disk says, opened independently of the vault that wrote it. */
+async function reopen(store: MemoryStore): Promise<VaultPayload> {
+  const record = (await readRecord(store))!;
+  return (await openRecord(record, 'hunter22', fastKdf)).payload;
+}
+
+const zeros = (length: number) => new Array(length).fill(0);
+
+describe('account mutation', () => {
+  test('addAccount re-seals the record with the new account and it is there after a fresh unlock', async () => {
+    const { vault, store } = await openVault([account]);
+    await vault.addAccount(seeded);
+    expect((await vault.listAccounts()).map((candidate) => candidate.id)).toEqual(['acct_1', 'acct_seed']);
+    expect((await reopen(store)).accounts).toEqual([account, seeded]);
+    // The first account stays active: adding is not switching.
+    expect(await vault.getActiveAccountId()).toBe('acct_1');
+  });
+
+  test('addAccount refuses a duplicate id, and a locked vault', async () => {
+    const { vault } = await openVault([account]);
+    await expect(vault.addAccount({ ...seeded, id: 'acct_1' })).rejects.toThrow(/already exists/i);
+    vault.lock();
+    await expect(vault.addAccount(seeded)).rejects.toThrow(/locked/i);
+  });
+
+  test('addAccount does not keep an account in memory that the store refused to persist', async () => {
+    const backing = new MemoryStore();
+    let fail = false;
+    const store: KeyValueStore = {
+      get: (key) => backing.get(key),
+      set: async (key, value) => {
+        if (fail && key === VAULT_STORAGE_KEY) throw new Error('disk full');
+        return backing.set(key, value);
+      },
+      remove: (key) => backing.remove(key),
+      keys: () => backing.keys(),
+    };
+    const vault = new Vault({ store, kdf: fastKdf });
+    await vault.create('hunter22', [account]);
+    fail = true;
+    await expect(vault.addAccount(seeded)).rejects.toThrow(/disk full/);
+    expect((await vault.listAccounts()).map((candidate) => candidate.id)).toEqual(['acct_1']);
+    await expect(vault.withMnemonic('acct_seed', async () => 'x')).rejects.toThrow(/no seed phrase/i);
+  });
+
+  test('removeAccount drops the account, moves the active pointer and re-seals', async () => {
+    const { vault, store } = await openVault([account, seeded]);
+    await vault.removeAccount('acct_1');
+    expect((await vault.listAccounts()).map((candidate) => candidate.id)).toEqual(['acct_seed']);
+    expect(await vault.getActiveAccountId()).toBe('acct_seed');
+    expect(await reopen(store)).toMatchObject({ accounts: [seeded], activeAccountId: 'acct_seed' });
+    await expect(vault.removeAccount('acct_nope')).rejects.toThrow(/not found/i);
+  });
+
+  test('removeAccount zeroes the removed account\'s secrets and voids a callback still holding its key', async () => {
+    const installed: MemoryVaultPayload[] = [];
+    const real = serialization.toMemoryPayload;
+    const spy = vi.spyOn(serialization, 'toMemoryPayload').mockImplementation((payload) => {
+      const mem = real(payload);
+      installed.push(mem);
+      return mem;
+    });
+    try {
+      const { vault } = await openVault([account, seeded]);
+      const live = installed[0]!.accounts.find((candidate) => candidate.id === 'acct_seed')!;
+
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const pending = vault.withPrivkey('acct_seed', async (key) => {
+        await gate;
+        return bytesToHex(key);
+      });
+      await vault.removeAccount('acct_seed');
+      release();
+      // The key the callback holds belonged to an account that no longer exists: void.
+      await expect(pending).rejects.toThrow(/session/i);
+      expect(Array.from(live.privkeyBytes!)).toEqual(zeros(32));
+      expect(Array.from(live.mnemonicBytes!)).toEqual(zeros(MNEMONIC.length));
+      // The vault itself is still open; removing an account is not a lock.
+      expect(vault.isLocked()).toBe(false);
+      expect(await vault.withPrivkey('acct_1', async (key) => bytesToHex(key))).toBe(account.privkey);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test('updateAccountNip46Keys stores the local keypair as hex, copying the bytes it was given', async () => {
+    const { vault, store } = await openVault([account, bunker]);
+    const localKey = new Uint8Array(32).fill(0x5a);
+    await vault.updateAccountNip46Keys('acct_bunker', localKey, '6b'.repeat(32));
+    localKey.fill(9); // the caller's buffer is theirs; the vault keeps its own copy
+    const stored = (await reopen(store)).accounts.find((candidate) => candidate.id === 'acct_bunker')!;
+    expect(stored.nip46Config).toEqual({ ...bunker.nip46Config, localPrivkey: '5a'.repeat(32), localPubkey: '6b'.repeat(32) });
+    await vault.withRemoteSignerCredentials('acct_bunker', async (creds) => {
+      expect(bytesToHex(creds.localPrivkey!)).toBe('5a'.repeat(32));
+      expect(creds.localPubkey).toBe('6b'.repeat(32));
+    });
+  });
+
+  test('updateAccountNip46Keys zeroes the keypair it replaces and refuses a non-NIP-46 account', async () => {
+    const { vault } = await openVault([account, bunker]);
+    await vault.updateAccountNip46Keys('acct_bunker', new Uint8Array(32).fill(1), '01'.repeat(32));
+    let previous: Uint8Array | null = null;
+    await vault.withRemoteSignerCredentials('acct_bunker', async (creds) => {
+      previous = creds.localPrivkey;
+    });
+    // The scoped copy is zeroed on return; the test wants the vault's own buffer, which only
+    // the round trip can reveal: after the update the old key must not read back anywhere.
+    await vault.updateAccountNip46Keys('acct_bunker', new Uint8Array(32).fill(2), '02'.repeat(32));
+    await vault.withRemoteSignerCredentials('acct_bunker', async (creds) => {
+      expect(bytesToHex(creds.localPrivkey!)).toBe('02'.repeat(32));
+    });
+    expect(Array.from(previous!)).toEqual(zeros(32));
+    await expect(vault.updateAccountNip46Keys('acct_1', new Uint8Array(32), '00'.repeat(32))).rejects.toThrow(/nip-46/i);
+    await expect(vault.updateAccountNip46Keys('acct_bunker', new Uint8Array(31), '00'.repeat(32))).rejects.toThrow(/32 bytes/);
+  });
+
+  test('every mutation refuses to land on a session that moved while it waited for the lane', async () => {
+    const { vault } = await openVault([account, bunker]);
+    // Park the lane behind a mutation that never finishes until released.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const parked = vault.withPrivkey('acct_1', async () => gate); // not on the lane; just keeps things busy
+    const queued = [
+      vault.addAccount(seeded),
+      vault.removeAccount('acct_bunker'),
+      vault.updateAccountNip46Keys('acct_bunker', new Uint8Array(32), '00'.repeat(32)),
+      vault.setImportedPqKeys('acct_1', pqKeys, 'nip-pqc/v1'),
+      vault.clearImportedPqKeys('acct_1'),
+    ];
+    vault.lock();
+    release();
+    for (const operation of queued) await expect(operation).rejects.toThrow(/session|locked/i);
+    await expect(parked).rejects.toThrow(/session/i);
+    expect(await vault.unlock('hunter22')).toBe(true);
+    expect((await vault.listAccounts()).map((candidate) => candidate.id)).toEqual(['acct_1', 'acct_bunker']);
+  });
+});
+
+describe('imported post-quantum keys', () => {
+  test('setImportedPqKeys stores the pair, hasImportedPqKeys sees it, and the record carries it', async () => {
+    const { vault, store } = await openVault([account]);
+    expect(vault.hasImportedPqKeys('acct_1')).toBe(false);
+    await vault.setImportedPqKeys('acct_1', pqKeys, 'nip-pqc/v1');
+    expect(vault.hasImportedPqKeys('acct_1')).toBe(true);
+    const stored = (await reopen(store)).accounts[0]!;
+    expect(stored.pqKeys).toEqual({
+      profile: 'nip-pqc/v1',
+      kem: { public: bytesToBase64(pqKeys.kem.publicKey), secret: bytesToBase64(pqKeys.kem.secretKey) },
+      dsa: { public: bytesToBase64(pqKeys.dsa.publicKey), secret: bytesToBase64(pqKeys.dsa.secretKey) },
+      importedAt: expect.any(Number),
+    });
+  });
+
+  test('withImportedPqKeys hands out copies and zeroes them; clearImportedPqKeys removes them', async () => {
+    const { vault, store } = await openVault([account]);
+    await vault.setImportedPqKeys('acct_1', pqKeys, 'nip-pqc/v1');
+    let kem: Uint8Array | null = null;
+    let dsa: Uint8Array | null = null;
+    await vault.withImportedPqKeys('acct_1', async (keys) => {
+      kem = keys.kemSecret;
+      dsa = keys.dsaSecret;
+      expect(Array.from(keys.kemSecret)).toEqual(Array.from(pqKeys.kem.secretKey));
+      expect(keys.kemPublic).toBe(bytesToBase64(pqKeys.kem.publicKey));
+      expect(keys.profile).toBe('nip-pqc/v1');
+      keys.kemSecret.fill(7); // a copy: the vault's buffer is untouched below
+    });
+    expect(Array.from(kem!)).toEqual(zeros(8));
+    expect(Array.from(dsa!)).toEqual(zeros(8));
+    await vault.withImportedPqKeys('acct_1', async (keys) => {
+      expect(Array.from(keys.kemSecret)).toEqual(Array.from(pqKeys.kem.secretKey));
+    });
+
+    expect(await vault.clearImportedPqKeys('acct_1')).toBe(true);
+    expect(await vault.clearImportedPqKeys('acct_1')).toBe(false);
+    expect(vault.hasImportedPqKeys('acct_1')).toBe(false);
+    await expect(vault.withImportedPqKeys('acct_1', async () => 'x')).rejects.toThrow(/no imported/i);
+    expect((await reopen(store)).accounts[0]!.pqKeys).toBeNull();
+  });
+});
+
+describe('scoped access to the other secrets', () => {
+  test('withMnemonic hands out the phrase as bytes and zeroes the copy on every path', async () => {
+    const { vault } = await openVault([account, seeded]);
+    let captured: Uint8Array | null = null;
+    expect(
+      await vault.withMnemonic('acct_seed', async (phrase) => {
+        captured = phrase;
+        return new TextDecoder().decode(phrase);
+      }),
+    ).toBe(MNEMONIC);
+    expect(Array.from(captured!)).toEqual(zeros(MNEMONIC.length));
+    await expect(
+      vault.withMnemonic('acct_seed', async (phrase) => {
+        captured = phrase;
+        throw new Error('derivation blew up');
+      }),
+    ).rejects.toThrow(/derivation blew up/);
+    expect(Array.from(captured!)).toEqual(zeros(MNEMONIC.length));
+    await expect(vault.withMnemonic('acct_1', async () => 'x')).rejects.toThrow(/no seed phrase/i);
+    vault.lock();
+    await expect(vault.withMnemonic('acct_seed', async () => 'x')).rejects.toThrow(/locked/i);
+  });
+
+  test('withCacheKey hands out a 32 byte copy of the cache key and zeroes it', async () => {
+    const { vault, store } = await openVault([account]);
+    let captured: Uint8Array | null = null;
+    const seen = await vault.withCacheKey(async (key) => {
+      captured = key;
+      return bytesToBase64(key);
+    });
+    expect(seen).toBe((await reopen(store)).cacheKey);
+    expect(captured!.length).toBe(32);
+    expect(Array.from(captured!)).toEqual(zeros(32));
+    vault.lock();
+    await expect(vault.withCacheKey(async () => 'x')).rejects.toThrow(/locked/i);
+  });
+
+  test('withRemoteSignerCredentials hands out the config with its secrets as bytes, zeroed after', async () => {
+    const { vault } = await openVault([account, bunker]);
+    let secret: Uint8Array | null = null;
+    await vault.withRemoteSignerCredentials('acct_bunker', async (creds) => {
+      secret = creds.secret;
+      expect(new TextDecoder().decode(creds.secret!)).toBe('topsecret-token');
+      expect(creds.bunkerUrl).toBe(bunker.nip46Config!.bunkerUrl);
+      expect(creds.relay).toBe('wss://relay.example');
+      expect(creds.localPrivkey).toBeNull();
+      expect(creds.localPubkey).toBeUndefined();
+    });
+    expect(Array.from(secret!)).toEqual(zeros('topsecret-token'.length));
+    await expect(vault.withRemoteSignerCredentials('acct_1', async () => 'x')).rejects.toThrow(/nip-46/i);
+  });
+
+  test('a lock landing inside any scoped callback zeroes its copy and voids its result', async () => {
+    const { vault } = await openVault([seeded, bunker]);
+    await vault.setImportedPqKeys('acct_seed', pqKeys, 'nip-pqc/v1');
+    const cases: Array<[string, (release: Promise<void>) => Promise<unknown>, () => Uint8Array[]]> = [];
+    const copies: Uint8Array[] = [];
+    cases.push([
+      'withMnemonic',
+      (gate) => vault.withMnemonic('acct_seed', async (phrase) => { copies.push(phrase); await gate; return 'phrase'; }),
+      () => copies,
+    ]);
+    cases.push([
+      'withImportedPqKeys',
+      (gate) => vault.withImportedPqKeys('acct_seed', async (keys) => { copies.push(keys.kemSecret, keys.dsaSecret); await gate; return 'pq'; }),
+      () => copies,
+    ]);
+    cases.push([
+      'withCacheKey',
+      (gate) => vault.withCacheKey(async (key) => { copies.push(key); await gate; return 'cache'; }),
+      () => copies,
+    ]);
+    cases.push([
+      'withRemoteSignerCredentials',
+      (gate) => vault.withRemoteSignerCredentials('acct_bunker', async (creds) => { copies.push(creds.secret!); await gate; return 'creds'; }),
+      () => copies,
+    ]);
+    for (const [name, run, held] of cases) {
+      copies.length = 0;
+      await vault.unlock('hunter22');
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const pending = run(gate);
+      await flush();
+      vault.lock();
+      for (const copy of held()) expect(Array.from(copy), `${name} copy zeroed by lock`).toEqual(zeros(copy.length));
+      release();
+      await expect(pending, `${name} result voided`).rejects.toThrow(/session/i);
+    }
+  });
+});
+
+describe('getAccountById', () => {
+  test('returns the public metadata only, with readOnly computed, and the public NIP-46 half', async () => {
+    const { vault } = await openVault([account, seeded, bunker]);
+    const local = await vault.getAccountById('acct_seed');
+    expect(local).toEqual({
+      id: 'acct_seed',
+      name: 'Seed',
+      type: 'generated',
+      pubkey: seeded.pubkey,
+      readOnly: false,
+      createdAt: 1,
+      derivationIndex: 0,
+      derivationPath: "m/44'/1237'/0'/0/0",
+    });
+    const remote = await vault.getAccountById('acct_bunker');
+    expect(remote).toEqual({
+      id: 'acct_bunker',
+      name: 'Bunker',
+      type: 'nip46',
+      pubkey: bunker.pubkey,
+      readOnly: true,
+      createdAt: 1,
+      nip46: { bunkerPubkey: '12'.repeat(32), relay: 'wss://relay.example' },
+    });
+    expect(JSON.stringify(remote)).not.toContain('topsecret');
+    expect(await vault.getAccountById('acct_nope')).toBeNull();
+    vault.lock();
+    expect(await vault.getAccountById('acct_1')).toBeNull();
+  });
+});

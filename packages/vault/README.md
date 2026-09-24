@@ -109,7 +109,7 @@ them. A JavaScript string cannot be overwritten: an nsec held as one stays reada
 until the collector happens to reclaim it.
 
 ```ts
-const mem = toMemoryAccount(stored);   // privkeyBytes, mnemonicBytes, pqKemSecretBytes, pqDsaSecretBytes
+const mem = toMemoryAccount(stored);   // privkeyBytes, mnemonicBytes, pq*SecretBytes, nip46.{secretBytes,localPrivkeyBytes}
 zeroMemoryAccount(mem);                // every byte of key material is now zero
 const back = toStorageAccount(mem);    // lossless, including fields this package does not model
 ```
@@ -117,6 +117,32 @@ const back = toStorageAccount(mem);    // lossless, including fields this packag
 The round trip carries unknown fields through untouched. The browser extension stores
 `walletConfig` on an account and this package deliberately does not model it; a host that read a
 vault, dropped the field and saved would silently destroy the user's wallet connection.
+
+## The `Vault`
+
+`Vault` is the lifecycle over one injected `KeyValueStore`: `create`, `unlock`, `lock`, `destroy`,
+`changePassword`, the brute-force guard and the auto-lock. Nothing on it ever returns key
+material. Every secret is reached through a scoped accessor that hands a callback a copy, zeroes
+the copy on every path, and voids the result if the vault was locked while the callback ran:
+
+| Accessor | Hands `fn` |
+| --- | --- |
+| `withPrivkey(accountId, fn)` | the 32-byte private key |
+| `withMnemonic(accountId, fn)` | the seed phrase as UTF-8 bytes |
+| `withImportedPqKeys(accountId, fn)` | the imported ML-KEM / ML-DSA secrets, with the public halves and profile |
+| `withCacheKey(fn)` | the 32-byte private-cache key |
+| `withRemoteSignerCredentials(accountId, fn)` | a NIP-46 account's config, local key and connect token as bytes |
+
+The callback computes and returns; it must not externalize anything, because a void arrives
+after a publish has already happened. The doc comment on `withPrivkey` has the full contract.
+
+Account mutations each re-seal the record under the key already in memory, so none needs the
+password: `addAccount`, `removeAccount` (which also moves the session on, voiding any callback
+still holding that account's key), `updateAccountNip46Keys`, `setImportedPqKeys` and
+`clearImportedPqKeys`. A write the store refuses is undone in memory, so the open vault never
+describes a record that was not saved. `listAccounts` and `getAccountById` return public
+metadata through the `SafeAccount` allowlist; for a NIP-46 account the latter adds the public
+half of the connection (bunker pubkey, relay, local pubkey), never the credentials.
 
 ## The golden vector
 

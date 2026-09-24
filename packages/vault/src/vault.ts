@@ -50,11 +50,15 @@ import {
 import { openRecord, sealPayload } from './record.js';
 import {
   bytesToBase64,
+  bytesToHexBytes,
+  hexBytesToBytes,
+  toMemoryAccount,
   toMemoryPayload,
   toStoragePayload,
+  zeroMemoryAccount,
   zeroMemoryPayload,
 } from './serialization.js';
-import type { MemoryVaultPayload, VaultPayload, VaultRecord } from './types.js';
+import type { MemoryAccount, MemoryVaultPayload, VaultPayload, VaultRecord } from './types.js';
 
 /** What a {@link Vault} needs from its host. */
 export interface VaultOptions {
@@ -72,6 +76,53 @@ interface HeldKey {
   salt: Uint8Array;
   iterations: number;
 }
+
+/**
+ * Public account metadata plus, for a remote-signer account, the public half of its NIP-46
+ * configuration: enough to say "connected to bunker X over relay Y", never the credentials.
+ * The credentials go through {@link Vault.withRemoteSignerCredentials}.
+ */
+export type VaultAccount = SafeAccount & {
+  nip46?: { bunkerPubkey: string | null; relay: string | null; localPubkey?: string };
+};
+
+/** What {@link Vault.withRemoteSignerCredentials} hands its callback. Every byte array is zeroed on return. */
+export interface RemoteSignerCredentials {
+  bunkerUrl: string;
+  relay: string | null;
+  localPubkey?: string;
+  /** The stored local keypair's 32-byte private key, or null when none has been stored yet. */
+  localPrivkey: Uint8Array | null;
+  /** The connect token as UTF-8, or null when the bunker needs none. */
+  secret: Uint8Array | null;
+}
+
+/** An externally generated ML-KEM / ML-DSA pair, as {@link Vault.setImportedPqKeys} takes it. */
+export interface PqKeyPair {
+  kem: { publicKey: Uint8Array; secretKey: Uint8Array };
+  dsa: { publicKey: Uint8Array; secretKey: Uint8Array };
+}
+
+/** What {@link Vault.withImportedPqKeys} hands its callback. The two secrets are zeroed on return. */
+export interface ImportedPqKeys {
+  profile: string;
+  /** Base64, as stored. */
+  kemPublic: string;
+  /** Base64, as stored. */
+  dsaPublic: string;
+  kemSecret: Uint8Array;
+  dsaSecret: Uint8Array;
+}
+
+/** A change to the open payload: applied in memory, persisted, undone if the write fails. */
+interface Mutation {
+  /** Reverts the in-memory change. Runs only when the store refused the write. */
+  undo: () => void;
+  /** Runs once the write has landed; where outgoing secrets get zeroed. */
+  commit?: () => void;
+}
+
+const BUNKER_PUBKEY = /^bunker:\/\/([0-9a-fA-F]{64})(?:[/?#]|$)/;
 
 /** Thrown by {@link Vault.unlock} while the brute-force guard is refusing attempts. */
 export class VaultLockedOutError extends Error {
@@ -398,6 +449,9 @@ export class Vault {
    * after a lock, it simply cannot return anything. Cancelling one needs an `AbortSignal` in
    * this contract, which belongs with whatever introduces long-lived signer handles.
    *
+   * The same contract holds for every other scoped accessor on this class: {@link withMnemonic},
+   * {@link withImportedPqKeys}, {@link withCacheKey} and {@link withRemoteSignerCredentials}.
+   *
    * @param accountId the account, or undefined for the active one
    * @throws if the vault is locked, the account has no private key, or the session was revoked
    *         while `fn` was running
@@ -406,31 +460,101 @@ export class Vault {
     accountId: string | undefined,
     fn: (key: Uint8Array) => Promise<T>,
   ): Promise<T> {
-    const payload = this.#payload;
-    if (!payload) throw new Error('Vault is locked');
-    this.#armAutoLock(); // Using a key is activity; it pushes the idle deadline out.
-
+    const payload = this.#requireOpen();
     const id = accountId ?? payload.activeAccountId;
     const account = payload.accounts.find((candidate) => candidate.id === id);
     if (!account?.privkeyBytes) throw new Error('No private key for this account');
-
-    const revision = this.#sessionRevision;
     const key = new Uint8Array(account.privkeyBytes);
-    // Registered so a lock taken mid-callback reaches this copy too. Otherwise a callback that
-    // is already running signs on with live key material while `isLocked()` says true.
-    this.#liveKeys.add(key);
-    try {
-      const result = await fn(key);
-      // Zeroing the copy is necessary and not sufficient. NIP-44, HMAC and AES-GCM all accept
-      // 32 zero bytes without complaint, so a callback that read the key after the lock landed
-      // would hand back a publishable signature or ciphertext computed under a zero key, with
-      // nothing anywhere to notice. Whatever it produced under a revoked session is void.
-      this.#assertRevision(revision);
-      return result;
-    } finally {
-      this.#liveKeys.delete(key);
-      key.fill(0);
+    return this.#scoped([key], () => fn(key));
+  }
+
+  /**
+   * Run `fn` with the account's seed phrase as UTF-8 bytes; the copy is zeroed afterwards.
+   *
+   * For sub-account derivation and for showing the phrase. Same contract as
+   * {@link withPrivkey}: compute and return, never externalize. A BIP-39 library that wants a
+   * string gets one from the caller at the last moment, inside `fn`; the vault's own copy
+   * stays zeroable.
+   *
+   * @throws if the vault is locked, the account has no mnemonic, or the session was revoked
+   */
+  async withMnemonic<T>(accountId: string, fn: (phrase: Uint8Array) => Promise<T>): Promise<T> {
+    const account = this.#findAccount(this.#requireOpen(), accountId);
+    if (!account?.mnemonicBytes) throw new Error('No seed phrase for this account');
+    const phrase = new Uint8Array(account.mnemonicBytes);
+    return this.#scoped([phrase], () => fn(phrase));
+  }
+
+  /**
+   * Run `fn` with the account's imported post-quantum secret keys; both copies are zeroed
+   * afterwards. Same contract as {@link withPrivkey}.
+   *
+   * Throws rather than returning null when the account has none: a caller that wants to fall
+   * back to deriving from the seed asks {@link hasImportedPqKeys} first. A `T | null` return
+   * would make an `fn` that legitimately returns null indistinguishable from "no keys".
+   *
+   * @throws if the vault is locked, the account has no imported keys, or the session was revoked
+   */
+  async withImportedPqKeys<T>(accountId: string, fn: (keys: ImportedPqKeys) => Promise<T>): Promise<T> {
+    const account = this.#findAccount(this.#requireOpen(), accountId);
+    if (!account?.pqPublic || !account.pqKemSecretBytes || !account.pqDsaSecretBytes) {
+      throw new Error('No imported post-quantum keys for this account');
     }
+    const kemSecret = new Uint8Array(account.pqKemSecretBytes);
+    const dsaSecret = new Uint8Array(account.pqDsaSecretBytes);
+    const { profile, kem: kemPublic, dsa: dsaPublic } = account.pqPublic;
+    return this.#scoped([kemSecret, dsaSecret], () =>
+      fn({ profile, kemPublic, dsaPublic, kemSecret, dsaSecret }),
+    );
+  }
+
+  /**
+   * Run `fn` with the 32-byte private-cache key; the copy is zeroed afterwards.
+   *
+   * The key that encrypts whatever the host caches on the user's behalf. Same contract as
+   * {@link withPrivkey}. Every open vault has one: `unlock` mints a key for a record that
+   * predates the field and re-seals, so there is no "no cache key" state to handle.
+   */
+  async withCacheKey<T>(fn: (key: Uint8Array) => Promise<T>): Promise<T> {
+    const payload = this.#requireOpen();
+    if (!payload.cacheKeyBytes) throw new Error('Vault is locked');
+    const key = new Uint8Array(payload.cacheKeyBytes);
+    return this.#scoped([key], () => fn(key));
+  }
+
+  /**
+   * Run `fn` with a remote-signer account's NIP-46 configuration, secrets as bytes; every
+   * byte array handed over is zeroed afterwards. Same contract as {@link withPrivkey}.
+   *
+   * The local private key comes decoded, 32 bytes, from the hex the record holds; the connect
+   * token comes as UTF-8. Neither passes through a string on the way. `bunkerUrl` is a string
+   * and is the address to connect to; it may carry the token in its query if the user pasted
+   * one that did, so it is configuration, not something to show.
+   *
+   * @throws if the vault is locked, the account is not a NIP-46 account, or the session was
+   *         revoked
+   */
+  async withRemoteSignerCredentials<T>(
+    accountId: string,
+    fn: (credentials: RemoteSignerCredentials) => Promise<T>,
+  ): Promise<T> {
+    const account = this.#findAccount(this.#requireOpen(), accountId);
+    if (!account || account.type !== 'nip46' || !account.nip46) {
+      throw new Error('This account is not a NIP-46 account');
+    }
+    const config = account.nip46;
+    const localPrivkey = config.localPrivkeyBytes ? hexBytesToBytes(config.localPrivkeyBytes) : null;
+    const secret = config.secretBytes ? new Uint8Array(config.secretBytes) : null;
+    const copies = [localPrivkey, secret].filter((copy): copy is Uint8Array => copy !== null);
+    return this.#scoped(copies, () =>
+      fn({
+        bunkerUrl: config.bunkerUrl,
+        relay: config.relay,
+        ...(config.localPubkey !== undefined ? { localPubkey: config.localPubkey } : {}),
+        localPrivkey,
+        secret,
+      }),
+    );
   }
 
   /**
@@ -444,9 +568,30 @@ export class Vault {
   async listAccounts(): Promise<SafeAccount[]> {
     const payload = this.#payload;
     if (!payload) return [];
-    return payload.accounts.map((account) =>
-      toSafeAccount({ ...account, readOnly: account.readOnly || !account.privkeyBytes }),
-    );
+    return payload.accounts.map((account) => this.#toSafe(account));
+  }
+
+  /**
+   * One account's public metadata by id, or null when there is no such account or the vault
+   * is locked. A remote-signer account also carries the public half of its NIP-46 config
+   * (the bunker's pubkey, the relay, the local pubkey) so a caller can name the connection;
+   * the credentials go through {@link withRemoteSignerCredentials}.
+   */
+  async getAccountById(accountId: string): Promise<VaultAccount | null> {
+    const payload = this.#payload;
+    if (!payload) return null;
+    const account = this.#findAccount(payload, accountId);
+    if (!account) return null;
+    const safe: VaultAccount = this.#toSafe(account);
+    if (account.type === 'nip46' && account.nip46) {
+      const match = BUNKER_PUBKEY.exec(account.nip46.bunkerUrl);
+      safe.nip46 = {
+        bunkerPubkey: match ? match[1]!.toLowerCase() : null,
+        relay: account.nip46.relay,
+        ...(account.nip46.localPubkey !== undefined ? { localPubkey: account.nip46.localPubkey } : {}),
+      };
+    }
+    return safe;
   }
 
   /** The active account's id, or null when there is none — or when the vault is locked. */
@@ -459,8 +604,7 @@ export class Vault {
     const revision = this.#sessionRevision;
     return this.#run(async () => {
       this.#assertRevision(revision);
-      const payload = this.#payload;
-      if (!payload) throw new Error('Vault is locked');
+      const payload = this.#requireOpen();
       if (!payload.accounts.some((account) => account.id === id)) {
         throw new Error('Account not found');
       }
@@ -468,6 +612,183 @@ export class Vault {
       payload.activeAccountId = id;
       await this.#saveNow(revision);
     });
+  }
+
+  /**
+   * Add an account and re-seal. The active account does not change: adding is not switching.
+   *
+   * @throws if the vault is locked, an account with this id is already in it, or the store
+   *         refused the write — in which case the account is not left in memory either
+   */
+  async addAccount(account: Account): Promise<void> {
+    return this.#mutate((payload) => {
+      if (payload.accounts.some((candidate) => candidate.id === account.id)) {
+        throw new Error('Account already exists in vault');
+      }
+      const added = toMemoryAccount(account);
+      payload.accounts.push(added);
+      return {
+        undo: () => {
+          payload.accounts.splice(payload.accounts.indexOf(added), 1);
+          zeroMemoryAccount(added);
+        },
+      };
+    });
+  }
+
+  /**
+   * Remove an account, zero its secrets and re-seal. If it was the active account, the first
+   * remaining one becomes active.
+   *
+   * This moves the session on, as the extension's does: a `withPrivkey` callback still
+   * holding the removed account's key when this lands gets its result voided rather than
+   * returned, since the key it computed under no longer exists. The vault stays open.
+   *
+   * @throws if the vault is locked or there is no such account
+   */
+  async removeAccount(accountId: string): Promise<void> {
+    return this.#mutate(
+      (payload) => {
+        const index = payload.accounts.findIndex((candidate) => candidate.id === accountId);
+        if (index < 0) throw new Error('Account not found');
+        const [removed] = payload.accounts.splice(index, 1) as [MemoryAccount];
+        const previousActive = payload.activeAccountId;
+        if (payload.activeAccountId === accountId) {
+          payload.activeAccountId = payload.accounts[0]?.id ?? null;
+        }
+        return {
+          undo: () => {
+            payload.accounts.splice(index, 0, removed);
+            payload.activeAccountId = previousActive;
+          },
+          commit: () => zeroMemoryAccount(removed),
+        };
+      },
+      { invalidateSession: true },
+    );
+  }
+
+  /**
+   * Store the local keypair a NIP-46 session was established with, so a restart reconnects
+   * as the same client identity. Takes the raw 32-byte key, copies it, and keeps the copy as
+   * the ASCII hex the record stores; the previous key, if any, is zeroed once the write lands.
+   *
+   * @throws if the vault is locked, the account is not a NIP-46 account, or the key is not
+   *         32 bytes
+   */
+  async updateAccountNip46Keys(accountId: string, localPrivkey: Uint8Array, localPubkey: string): Promise<void> {
+    if (localPrivkey.length !== VAULT_KEY_BYTES) {
+      throw new Error(`A NIP-46 local private key is ${VAULT_KEY_BYTES} bytes`);
+    }
+    const encoded = bytesToHexBytes(localPrivkey);
+    return this.#mutate((payload) => {
+      const account = this.#findAccount(payload, accountId);
+      if (!account || account.type !== 'nip46' || !account.nip46) {
+        encoded.fill(0);
+        throw new Error('This account is not a NIP-46 account');
+      }
+      const config = account.nip46;
+      const previous = { key: config.localPrivkeyBytes, pubkey: config.localPubkey };
+      config.localPrivkeyBytes = encoded;
+      config.localPubkey = localPubkey;
+      return {
+        undo: () => {
+          encoded.fill(0);
+          if (previous.key === undefined) delete config.localPrivkeyBytes;
+          else config.localPrivkeyBytes = previous.key;
+          if (previous.pubkey === undefined) delete config.localPubkey;
+          else config.localPubkey = previous.pubkey;
+        },
+        commit: () => previous.key?.fill(0),
+      };
+    });
+  }
+
+  /**
+   * Store externally generated post-quantum keys on an account and re-seal. The caller has
+   * validated the pair; this only stores. Replacing an existing import zeroes the outgoing
+   * secrets once the write lands.
+   *
+   * @throws if the vault is locked or there is no such account
+   */
+  async setImportedPqKeys(accountId: string, keys: PqKeyPair, profile: string): Promise<void> {
+    const kemSecret = new Uint8Array(keys.kem.secretKey);
+    const dsaSecret = new Uint8Array(keys.dsa.secretKey);
+    const importedAt = this.#now();
+    return this.#mutate((payload) => {
+      const account = this.#findAccount(payload, accountId);
+      if (!account) {
+        kemSecret.fill(0);
+        dsaSecret.fill(0);
+        throw new Error('Account not found');
+      }
+      const previous = {
+        pqPublic: account.pqPublic,
+        kem: account.pqKemSecretBytes,
+        dsa: account.pqDsaSecretBytes,
+      };
+      account.pqPublic = {
+        profile,
+        kem: bytesToBase64(keys.kem.publicKey),
+        dsa: bytesToBase64(keys.dsa.publicKey),
+        importedAt,
+      };
+      account.pqKemSecretBytes = kemSecret;
+      account.pqDsaSecretBytes = dsaSecret;
+      return {
+        undo: () => {
+          kemSecret.fill(0);
+          dsaSecret.fill(0);
+          if (previous.pqPublic === undefined) delete account.pqPublic;
+          else account.pqPublic = previous.pqPublic;
+          account.pqKemSecretBytes = previous.kem;
+          account.pqDsaSecretBytes = previous.dsa;
+        },
+        commit: () => {
+          previous.kem?.fill(0);
+          previous.dsa?.fill(0);
+        },
+      };
+    });
+  }
+
+  /**
+   * Remove an account's imported post-quantum keys, zeroing the secrets, and re-seal.
+   *
+   * @returns true when there was something to remove
+   * @throws if the vault is locked or there is no such account
+   */
+  async clearImportedPqKeys(accountId: string): Promise<boolean> {
+    let cleared = false;
+    await this.#mutate((payload) => {
+      const account = this.#findAccount(payload, accountId);
+      if (!account) throw new Error('Account not found');
+      if (!account.pqPublic) return null;
+      cleared = true;
+      const previous = { pqPublic: account.pqPublic, kem: account.pqKemSecretBytes, dsa: account.pqDsaSecretBytes };
+      account.pqPublic = null;
+      account.pqKemSecretBytes = null;
+      account.pqDsaSecretBytes = null;
+      return {
+        undo: () => {
+          account.pqPublic = previous.pqPublic;
+          account.pqKemSecretBytes = previous.kem;
+          account.pqDsaSecretBytes = previous.dsa;
+        },
+        commit: () => {
+          previous.kem?.fill(0);
+          previous.dsa?.fill(0);
+        },
+      };
+    });
+    return cleared;
+  }
+
+  /** Does this account carry imported post-quantum keys? False while locked. Reveals nothing secret. */
+  hasImportedPqKeys(accountId: string): boolean {
+    const payload = this.#payload;
+    if (!payload) return false;
+    return !!this.#findAccount(payload, accountId)?.pqPublic;
   }
 
   // ── Internals ─────────────────────────────────────────────────────────────────────────
@@ -501,6 +822,90 @@ export class Vault {
       () => undefined,
     );
     return result;
+  }
+
+  /** The open payload, or the one error every accessor and mutation share. */
+  #requireOpen(): MemoryVaultPayload {
+    const payload = this.#payload;
+    if (!payload) throw new Error('Vault is locked');
+    return payload;
+  }
+
+  #findAccount(payload: MemoryVaultPayload, accountId: string): MemoryAccount | undefined {
+    return payload.accounts.find((candidate) => candidate.id === accountId);
+  }
+
+  #toSafe(account: MemoryAccount): SafeAccount {
+    return toSafeAccount({ ...account, readOnly: account.readOnly || !account.privkeyBytes });
+  }
+
+  /**
+   * Run a callback over copies of secret bytes, and zero every copy afterwards on every path.
+   *
+   * The discipline behind {@link withPrivkey} and its siblings, in one place so a new accessor
+   * cannot get it subtly wrong. The copies are registered so a lock taken mid-callback reaches
+   * them too: otherwise a callback that is already running keeps computing with live key
+   * material while `isLocked()` says true. And zeroing is necessary but not sufficient —
+   * NIP-44, HMAC and AES-GCM all accept 32 zero bytes without complaint, so a callback that
+   * read the key after the lock landed would hand back a publishable signature or ciphertext
+   * computed under a zero key, with nothing anywhere to notice. Whatever it produced under a
+   * revoked session is void, and this throws instead of returning it.
+   *
+   * Using a secret is activity; it pushes the idle deadline out.
+   */
+  async #scoped<T>(copies: Uint8Array[], fn: () => Promise<T>): Promise<T> {
+    this.#armAutoLock();
+    const revision = this.#sessionRevision;
+    for (const copy of copies) this.#liveKeys.add(copy);
+    try {
+      const result = await fn();
+      this.#assertRevision(revision);
+      return result;
+    } finally {
+      for (const copy of copies) {
+        this.#liveKeys.delete(copy);
+        copy.fill(0);
+      }
+    }
+  }
+
+  /**
+   * Apply a change to the open payload and re-seal, on the lane, under the revision discipline.
+   *
+   * `apply` edits the payload in place and hands back how to undo it; `null` means there was
+   * nothing to change and nothing is written. The undo runs only when the store refuses the
+   * write, so memory never describes a record that was not saved. `commit` runs after the
+   * write has landed and is where outgoing secrets get zeroed: zeroing them before the write
+   * would destroy the only copy of something the undo might have to put back.
+   *
+   * With `invalidateSession`, the session moves on before the write, so anything in flight
+   * against the old one — a scoped callback holding a key this change removes — is voided
+   * rather than returned. The write itself is made under the new revision, so a lock landing
+   * inside it still wins.
+   */
+  async #mutate(
+    apply: (payload: MemoryVaultPayload) => Mutation | null,
+    options: { invalidateSession?: boolean } = {},
+  ): Promise<void> {
+    const revision = this.#sessionRevision;
+    return this.#run(async () => {
+      this.#assertRevision(revision);
+      const payload = this.#requireOpen();
+      let current = revision;
+      if (options.invalidateSession) {
+        this.#invalidateSession();
+        current = this.#sessionRevision;
+      }
+      const mutation = apply(payload);
+      if (mutation === null) return;
+      try {
+        await this.#saveNow(current);
+      } catch (error) {
+        mutation.undo();
+        throw error;
+      }
+      mutation.commit?.();
+    });
   }
 
   async #readRecord(): Promise<VaultRecord | undefined> {

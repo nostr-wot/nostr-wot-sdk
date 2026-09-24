@@ -58,5 +58,11 @@ export {
 export type { AutoLockOption } from './autolock.js';
 export { AUTO_LOCK_OPTIONS, shouldAutoLock } from './autolock.js';
 
-export type { VaultOptions } from './vault.js';
+export type {
+  ImportedPqKeys,
+  PqKeyPair,
+  RemoteSignerCredentials,
+  VaultAccount,
+  VaultOptions,
+} from './vault.js';
 export { Vault, VaultLockedOutError } from './vault.js';
