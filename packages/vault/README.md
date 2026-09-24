@@ -45,6 +45,14 @@ const recovered = decrypt(key, iv, ciphertext); // throws if the key is wrong
 expects. `decrypt` throws when the tag does not authenticate: a wrong key fails loudly rather
 than returning plausible garbage.
 
+Both functions reject any key that is not exactly 32 bytes. AES itself accepts 16 and 24, so
+without that check a port returning a short key would silently produce AES-128 vaults and report
+success.
+
+The caller owns the lifetime of the derived key and of the recovered plaintext. This package
+cannot zero either — a JavaScript string is immutable, so a decrypted mnemonic stays readable in
+the heap until the collector reclaims it. Hand it to whatever consumes it and do not stash it.
+
 ## The empty password
 
 `iterationsFor('')` returns the lower work factor on purpose. A "never lock" vault is stored

@@ -42,6 +42,24 @@ export interface Pbkdf2Port {
   derive(password: string, salt: Uint8Array, iterations: number): Promise<Uint8Array>;
 }
 
+/**
+ * Reject anything that is not a 256-bit key.
+ *
+ * noble's own check accepts 16, 24 and 32 bytes, because those are all valid AES key sizes. For
+ * this vault they are not: a 16-byte key silently produces AES-128-GCM and reports success.
+ * That matters because {@link Pbkdf2Port} is an injection seam for a third-party implementation
+ * and nothing else inspects what that implementation returns, so a host whose native PBKDF2 uses
+ * a 16-byte dkLen would write AES-128 vaults with no error anywhere.
+ */
+function assertVaultKey(key: Uint8Array): Uint8Array {
+  if (key.length !== VAULT_KEY_BYTES) {
+    throw new Error(
+      `vault key must be ${VAULT_KEY_BYTES} bytes (256 bits) for AES-256-GCM, got ${key.length}`,
+    );
+  }
+  return key;
+}
+
 /** The default {@link Pbkdf2Port}: pure JavaScript, no native dependency anywhere. */
 export const noblePbkdf2: Pbkdf2Port = {
   async derive(password, salt, iterations) {
@@ -57,11 +75,19 @@ export const noblePbkdf2: Pbkdf2Port = {
  *
  * `ciphertext` carries the 16-byte authentication tag appended, which is the layout WebCrypto
  * returns and expects.
+ *
+ * Throws unless `key` is exactly {@link VAULT_KEY_BYTES} long — see {@link assertVaultKey}.
+ *
+ * The caller owns the lifetime of `key` and of `plaintext`. This package cannot zero either: a
+ * JavaScript string is immutable and unreachable to overwrite, and the key array belongs to
+ * whoever derived it. Keep both alive for as short a time as the host allows, and zero the key
+ * bytes yourself when done.
  */
 export function encrypt(
   key: Uint8Array,
   plaintext: string,
 ): { iv: Uint8Array; ciphertext: Uint8Array } {
+  assertVaultKey(key);
   const iv = randomBytes(VAULT_IV_BYTES);
   return { iv, ciphertext: gcm(key, iv).encrypt(new TextEncoder().encode(plaintext)) };
 }
@@ -70,8 +96,14 @@ export function encrypt(
  * Decrypt an AES-256-GCM payload.
  *
  * Throws when the tag does not authenticate — a wrong key fails loudly rather than returning
- * plausible garbage.
+ * plausible garbage — and unless `key` is exactly {@link VAULT_KEY_BYTES} long.
+ *
+ * The caller owns the lifetime of `key` and of the returned plaintext. This package cannot zero
+ * the returned string: JavaScript strings are immutable, so the secret stays readable in the
+ * heap until the garbage collector happens to reclaim it. Hand it straight to whatever consumes
+ * it and do not stash it.
  */
 export function decrypt(key: Uint8Array, iv: Uint8Array, ciphertext: Uint8Array): string {
+  assertVaultKey(key);
   return new TextDecoder().decode(gcm(key, iv).decrypt(ciphertext));
 }

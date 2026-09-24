@@ -27,7 +27,14 @@ export const LEGACY_VAULT_PBKDF2_ITERATIONS = 210_000;
 /** Shortest password a user may choose when they do protect the vault. */
 export const MIN_PASSWORD_LENGTH = 8;
 
-/** Salt length in bytes, drawn fresh per vault. */
+/**
+ * Salt length in bytes, drawn fresh per vault.
+ *
+ * Consumer-facing: this is the number the code that *creates* a vault should draw, so the
+ * envelope matches what the browser extension wrote. Nothing in this package enforces it —
+ * PBKDF2 accepts a salt of any length, and `noblePbkdf2.derive` will happily take a shorter one.
+ * The guard that does exist is on the derived key length, not on this.
+ */
 export const VAULT_SALT_BYTES = 16;
 
 /** AES-GCM IV length in bytes, drawn fresh per encryption. */

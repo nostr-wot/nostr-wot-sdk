@@ -11,7 +11,7 @@
  */
 import { describe, test, expect } from 'vitest';
 import { webcrypto } from 'node:crypto';
-import { noblePbkdf2, decrypt } from '../src/crypto.js';
+import { noblePbkdf2, encrypt, decrypt } from '../src/crypto.js';
 
 describe('WebCrypto compatibility', () => {
   test('the noble key matches what WebCrypto PBKDF2 derives', async () => {
@@ -45,5 +45,21 @@ describe('WebCrypto compatibility', () => {
       ),
     );
     expect(decrypt(raw, iv, ct)).toBe('existing vault');
+  });
+
+  /**
+   * The other direction, and the one that is easy to leave out: a vault written on the phone
+   * has to open in the shipping extension. Without this, changing `encrypt` to prepend the GCM
+   * tag rather than append it passes the noble-to-noble roundtrip and passes the test above,
+   * and every phone-written vault becomes unreadable by the extension with a green suite.
+   */
+  test('WebCrypto AES-GCM decrypts a payload noble produced', async () => {
+    const raw = new Uint8Array(32).fill(9);
+    const { iv, ciphertext } = encrypt(raw, 'phone written vault');
+    const key = await webcrypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['decrypt']);
+    const plaintext = new Uint8Array(
+      await webcrypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext),
+    );
+    expect(new TextDecoder().decode(plaintext)).toBe('phone written vault');
   });
 });
