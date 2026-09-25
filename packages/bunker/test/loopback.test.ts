@@ -908,24 +908,28 @@ describe("BunkerServer loopback", () => {
 
       // Anyone can encrypt to the server's public key, so the junk is 200 well-formed
       // requests from 200 fresh keypairs: exactly what reaches the request-id window.
+      // Sent in awaited batches: the property under test is the dedup window, not relay
+      // throughput, and 200 publishes plus 200 pongs in one burst can time out a loopback publish.
       const pool = new SimplePool();
       cleanups.push(() => pool.close([relay.url]));
-      const accepted: Promise<unknown>[] = [];
-      for (let i = 0; i < 200; i++) {
-        const sk = generateSecretKey();
-        const convKey = nip44.utils.getConversationKey(sk, bounded.connectionPubkey);
-        const junk = finalizeEvent(
-          {
-            kind: NostrConnect,
-            created_at: Math.floor(Date.now() / 1000),
-            tags: [["p", bounded.connectionPubkey]],
-            content: nip44.encrypt(JSON.stringify({ id: `junk-${i}`, method: "ping", params: [] }), convKey),
-          },
-          sk,
-        );
-        accepted.push(Promise.any(pool.publish([relay.url], junk)));
+      for (let batch = 0; batch < 200; batch += 25) {
+        const accepted: Promise<unknown>[] = [];
+        for (let i = batch; i < batch + 25; i++) {
+          const sk = generateSecretKey();
+          const convKey = nip44.utils.getConversationKey(sk, bounded.connectionPubkey);
+          const junk = finalizeEvent(
+            {
+              kind: NostrConnect,
+              created_at: Math.floor(Date.now() / 1000),
+              tags: [["p", bounded.connectionPubkey]],
+              content: nip44.encrypt(JSON.stringify({ id: `junk-${i}`, method: "ping", params: [] }), convKey),
+            },
+            sk,
+          );
+          accepted.push(Promise.any(pool.publish([relay.url], junk)));
+        }
+        await Promise.all(accepted); // this batch is in the relay before the next one
       }
-      await Promise.all(accepted); // every junk request is in the relay before the replay
       await raw.send("once", "get_public_key", []); // the same request id again, a fresh event
       await raw.send("after", "ping", []);
       await raw.waitFor("after");
