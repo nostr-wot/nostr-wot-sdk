@@ -35,6 +35,12 @@ jobs:
       - name: Build
         run: npm run build
 
+      # A smoke test of the wiring only: the build above just stamped every dist/, so this
+      # passes whenever the stamp and the check agree on the inputs. The property that the
+      # check can fail is proven by packages/vault/test/dist-freshness.test.ts in the Test step.
+      - name: Check dist/ stamps
+        run: npm run check:dist
+
       - name: Type check
         run: npm run typecheck
 

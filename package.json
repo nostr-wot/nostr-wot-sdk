@@ -36,6 +36,7 @@
     "test": "npm run test -ws --if-present",
     "test:run": "npm run test:run -ws --if-present",
     "typecheck": "npm run typecheck -ws --if-present",
+    "check:dist": "npm run check:dist -ws --if-present",
     "lint": "eslint . && npm run lint -ws --if-present",
     "clean": "rm -rf packages/*/dist",
     "changeset": "changeset",

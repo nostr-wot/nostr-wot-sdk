@@ -43,7 +43,9 @@
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:run": "vitest run"
+    "test:run": "vitest run",
+    "check:dist": "node ../../scripts/dist-stamp.mjs check",
+    "prepack": "npm run build"
   },
   "dependencies": {
     "@noble/ciphers": "^2.1.1",
