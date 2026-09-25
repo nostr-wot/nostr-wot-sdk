@@ -80,8 +80,10 @@ without cutting the caller off.
 | --- | --- |
 | `getPublicKey`, `getRelays` | none |
 | `signEvent` | `{ event: { kind, content, tags, created_at?, pubkey? } }` |
-| `nip04Encrypt`, `nip44Encrypt` | `{ pubkey, plaintext }` |
+| `nip04Encrypt` | `{ pubkey, plaintext }` |
+| `nip44Encrypt` | `{ pubkey, plaintext, opts?: { scheme: 'pq', recipientKemKey } }` |
 | `nip04Decrypt`, `nip44Decrypt` | `{ pubkey, ciphertext }` |
+| `signPqAttestation` | none |
 
 Everything is validated by `validateRequest` at the boundary and nowhere else: an integer
 `kind`, a string `content`, an array of string arrays as `tags`, pubkeys as 64 lowercase hex
@@ -105,6 +107,87 @@ written verbatim into every activity entry, denied requests included, so an unbo
 let any connected page fill the user's storage. An opaque origin (`location.origin === 'null'`:
 a sandboxed iframe, a `data:` page, Chrome's `file://`) is refused as a web identifier, because
 every such page reports the same string and one remembered allow would cover all of them.
+
+## Post-quantum
+
+The extension already handles post-quantum payloads; a signer that shares its vault and
+does not is a bridge that drops messages, which is worse than one that refuses them. So
+the pipeline does what the extension does, spelled the same, and the cryptography is
+`@nostr-wot/pq`'s: ML-KEM-1024 and ML-DSA-87 keys, the `kind:10203` attestation, the hybrid
+ML-KEM + NIP-44 envelope.
+
+**Keys.** An account's post-quantum keys are resolved by `withPqKeys(vault, account, fn)`,
+in the extension's order: imported keys first (an account only holds them when it could
+not derive, and they are what its published attestation advertises), otherwise derived
+from the seed phrase at the account's own derivation path (`derivationPath`, else
+`derivationIndex`, else 0), so two sub-accounts on one seed do not share keys and an
+account restored at a custom path derives under that path. Nothing is stored: derived keys
+are recomputed per request from the mnemonic already in the vault. Only a 24-word phrase
+may derive; a 12-word phrase is refused (`unsupported`, "Post-quantum keys require a 24-word
+seed phrase") rather than handed a 128-bit key that looks strong, and an account with no
+phrase and no import is refused with "This account has no seed phrase, so it cannot use
+post-quantum keys". Those refusals reach the caller on purpose, after the permission gate
+and any prompt: `schemes` advertises what the signer accepts, not what the selected account
+can do, and the caller has to be able to tell the user which of the reasons it hit.
+
+`withPqKeys` is the only path to the secrets. It hands its callback live key material,
+zeroes every copy in a `finally`, voids a result computed under a session that moved, and
+never returns secret bytes: a callback that hands the buffer back gets zeros. It opens
+inside `withPrivkey`, and only for a request that needs it; a classic request never reads
+the seed phrase or the imported keys.
+
+**Decrypt routes on the payload.** `nip44Decrypt` takes no flag. The envelope is
+self-describing (a version byte and an algorithm byte), so the boundary decides the route
+once (`scheme: 'pq' | 'classic'` on the validated params, required, never defaulted): a
+hybrid payload decrypts through the post-quantum path, a classic one through the path
+everyone uses today, byte for byte, and anything else fails as `operation_failed`. Never
+silently, never partially.
+
+**Encrypt is opt-in, exactly as the extension.** `nip44Encrypt` seals hybrid only when the
+caller passes `opts: { scheme: 'pq', recipientKemKey }`, the recipient's ML-KEM-1024 key as
+2092 base64 characters from their `kind:10203`. It is never inferred from a relay lookup:
+that would put network I/O inside a signing operation and leave only two answers when the
+lookup fails, break every caller or fall back to classic silently, and a silent downgrade
+is the failure the whole scheme exists to prevent. The application that fetched the
+attestation passes the key it has. The options are validated at the boundary as the
+extension validates them, and any other spelling is `invalid_request` rather than classic.
+The sending account needs its own post-quantum keys too, as in the extension.
+
+**A remote account cannot do post-quantum, and is told so.** A bunker knows nothing about
+the envelope; it would answer a hybrid encrypt with classic ciphertext the caller cannot
+tell apart. A post-quantum request on a NIP-46 account is refused at the routing step,
+after the permission gate, before the remote port sees it: "Remote signers do not support
+post-quantum encryption", "Remote signers cannot read post-quantum messages". Classic
+requests still go to the bunker.
+
+**The attestation is a signing request like any other.** `signPqAttestation` builds and
+signs the account's own `kind:10203`: the ML-KEM and ML-DSA public keys, `origin: derived`
+with `seed_strength: 256` for keys from the seed or `origin: independent` with no seed
+strength for imported ones, the ML-DSA proof of possession, then the secp256k1 signature,
+in the extension's tag order. It runs the whole pipeline under the `signEvent` rule for kind
+10203: a stored deny on that kind, or on signing at all, refuses it without a prompt; a
+remembered approval is stored as `signEvent:10203`. The result is the signed event; the
+host publishes it. `verifyPqAttestation(event)` is the check for someone else's: kind,
+secp256k1 signature, then the tags, with `usable: false` and typed problems otherwise.
+
+**What it costs.** ML-KEM and ML-DSA are not free, and everything below runs synchronously
+on the JavaScript thread. Measured on Node 24, Apple silicon, mean of 100:
+
+| Operation | Time |
+| --- | --- |
+| `nip44Decrypt`, classic, through the pipeline | 3.7 ms |
+| `nip44Decrypt`, post-quantum, through the pipeline | 21.7 ms |
+| `nip44Encrypt`, post-quantum, through the pipeline | 21.9 ms |
+| `signPqAttestation`, through the pipeline | 44.5 ms (max 92 ms) |
+| of which: seed phrase to keys, per request (PBKDF2-SHA512 then two keygens) | 15.5 ms |
+| of which: ML-DSA-87 sign (proof of possession; rejection sampling, so it varies) | 25.7 ms (max 121 ms) |
+
+Fifteen of every post-quantum request's milliseconds are the per-request derivation the
+extension also pays. Hermes without a JIT is commonly 10 to 30 times slower than V8 on
+this kind of arithmetic, so a host on a phone should expect a few hundred milliseconds per
+post-quantum message and a second or more for the attestation, and a batch of N
+post-quantum decrypts blocks for N of those in a row. Measure on the device before
+deciding whether to move the work off the UI thread.
 
 ## Batches
 
@@ -213,3 +296,11 @@ that.
 This package needs them through `@nostr-wot/vault` and `@nostr-wot/accounts`. Its own
 `utf8ByteLength` counts UTF-8 bytes without encoding, not to avoid `TextEncoder` but so the
 boundary never allocates an encoded copy of untrusted input before the size limit has bitten.
+
+The post-quantum path adds no requirement: `@noble/post-quantum` reaches for
+`crypto.getRandomValues` (ML-KEM encapsulation, ML-DSA's hedged signing) and nothing else,
+and that is already on the list. One thing to know: `@nostr-wot/pq`'s base64 helpers, which
+this package uses to decode a stored public key and the boundary uses to recognise an
+envelope, call `atob` and `btoa` where the host has them and fall back to `Buffer`. Node,
+browsers and React Native 0.74 or newer have both; an older React Native host needs a
+polyfill for them as it does for the random source.
