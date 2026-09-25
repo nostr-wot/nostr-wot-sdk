@@ -43,6 +43,7 @@ export {
 export {
   DEFAULT_LOG_N,
   MIN_LOG_N,
+  scryptMaxMem,
   KEY_SECURITY_UNKNOWN,
   LEGACY_PBKDF2_ITERATIONS,
   MAX_LOG_N,

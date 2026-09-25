@@ -48,6 +48,24 @@ export const LEGACY_PBKDF2_ITERATIONS = 210000;
 
 const PRIVKEY_BYTES = 32;
 
+/**
+ * The memory scrypt allocates for a cost of `2^logN`, in bytes, and therefore the `maxmem`
+ * to hand `@noble/hashes`.
+ *
+ * Computed from what the algorithm allocates rather than from what any one noble version
+ * checks: the `V` table (`128·r·N`), the `B` block (`128·r·p`) and the one scratch block
+ * `tmp` (`128·r`). `@noble/hashes` 2.0.1 checked `maxmem` against `V + B`; 2.4.0 checks it
+ * against `V + B + tmp`, which it had always allocated. A `maxmem` set exactly at the 2.0.1
+ * line — which this was — throws under 2.4.0 by one block, and the declared range admits
+ * both, so a consumer's fresh install got a NIP-49 path that could neither write nor read a
+ * backup while this repository's lockfile-pinned suite stayed green.
+ */
+export function scryptMaxMem(logN: number): number {
+  const N = 2 ** logN;
+  const blockSize = 128 * SCRYPT_R;
+  return blockSize * N + blockSize * SCRYPT_P + blockSize;
+}
+
 function deriveScryptKey(password: string, salt: Uint8Array, logN: number): Uint8Array {
   const passwordBytes = new TextEncoder().encode(password.normalize('NFKC'));
   try {
@@ -56,7 +74,7 @@ function deriveScryptKey(password: string, salt: Uint8Array, logN: number): Uint
       r: SCRYPT_R,
       p: SCRYPT_P,
       dkLen: 32,
-      maxmem: 128 * SCRYPT_R * ((1 << logN) + SCRYPT_P),
+      maxmem: scryptMaxMem(logN),
     });
   } finally {
     passwordBytes.fill(0);

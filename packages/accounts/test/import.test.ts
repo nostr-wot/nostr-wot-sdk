@@ -10,7 +10,11 @@ import {
   DEFAULT_LOG_N,
   LEGACY_PBKDF2_ITERATIONS,
   MIN_LOG_N,
+  MAX_LOG_N,
+  SCRYPT_P,
+  SCRYPT_R,
   VERSION_LEGACY,
+  scryptMaxMem,
   decryptNcryptsec,
   detectImportKind,
   encryptNcryptsec,
@@ -208,6 +212,28 @@ describe('NIP-49 ncryptsec', () => {
     for (const logn of [1, 8, 15]) {
       expect(() => encryptNcryptsec(KEY, 'hunter22', logn)).toThrow(/cost factor/i);
     }
+  });
+
+  /**
+   * A lockfile-pinned suite cannot see a break in a version its own range allows: `maxmem`
+   * was set exactly at the line `@noble/hashes` 2.0.1 checks (`V + B`), and 2.4.0 checks
+   * `V + B + tmp`, so every consumer on a fresh install got a NIP-49 path that threw while
+   * this suite stayed green. So the value is pinned here to what the algorithm allocates,
+   * derived independently of the installed version: any noble that checks against its real
+   * allocation, or against less, accepts it.
+   */
+  test('maxmem is what scrypt actually allocates, not what one noble version happens to check', () => {
+    for (let logN = MIN_LOG_N; logN <= MAX_LOG_N; logN++) {
+      const N = 2 ** logN;
+      const blockSize = 128 * SCRYPT_R;
+      const vTable = blockSize * N;
+      const bBlock = blockSize * SCRYPT_P;
+      const tmpBlock = blockSize;
+      expect(scryptMaxMem(logN)).toBe(vTable + bBlock + tmpBlock);
+      // Strictly above the 2.0.1 line, by exactly the scratch block 2.4.0 started counting.
+      expect(scryptMaxMem(logN) - blockSize * (N + SCRYPT_P)).toBe(blockSize);
+    }
+    expect(scryptMaxMem(16)).toBe(67_110_912);
   });
 
   test('the decoder still opens a v2 backup another client wrote below the floor', () => {
