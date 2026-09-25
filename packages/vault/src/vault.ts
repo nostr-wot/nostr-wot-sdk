@@ -617,7 +617,16 @@ export class Vault {
     return this.#payload?.activeAccountId ?? null;
   }
 
-  /** Move the active account and persist it. The account has to be in the vault. */
+  /**
+   * Move the active account and persist it. The account has to be in the vault.
+   *
+   * Deliberately does NOT move the session on, where the extension's `setActiveAccount`
+   * does. The guarantee that switching invalidates is held one layer up: the signing
+   * pipeline re-checks the active account against the one the user was shown on every
+   * path, including after execute, and pins the key by account id. Invalidating here as
+   * well would void an in-flight `withPrivkey` whose own account did not change, for no
+   * gain. A host using the vault directly gets the id-pinned accessors and no void on switch.
+   */
   async setActiveAccountId(id: string): Promise<void> {
     const revision = this.#sessionRevision;
     return this.#run(async () => {
