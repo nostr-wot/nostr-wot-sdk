@@ -839,6 +839,20 @@ export class Vault {
     return !!this.#findAccount(payload, accountId)?.pqPublic;
   }
 
+  /**
+   * Does this account hold a seed phrase? False while locked. Reveals nothing secret.
+   *
+   * For a caller that has to name the refusal before it asks: {@link withMnemonic} throws
+   * the same way for "no phrase" and "no such account", and a signing pipeline that wants
+   * to tell the user "this account has no seed phrase" asks here first, as a caller that
+   * wants to fall back from imported post-quantum keys asks {@link hasImportedPqKeys}.
+   */
+  hasMnemonic(accountId: string): boolean {
+    const payload = this.#payload;
+    if (!payload) return false;
+    return !!this.#findAccount(payload, accountId)?.mnemonicBytes;
+  }
+
   // ── Internals ─────────────────────────────────────────────────────────────────────────
 
   /**

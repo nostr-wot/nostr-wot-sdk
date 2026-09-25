@@ -1341,6 +1341,15 @@ describe('scoped access to the other secrets', () => {
     await expect(vault.withMnemonic('acct_seed', async () => 'x')).rejects.toThrow(/locked/i);
   });
 
+  test('hasMnemonic says whether an account holds a seed phrase, reveals nothing, and is false while locked', async () => {
+    const { vault } = await openVault([account, seeded]);
+    expect(vault.hasMnemonic('acct_seed')).toBe(true);
+    expect(vault.hasMnemonic('acct_1')).toBe(false);
+    expect(vault.hasMnemonic('no_such_account')).toBe(false);
+    vault.lock();
+    expect(vault.hasMnemonic('acct_seed')).toBe(false);
+  });
+
   test('withCacheKey hands out a 32 byte copy of the cache key and zeroes it', async () => {
     const { vault, store } = await openVault([account]);
     let captured: Uint8Array | null = null;
