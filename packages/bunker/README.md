@@ -100,6 +100,7 @@ Everything a host needs to persist is one `BunkerState`:
 interface BunkerState {
   version: 2;
   connectionPubkey: string;
+  generation: number; // monotonic, bumped by every revocation; inside the MAC
   secrets: { secret: string; origin: "bunker" | "nostrconnect"; relays: string[]; clientPubkey?: string; confirmed: boolean; expiresAt?: number }[];
   clients: { clientPubkey: string; relays: string[]; secret?: string; connectedAt: number }[];
   mac: string; // HMAC-SHA256 under a key derived from the connection secret key
@@ -122,10 +123,21 @@ ordinary storage and the key sits in the keychain, and the weaker domain cannot 
 on its own. It is exactly as strong as the key's storage: whoever holds the connection secret
 key can sign any state (`signBunkerState` is exported for migration tooling that does).
 
-**The rest of `restore`, in order.** The state must belong to this connection key; it must be
-signed, or `restore(state, { allowUnsigned: true })` migrates a pre-2 state once (persist the
-signed export afterwards and drop the flag; an unsigned state is only as trustworthy as where
-it came from); no approval may be pending (`pendingApprovals` says how many, `whenIdle()`
+**Revocation survives a storage rollback.** Every `revokeSecret` bumps `generation`;
+`onGenerationChange` hands the new value to the host, which keeps it beside the key in the
+keychain, and passes it back as the `generation` option on startup. `restore` refuses a state
+whose generation is behind the host's, so restoring an export taken before a revoke does not
+bring the revoked client back. The generation is inside the MAC, so it cannot be edited upward.
+A host that lost its counter (starts at 0) adopts the state's generation: as strong as the
+keychain, no more.
+
+**The rest of `restore`, in order.** `version` is read first, because it decides whether a MAC
+is required: a version 2 state must be signed, and stripping its `mac` does not turn it into a
+pre-2 state; versions above 2 are refused. Then the MAC is verified, before anything else is
+read. A pre-2 state (no `version`) migrates once with `restore(state, { allowUnsigned: true })`;
+persist the signed export afterwards and drop the flag, and gate the flag on something the
+storage cannot change (a keychain marker), never on "the stored state has no mac". The state must
+belong to this connection key and not be behind the host's generation; no approval may be pending (`pendingApprovals` says how many, `whenIdle()`
 resolves when none is, so a host with `handlerTimeoutMs: 0` and an unanswered prompt knows when
 to retry); the MAC must verify; then the whole object is validated (shapes and types, relay URLs
 by the pairing rules, pubkeys on the curve, every client backed by a secret in the same state
@@ -146,9 +158,10 @@ of an unauthenticated request, which checks its one secret instead. A confirmed 
 expires, since paired clients reconnect with it indefinitely.
 
 Ceilings, live and restored alike: `maxSecrets` (256; minting past it throws), `maxClients` (64;
-approvals in flight count, so a `connect` past it is refused with `too many clients` even while
-another is pending), `maxRelaysPerClient` (8; a longer `nostrconnect://` URI or client record is
-refused). On a scan, both ceilings are host-facing errors, not wire-visible ones.
+admissions in flight count, per request, so a `connect` past it is refused with `too many
+clients` even while another is pending, and a client whose first attempt was rejected keeps the
+slot its retry holds), `maxRelaysPerClient` (8; a longer `nostrconnect://` URI or client record
+is refused). On a scan, both ceilings are host-facing errors, not wire-visible ones.
 
 ### Relays are per client
 
@@ -181,14 +194,16 @@ and see the package report for the upstream defect.
 
 ## Vendoring
 
-Prefer `npm pack`: `prepack` rebuilds, so a tarball is never stale. The build stamps
-`dist/.src-hash` (written by tsup's `onSuccess`, so it cannot exist without a build) with a hash
-of every build input: `src/`, `tsup.config.ts`, `package.json`, the TypeScript config as tsc
-resolves it (`tsc --showConfig`, so a change in the monorepo's `tsconfig.base.json` counts), and
-the versions of tsup, esbuild and typescript. `npm run check:dist -w @nostr-wot/bunker` fails
-when `dist/` is missing or behind any of them; CI runs it right after the build, and anyone
-vendoring by path should run it first. There is deliberately no vitest test for this: `dist/`
-is gitignored, so such a test would run against nothing in CI.
+Prefer `npm pack`: `prepack` rebuilds, so a tarball is never stale. The build writes
+`dist/.src-hash` (tsup's `onSuccess`, so it cannot exist without a build): a hash of every build
+input (`src/`, `tsup.config.ts`, `package.json`, the TypeScript config as tsc resolves it so the
+monorepo's `tsconfig.base.json` counts, and the tsup/esbuild/typescript versions) and a hash of
+every file the build produced. `npm run check:dist -w @nostr-wot/bunker` fails when `dist/` is
+missing, behind any input, or no longer what the build produced (tampered or partially deleted);
+`--dist DIR` checks a packed or vendored copy against this tree. CI runs it after the build,
+proves it fails on a tampered and on a partial copy, and checks the packed tarball. There is
+deliberately no vitest test for this: `dist/` is gitignored, so such a test would run against
+nothing in CI.
 
 ## React Native
 
