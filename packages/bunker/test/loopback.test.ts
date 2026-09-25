@@ -1658,7 +1658,8 @@ describe("BunkerServer loopback", () => {
     it("an unsigned (round-8) state gets its own error and an explicit one-time migration", async () => {
       const a = await connectWithNostrTools();
       const { version: _v, mac: _m, ...legacy } = server.exportState();
-      const next = new BunkerServer({ connectionSecretKey: connectionSk, relays: [relay.url], handler: signerHandler(user) });
+      // A migrating host asserts generation 0 itself: it has no keychain counter yet.
+      const next = new BunkerServer({ connectionSecretKey: connectionSk, relays: [relay.url], handler: signerHandler(user), generation: 0 });
       await next.start();
       cleanups.push(() => next.stop());
       await expect(next.restore(legacy as unknown as BunkerState)).rejects.toThrow(/unsigned/);
@@ -1750,22 +1751,22 @@ describe("BunkerServer loopback", () => {
     it("a version 2 state cannot be downgraded: stripping the mac does not make it migratable", async () => {
       const a = await connectWithNostrTools();
       const good = server.exportState();
-      const fresh = () => {
-        const s = new BunkerServer({ connectionSecretKey: connectionSk, relays: [relay.url], handler: signerHandler(user) });
+      const fresh = (opts: { generation?: number } = {}) => {
+        const s = new BunkerServer({ connectionSecretKey: connectionSk, relays: [relay.url], handler: signerHandler(user), ...opts });
         cleanups.push(() => s.stop());
         return s;
       };
       const { mac: _mac, ...stripped } = good;
       // The natural but broken consumer gate is "no mac, so migrate": the library refuses it for a v2 state.
-      await expect(fresh().restore(stripped as unknown as BunkerState, { allowUnsigned: true })).rejects.toThrow(/version 2 .*signed|must be signed/);
+      await expect(fresh({ generation: 0 }).restore(stripped as unknown as BunkerState, { allowUnsigned: true })).rejects.toThrow(/version 2 .*signed|must be signed/);
       // A signed state from a future version is not something this code can interpret.
       await expect(fresh().restore(signBunkerState(connectionSk, { ...stripped, version: 99 as unknown as 2 }))).rejects.toThrow(/unsupported state version/);
       // A non-string mac is a bad signature, not an absent one.
       await expect(fresh().restore({ ...good, mac: 12345 as unknown as string })).rejects.toThrow(/authentication/);
-      await expect(fresh().restore({ ...good, mac: 12345 as unknown as string }, { allowUnsigned: true })).rejects.toThrow(/authentication|must be signed/);
-      // A genuine pre-2 state (no version at all) still migrates, once, with the flag.
+      await expect(fresh({ generation: 0 }).restore({ ...good, mac: 12345 as unknown as string }, { allowUnsigned: true })).rejects.toThrow(/authentication|must be signed/);
+      // A genuine pre-2 state (no version at all) still migrates, once, with the flag, on a host asserting generation 0.
       const { version: _v, ...legacy } = stripped;
-      const migrating = fresh();
+      const migrating = fresh({ generation: 0 });
       await migrating.start();
       await migrating.restore(legacy as unknown as BunkerState, { allowUnsigned: true });
       expect(migrating.connectedClients).toEqual(good.clients.map((c) => c.clientPubkey));

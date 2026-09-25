@@ -58,7 +58,12 @@ export function signBunkerState(connectionSecretKey: Uint8Array, state: Unsigned
 /** True when `state.mac` is the MAC of `state` under this key. Constant-time compare. */
 export function verifyBunkerState(connectionSecretKey: Uint8Array, state: BunkerState): boolean {
   if (typeof state.mac !== "string" || state.mac.length !== 64) return false;
-  const expected = stateMac(connectionSecretKey, state);
+  let expected: string;
+  try {
+    expected = stateMac(connectionSecretKey, state);
+  } catch {
+    return false; // a value the canonical form cannot serialize (a BigInt, a cycle) is a bad state, not a crash
+  }
   let diff = 0;
   for (let i = 0; i < 64; i++) diff |= expected.charCodeAt(i) ^ state.mac.charCodeAt(i);
   return diff === 0;

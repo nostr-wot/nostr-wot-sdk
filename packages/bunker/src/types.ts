@@ -123,10 +123,18 @@ export interface BunkerServerOptions {
   secretTtlMs?: number;
   /**
    * The highest state generation this host has recorded, kept beside the key
-   * (keychain), not with the state. Default 0. See {@link BunkerState.generation}.
+   * (keychain), not with the state. Must be a non-negative integer; anything
+   * else throws (keychain APIs return strings: parse before passing). Omitted
+   * means 0, except that `restore(..., { allowUnsigned: true })` then refuses:
+   * the legacy path must be asserted with an explicit 0, never reached by
+   * omission. See {@link BunkerState.generation}.
    */
   generation?: number;
-  /** Called whenever the generation advances (every revocation). Write the value beside the key. */
+  /**
+   * Called after every revocation, once the secret and its client are gone and
+   * `onStateChange` has fired, so `exportState()` inside it is consistent and
+   * restorable. Write the value beside the key.
+   */
   onGenerationChange?: (generation: number) => void;
   /**
    * Called with a fresh {@link BunkerState} every time something a host would
@@ -228,10 +236,12 @@ export interface RestoreOptions {
    * Accept a pre-2 state (no `version`) once, to migrate it. The state is
    * validated exactly as a signed one and, after it lands, the next
    * `exportState` / `onStateChange` is signed; persist that and drop the flag.
-   * It does nothing for a state at version 2 or above: those must be signed,
-   * so a stripped `mac` cannot be turned into a migration. Only pass it for
-   * storage you already trust, and gate it on something the storage cannot
-   * change (a keychain marker), never on "the stored state has no mac".
+   * `version` and `mac` come from the same untrusted blob, so nothing in it
+   * proves a state is genuinely pre-2. What closes the legacy path is the host's
+   * generation: at 1 or more (the host has revoked at least once) an unsigned
+   * state is refused as behind; at 0 the host must have passed `generation: 0`
+   * itself. Only pass this flag for storage you already trust, gated on a
+   * keychain marker, never on "the stored state has no mac".
    */
   allowUnsigned?: boolean;
 }

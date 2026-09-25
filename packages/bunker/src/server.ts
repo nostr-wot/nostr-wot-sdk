@@ -167,6 +167,8 @@ export class BunkerServer {
   readonly #pendingAdmissions = new Map<string, number>();
   /** See {@link BunkerState.generation}. */
   #generation: number;
+  /** True when the host passed `generation` itself. `allowUnsigned` requires an explicit 0. */
+  readonly #generationExplicit: boolean;
   readonly #onGenerationChange: ((generation: number) => void) | undefined;
   /** While a restore applies, nothing is emitted; one snapshot goes out after it succeeds. */
   #muted = false;
@@ -186,7 +188,16 @@ export class BunkerServer {
     this.#log = options.logger ?? {};
     this.#onStateChange = options.onStateChange;
     this.#onGenerationChange = options.onGenerationChange;
-    this.#generation = Number.isInteger(options.generation) && (options.generation as number) >= 0 ? (options.generation as number) : 0;
+    // A security parameter that silently coerced would be worse than one that throws: every
+    // keychain API hands back strings, and "1" turning into 0 would drop the guarantee unseen.
+    if (options.generation !== undefined) {
+      const g = options.generation as unknown;
+      if (typeof g !== "number" || !Number.isInteger(g) || g < 0) {
+        throw new Error(`generation must be a non-negative integer (got ${typeof g === "bigint" ? `${g}n` : JSON.stringify(g) ?? String(g)})`);
+      }
+    }
+    this.#generationExplicit = options.generation !== undefined;
+    this.#generation = options.generation ?? 0;
     this.#opts = {
       requireSecret: options.requireSecret ?? DEFAULTS.requireSecret,
       secretTtlMs: options.secretTtlMs ?? DEFAULTS.secretTtlMs,
@@ -260,24 +271,33 @@ export class BunkerServer {
   #setGeneration(generation: number): void {
     if (generation === this.#generation) return;
     this.#generation = generation;
+    this.#notifyGeneration();
+  }
+
+  #notifyGeneration(): void {
     try {
-      this.#onGenerationChange?.(generation);
+      this.#onGenerationChange?.(this.#generation);
     } catch (err) {
       this.#log.warn?.("onGenerationChange threw", { error: errorText(err) });
     }
   }
 
-  #beginApproval(clientPubkey: string): void {
+  /** Returns whether this request took an admission slot (a connected client's re-connect takes none). */
+  #beginApproval(clientPubkey: string): boolean {
     this.#pendingApprovals += 1;
+    if (this.#clients.has(clientPubkey)) return false;
     // Counted per request, not per client: a client's first attempt settling must not free the slot its retry still holds.
     this.#pendingAdmissions.set(clientPubkey, (this.#pendingAdmissions.get(clientPubkey) ?? 0) + 1);
+    return true;
   }
 
-  #endApproval(clientPubkey: string): void {
+  #endApproval(clientPubkey: string, tookSlot: boolean): void {
     this.#pendingApprovals -= 1;
-    const left = (this.#pendingAdmissions.get(clientPubkey) ?? 1) - 1;
-    if (left <= 0) this.#pendingAdmissions.delete(clientPubkey);
-    else this.#pendingAdmissions.set(clientPubkey, left);
+    if (tookSlot) {
+      const left = (this.#pendingAdmissions.get(clientPubkey) ?? 1) - 1;
+      if (left <= 0) this.#pendingAdmissions.delete(clientPubkey);
+      else this.#pendingAdmissions.set(clientPubkey, left);
+    }
     if (this.#pendingApprovals === 0) {
       const waiters = this.#idleWaiters;
       this.#idleWaiters = [];
@@ -321,13 +341,15 @@ export class BunkerServer {
     const record = this.#secrets.get(secret);
     if (!record) return false;
     this.#secrets.delete(secret);
-    this.#setGeneration(this.#generation + 1); // an export from before this moment must not restore
+    this.#generation += 1; // an export from before this moment must not restore
     const bound = record.clientPubkey ? this.#clients.get(record.clientPubkey) : undefined;
     if (record.clientPubkey && bound && bound.secret === secret) {
       this.disconnectClient(record.clientPubkey); // emits
     } else {
       this.#emit();
     }
+    // Last, once the secret and its client are gone: a snapshot taken inside this callback restores.
+    this.#notifyGeneration();
     return true;
   }
 
@@ -381,6 +403,15 @@ export class BunkerServer {
       if (!options.allowUnsigned) {
         throw new Error(
           "restore refused: state is unsigned (pre-2 format); pass { allowUnsigned: true } once to migrate it, then persist the signed export",
+        );
+      }
+      // `version` and `mac` come from the same untrusted blob, so neither can prove a state is
+      // genuinely pre-2. What closes the legacy path is the host's generation: at 1 or more the
+      // check below refuses it, and at 0 the host must have said so itself (a keychain with no
+      // counter yet), not landed there by omission.
+      if (!this.#generationExplicit) {
+        throw new Error(
+          "restore refused: allowUnsigned requires an explicit generation: 0 from the host, asserting it has no keychain counter yet",
         );
       }
       signed = false;
@@ -647,17 +678,17 @@ export class BunkerServer {
       method: "connect",
       params: [this.#pubkey, parsed.secret, parsed.perms.join(","), JSON.stringify(metadata)],
     };
-    this.#beginApproval(parsed.clientPubkey);
+    const slot = this.#beginApproval(parsed.clientPubkey);
     try {
       await this.#runHandler(request, parsed.relays);
     } catch (err) {
-      this.#endApproval(parsed.clientPubkey);
+      this.#endApproval(parsed.clientPubkey, slot);
       this.#unbind(record, parsed.secret);
       // Whatever record the secret came from, a socket an auth_url opened to the scanned relays has no owner now.
       for (const url of parsed.relays) this.#closeSocket(url);
       throw err;
     }
-    this.#endApproval(parsed.clientPubkey);
+    this.#endApproval(parsed.clientPubkey, slot);
     if (this.#secrets.get(parsed.secret) !== record) {
       // Revoked while the user was deciding: the approval is discarded.
       record.pending -= 1;
@@ -1027,15 +1058,15 @@ export class BunkerServer {
     // approval is rejected and none was ever confirmed.
     const record = live ? this.#bind(secret, request.clientPubkey, undefined, "secret already used by another client") : undefined;
     const responseRelays = record?.relays ?? [sourceRelay];
-    this.#beginApproval(request.clientPubkey);
+    const slot = this.#beginApproval(request.clientPubkey);
     try {
       await this.#runHandler(request, responseRelays);
     } catch (err) {
-      this.#endApproval(request.clientPubkey);
+      this.#endApproval(request.clientPubkey, slot);
       if (record) this.#unbind(record, secret);
       throw err;
     }
-    this.#endApproval(request.clientPubkey);
+    this.#endApproval(request.clientPubkey, slot);
     if (record && this.#secrets.get(secret) !== record) {
       // Revoked while the user was deciding: the approval is discarded.
       record.pending -= 1;

@@ -1,4 +1,6 @@
-// Run by tsup's onSuccess: writes dist/.src-hash, a JSON stamp with a hash of
+// Run by the build script after tsup has exited (its onSuccess hook runs
+// concurrently with the dts worker, which would leave the declarations out
+// of the hash): writes dist/.src-hash, a JSON stamp with a hash of
 // everything the build depends on (src/, tsup.config.ts, package.json, the
 // RESOLVED TypeScript config via tsc --showConfig so ../../tsconfig.base.json
 // counts, and the tsup/esbuild/typescript versions) AND a hash of everything

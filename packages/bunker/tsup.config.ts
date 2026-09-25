@@ -10,6 +10,6 @@ export default defineConfig({
   outDir: 'dist',
   treeshake: true,
   splitting: false,
-  // Stamp dist/ with a hash of what it was built from; `npm run check:dist` compares.
-  onSuccess: 'node scripts/stamp-dist.mjs',
+  // The dist stamp is written by the build script after tsup exits: onSuccess runs
+  // concurrently with the dts worker and would hash the previous declarations or none.
 });
