@@ -60,14 +60,16 @@ function deferred<T>() {
 
 /** A raw NIP-46 client with no library in between, for the negative-path tests. */
 class RawClient {
-  readonly sk = generateSecretKey();
-  readonly pubkey = getPublicKey(this.sk);
+  readonly sk: Uint8Array;
+  readonly pubkey: string;
   readonly pool = new SimplePool();
   readonly responses: Array<{ id: string; result?: string; error?: string }> = [];
   #convKey: Uint8Array;
   #closer: { close(): void } | null = null;
 
-  constructor(readonly relays: string[], readonly signerPubkey: string) {
+  constructor(readonly relays: string[], readonly signerPubkey: string, sk: Uint8Array = generateSecretKey()) {
+    this.sk = sk;
+    this.pubkey = getPublicKey(sk);
     this.#convKey = nip44.utils.getConversationKey(this.sk, signerPubkey);
   }
 
@@ -1742,6 +1744,117 @@ describe("BunkerServer loopback", () => {
       await expect(tiny.acceptNostrConnect(scan("one-more"))).rejects.toSatisfy(notWire);
       tiny.disconnectClient(tiny.connectedClients[0]!);
       await expect(tiny.acceptNostrConnect(scan("one-more"))).rejects.toSatisfy(notWire);
+    });
+
+    it("a version 2 state cannot be downgraded: stripping the mac does not make it migratable", async () => {
+      const a = await connectWithNostrTools();
+      const good = server.exportState();
+      const fresh = () => {
+        const s = new BunkerServer({ connectionSecretKey: connectionSk, relays: [relay.url], handler: signerHandler(user) });
+        cleanups.push(() => s.stop());
+        return s;
+      };
+      const { mac: _mac, ...stripped } = good;
+      // The natural but broken consumer gate is "no mac, so migrate": the library refuses it for a v2 state.
+      await expect(fresh().restore(stripped as unknown as BunkerState, { allowUnsigned: true })).rejects.toThrow(/version 2 .*signed|must be signed/);
+      // A signed state from a future version is not something this code can interpret.
+      await expect(fresh().restore(signBunkerState(connectionSk, { ...stripped, version: 99 as unknown as 2 }))).rejects.toThrow(/unsupported state version/);
+      // A non-string mac is a bad signature, not an absent one.
+      await expect(fresh().restore({ ...good, mac: 12345 as unknown as string })).rejects.toThrow(/authentication/);
+      await expect(fresh().restore({ ...good, mac: 12345 as unknown as string }, { allowUnsigned: true })).rejects.toThrow(/authentication|must be signed/);
+      // A genuine pre-2 state (no version at all) still migrates, once, with the flag.
+      const { version: _v, ...legacy } = stripped;
+      const migrating = fresh();
+      await migrating.start();
+      await migrating.restore(legacy as unknown as BunkerState, { allowUnsigned: true });
+      expect(migrating.connectedClients).toEqual(good.clients.map((c) => c.clientPubkey));
+      expect(await a.getPublicKey()).toBe(userPubkey);
+    });
+
+    it("revocation is durable against a storage rollback: an export from before the revoke is refused by generation", async () => {
+      const generations: number[] = [];
+      const guarded = new BunkerServer({
+        connectionSecretKey: connectionSk,
+        relays: [relay.url],
+        handler: signerHandler(user),
+        onGenerationChange: (g) => generations.push(g),
+      });
+      await guarded.start();
+      cleanups.push(() => guarded.stop());
+      expect(guarded.generation).toBe(0);
+      const { uri, secret } = guarded.createBunkerUri();
+      const a = await connectWithNostrTools(uri);
+      const before = guarded.exportState();
+      expect(before.generation).toBe(0);
+
+      expect(guarded.revokeSecret(secret)).toBe(true);
+      expect(guarded.generation).toBe(1);
+      expect(generations).toEqual([1]); // the host copies this into the keychain, beside the key
+      expect(guarded.connectedClients).toEqual([]);
+      const after = guarded.exportState();
+      expect(after.generation).toBe(1);
+
+      // Same process: the old export is genuine, and stale.
+      await expect(guarded.restore(before)).rejects.toThrow(/generation 0 .*behind.*1/);
+      expect(guarded.connectedClients).toEqual([]);
+      // Fresh process that kept its keychain counter: still refused.
+      const restarted = new BunkerServer({ connectionSecretKey: connectionSk, relays: [relay.url], handler: signerHandler(user), generation: 1 });
+      cleanups.push(() => restarted.stop());
+      await expect(restarted.restore(before)).rejects.toThrow(/generation/);
+      expect(restarted.connectedClients).toEqual([]);
+      await restarted.restore(after); // the current export is fine
+      expect(restarted.generation).toBe(1);
+      // The generation is inside the MAC: bumping it by hand in the old export is a forgery, not a newer state.
+      await expect(restarted.restore({ ...before, generation: 5 })).rejects.toThrow(/authentication/);
+      // A process whose keychain counter was lost (0) has nothing to compare against and adopts the state's generation: as strong as the keychain, no more.
+      const amnesiac = new BunkerServer({ connectionSecretKey: connectionSk, relays: [relay.url], handler: signerHandler(user) });
+      cleanups.push(() => amnesiac.stop());
+      await amnesiac.restore(after);
+      expect(amnesiac.generation).toBe(1);
+      await expect(amnesiac.restore(before)).rejects.toThrow(/generation/);
+      void a;
+    });
+
+    it("maxClients holds when one client races itself: a rejected first attempt does not free the slot its retry still holds", async () => {
+      const gates = new Map<string, ReturnType<typeof deferred<string>>>();
+      const aSk = generateSecretKey();
+      const aPubkey = getPublicKey(aSk);
+      const capped = new BunkerServer({
+        connectionSecretKey: generateSecretKey(),
+        relays: [relay.url],
+        maxClients: 1,
+        handler: async (req, ctx) => {
+          if (req.method !== "connect") return signerHandler(user)(req, ctx);
+          if (req.clientPubkey !== aPubkey) return "ack"; // anyone else is approved instantly
+          const gate = deferred<string>();
+          gates.set(req.id, gate);
+          return gate.promise;
+        },
+      });
+      await capped.start();
+      cleanups.push(() => capped.stop());
+      const { secret } = capped.createBunkerUri();
+      const A = new RawClient([relay.url], capped.connectionPubkey, aSk);
+      const B = new RawClient([relay.url], capped.connectionPubkey);
+      cleanups.push(() => A.close(), () => B.close());
+      await Promise.all([A.listen(), B.listen()]);
+      const untilGate = async (id: string) => {
+        const deadline = Date.now() + 3000;
+        while (!gates.has(id) && Date.now() < deadline) await wait(10);
+        expect(gates.has(id)).toBe(true);
+      };
+      await A.send("a1", "connect", [capped.connectionPubkey, secret]);
+      await untilGate("a1");
+      await A.send("a2", "connect", [capped.connectionPubkey, secret]); // the retry, pending alongside
+      await untilGate("a2");
+      gates.get("a1")!.reject(new BunkerError("user declined the first prompt"));
+      expect(await A.waitFor("a1")).toEqual({ id: "a1", error: "user declined the first prompt" });
+      // A's retry still holds the only slot: B must be refused, not admitted.
+      await B.send("b1", "connect", [capped.connectionPubkey, capped.createBunkerUri().secret]);
+      expect(await B.waitFor("b1")).toEqual({ id: "b1", error: "too many clients" });
+      gates.get("a2")!.resolve("ack");
+      expect(await A.waitFor("a2")).toEqual({ id: "a2", result: "ack" });
+      expect(capped.connectedClients).toEqual([aPubkey]);
     });
 
     it("the server-level secretTtlMs applies to every mint, and 0 disables it", async () => {
