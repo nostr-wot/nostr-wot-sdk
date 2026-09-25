@@ -4,6 +4,9 @@ export { createBunkerUri, parseNostrConnectUri } from "./uri";
 export type {
   BunkerErrorMapper,
   BunkerHandler,
+  BunkerClientRecord,
+  BunkerSecretRecord,
+  BunkerState,
   BunkerLogger,
   BunkerRequest,
   BunkerRequestContext,

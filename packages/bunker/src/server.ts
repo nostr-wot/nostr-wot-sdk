@@ -21,12 +21,14 @@ import {
   type BunkerRequest,
   type BunkerRequestContext,
   type BunkerServerOptions,
+  type BunkerState,
   type BunkerUri,
   type NostrConnectPairing,
 } from "./types";
 
 const DEFAULTS = {
   requireSecret: true,
+  secretTtlMs: 15 * 60_000,
   handlerTimeoutMs: 120_000,
   connectTimeoutMs: 3000,
   reconnectDelayMs: 3000,
@@ -59,6 +61,8 @@ interface SecretState {
   pending: number;
   /** Who minted the secret: the host (`createBunkerUri`) or a client's `nostrconnect://` URI. */
   origin: "bunker" | "nostrconnect";
+  /** Unix ms; only enforced while unconfirmed. */
+  expiresAt?: number;
 }
 
 interface RelaySubscription {
@@ -137,6 +141,7 @@ export class BunkerServer {
   readonly #handler: BunkerHandler;
   readonly #mapError: BunkerErrorMapper;
   readonly #log: BunkerLogger;
+  readonly #onStateChange: ((state: BunkerState) => void) | undefined;
   readonly #opts: typeof DEFAULTS;
   readonly #relayPool: RelayPool;
   readonly #ownsPool: boolean;
@@ -159,8 +164,10 @@ export class BunkerServer {
     this.#handler = options.handler;
     this.#mapError = options.mapError ?? defaultMapError;
     this.#log = options.logger ?? {};
+    this.#onStateChange = options.onStateChange;
     this.#opts = {
       requireSecret: options.requireSecret ?? DEFAULTS.requireSecret,
+      secretTtlMs: options.secretTtlMs ?? DEFAULTS.secretTtlMs,
       handlerTimeoutMs: options.handlerTimeoutMs ?? DEFAULTS.handlerTimeoutMs,
       connectTimeoutMs: options.connectTimeoutMs ?? DEFAULTS.connectTimeoutMs,
       reconnectDelayMs: options.reconnectDelayMs ?? DEFAULTS.reconnectDelayMs,
@@ -220,6 +227,71 @@ export class BunkerServer {
     if (!client) return;
     this.#clients.delete(clientPubkey);
     for (const url of client.relays) this.#release(url, clientPubkey);
+    this.#emit();
+  }
+
+  /**
+   * Forget a pairing secret. `connect` with it is refused from then on
+   * (`invalid secret`). A client already connected through it stays connected
+   * until `disconnectClient`; revoking only stops the secret from admitting
+   * anyone again. Returns `false` if there was nothing to revoke.
+   */
+  revokeSecret(secret: string): boolean {
+    const removed = this.#secrets.delete(secret);
+    if (removed) this.#emit();
+    return removed;
+  }
+
+  /**
+   * Everything a host must persist: see {@link BunkerState}. Lapsed unclaimed
+   * secrets are swept first. Hand the result to {@link restore} after a restart.
+   */
+  exportState(): BunkerState {
+    this.#sweep();
+    const secrets = [...this.#secrets].map(([secret, r]) => {
+      const out: BunkerState["secrets"][number] = { secret, origin: r.origin, relays: [...r.relays], confirmed: r.confirmed };
+      if (r.clientPubkey) out.clientPubkey = r.clientPubkey;
+      if (r.expiresAt !== undefined) out.expiresAt = r.expiresAt;
+      return out;
+    });
+    const clients = [...this.#clients].map(([clientPubkey, c]) => {
+      const out: BunkerState["clients"][number] = { clientPubkey, relays: [...c.relays], connectedAt: c.connectedAt };
+      if (c.secret) out.secret = c.secret;
+      return out;
+    });
+    return { secrets, clients };
+  }
+
+  /**
+   * Rehydrate what a previous process persisted, under the same connection
+   * key. Secrets come back with their bindings (a bound secret refuses any
+   * other client, exactly as before the restart); clients come back connected,
+   * on their own relays, without re-pairing. Lapsed unclaimed secrets are
+   * dropped. May be called before or after `start()`.
+   */
+  async restore(state: BunkerState): Promise<void> {
+    const now = Date.now();
+    for (const r of state.secrets ?? []) {
+      if (typeof r.secret !== "string" || !r.secret) continue;
+      if (!r.confirmed && r.expiresAt !== undefined && r.expiresAt <= now) continue;
+      const record: SecretState = {
+        relays: normalizeRelays(r.relays ?? []),
+        confirmed: r.confirmed === true,
+        pending: 0,
+        origin: r.origin === "nostrconnect" ? "nostrconnect" : "bunker",
+      };
+      if (typeof r.clientPubkey === "string" && r.clientPubkey) record.clientPubkey = r.clientPubkey.toLowerCase();
+      if (r.expiresAt !== undefined) record.expiresAt = r.expiresAt;
+      this.#secrets.set(r.secret, record);
+    }
+    const admitted: Promise<void>[] = [];
+    for (const c of state.clients ?? []) {
+      if (typeof c.clientPubkey !== "string" || !/^[0-9a-f]{64}$/i.test(c.clientPubkey)) continue;
+      if (!Array.isArray(c.relays) || c.relays.length === 0) continue;
+      admitted.push(this.#admit(c.clientPubkey.toLowerCase(), c.secret, c.relays, c.connectedAt));
+    }
+    await Promise.all(admitted);
+    this.#log.info?.("state restored", { secrets: this.#secrets.size, clients: this.#clients.size });
   }
 
   /**
@@ -229,17 +301,45 @@ export class BunkerServer {
    * again on every reconnect. Relays named here are host-chosen and join the
    * listening set; the client paired with this secret is answered on them.
    */
-  createBunkerUri(options: { relays?: string[]; secret?: string } = {}): BunkerUri {
+  createBunkerUri(options: { relays?: string[]; secret?: string; ttlMs?: number } = {}): BunkerUri {
+    this.#sweep();
     const secret = options.secret ?? randomHex(16);
     const relays = normalizeRelays(options.relays && options.relays.length > 0 ? options.relays : this.relays);
     for (const url of relays) this.addRelay(url);
+    const ttl = options.ttlMs ?? this.#opts.secretTtlMs;
     const existing = this.#secrets.get(secret);
     if (existing) {
+      // Re-minting a known secret (a host redisplaying a stored URI) keeps its binding.
       existing.relays = relays;
     } else {
-      this.#secrets.set(secret, { relays, confirmed: false, pending: 0, origin: "bunker" });
+      const record: SecretState = { relays, confirmed: false, pending: 0, origin: "bunker" };
+      if (ttl > 0) record.expiresAt = Date.now() + ttl;
+      this.#secrets.set(secret, record);
     }
+    this.#emit();
     return { uri: createBunkerUri({ pubkey: this.#pubkey, relays, secret }), secret };
+  }
+
+  /** Drop unclaimed secrets past their expiry. Confirmed bindings are never touched. */
+  #sweep(): void {
+    const now = Date.now();
+    let changed = false;
+    for (const [secret, r] of this.#secrets) {
+      if (!r.confirmed && r.pending === 0 && r.expiresAt !== undefined && r.expiresAt <= now) {
+        this.#secrets.delete(secret);
+        changed = true;
+      }
+    }
+    if (changed) this.#emit();
+  }
+
+  #emit(): void {
+    if (!this.#onStateChange) return;
+    try {
+      this.#onStateChange(this.exportState());
+    } catch (err) {
+      this.#log.warn?.("onStateChange threw", { error: errorText(err) });
+    }
   }
 
   /**
@@ -253,6 +353,7 @@ export class BunkerServer {
    */
   async acceptNostrConnect(uri: string): Promise<NostrConnectPairing> {
     const parsed = parseNostrConnectUri(uri);
+    this.#sweep();
     // Bind the secret and register the client's relays before the handler runs,
     // so a concurrent accept with the same secret is refused, and an auth_url
     // sent during approval goes to the client's relays rather than the host's.
@@ -278,6 +379,7 @@ export class BunkerServer {
     record.pending -= 1;
     record.confirmed = true;
     record.relays = parsed.relays;
+    delete record.expiresAt;
     await this.#admit(parsed.clientPubkey, parsed.secret, parsed.relays);
     this.#log.info?.("nostrconnect: client paired", { clientPubkey: parsed.clientPubkey, relays: parsed.relays });
     await this.#send(parsed.clientPubkey, { id: request.id, result: parsed.secret }, parsed.relays);
@@ -623,6 +725,7 @@ export class BunkerServer {
 
   async #connect(request: BunkerRequest, sourceRelay: string): Promise<string> {
     const secret = request.params[1] ?? "";
+    this.#sweep();
     if (this.#opts.requireSecret && !(secret && this.#secrets.has(secret))) throw new BunkerError("invalid secret");
     // Bind before the approval await, so a second client presenting the same
     // secret while this one is pending is refused rather than raced in. The
@@ -641,6 +744,7 @@ export class BunkerServer {
     if (record) {
       record.pending -= 1;
       record.confirmed = true;
+      delete record.expiresAt;
     }
     await this.#admit(request.clientPubkey, secret || undefined, responseRelays);
     this.#log.info?.("client connected", { clientPubkey: request.clientPubkey });
@@ -664,6 +768,7 @@ export class BunkerServer {
     // rejected scan must leave no trace, and state never written needs no restoring.
     record.clientPubkey = clientPubkey;
     record.pending += 1;
+    this.#emit();
     return record;
   }
 
@@ -679,17 +784,18 @@ export class BunkerServer {
         this.#secrets.delete(secret);
         for (const url of record.relays) this.#closeSocket(url);
       }
+      this.#emit();
     }
   }
 
   /** Mark a client connected, pinning its dedup window and its relay set. Resolves once its relays are subscribed. */
-  async #admit(clientPubkey: string, secret: string | undefined, relays: string[]): Promise<void> {
+  async #admit(clientPubkey: string, secret: string | undefined, relays: string[], connectedAt = Date.now()): Promise<void> {
     const previous = this.#clients.get(clientPubkey);
     const relaySet = normalizeRelays(relays);
     const seen = previous?.seen ?? this.#strangers.get(clientPubkey) ?? new BoundedSet(this.#opts.seenCapacity);
     this.#strangers.delete(clientPubkey);
     this.#clients.set(clientPubkey, {
-      connectedAt: Date.now(),
+      connectedAt,
       ...(secret ? { secret } : {}),
       relays: relaySet,
       convKey: previous?.convKey ?? conversationKey(this.#sk, clientPubkey),
@@ -698,6 +804,7 @@ export class BunkerServer {
     if (previous) {
       for (const url of previous.relays) if (!relaySet.includes(url)) this.#release(url, clientPubkey);
     }
+    this.#emit();
     if (this.#started && !this.#stopped) {
       await Promise.all(relaySet.map((url) => this.#subscribe(url, clientPubkey)));
     } else {

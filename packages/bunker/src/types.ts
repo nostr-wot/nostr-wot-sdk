@@ -114,10 +114,63 @@ export interface BunkerServerOptions {
   maxReconnectDelayMs?: number;
   /** Requests whose `created_at` is further than this from now are dropped. Default 300 s. */
   maxClockSkewSec?: number;
+  /**
+   * Unclaimed pairing secrets lapse this long after minting. Default 900000 ms
+   * (15 minutes); `0` disables. A secret whose `connect` was approved never
+   * expires: paired clients reconnect with it for as long as the host keeps it.
+   * `createBunkerUri({ ttlMs })` overrides it per mint.
+   */
+  secretTtlMs?: number;
+  /**
+   * Called with a fresh {@link BunkerState} every time something a host would
+   * persist changes: a secret minted, bound, confirmed, released, revoked or
+   * lapsed; a client admitted or forgotten. Hand the latest one back to
+   * {@link BunkerServer.restore} after a restart.
+   */
+  onStateChange?: (state: BunkerState) => void;
   /** Recent request ids and event ids remembered per client for deduplication. Default 256. */
   seenCapacity?: number;
   /** How many not-yet-connected senders keep a deduplication window at once. Default 256. */
   strangerCapacity?: number;
+}
+
+/**
+ * One pairing secret as a host persists it. `clientPubkey` is the client it is
+ * bound to; `confirmed` says the handler approved that client's `connect`.
+ * A restored bound secret refuses every other client, across restarts.
+ */
+export interface BunkerSecretRecord {
+  secret: string;
+  /** Who minted it: the host (`createBunkerUri`) or a client's `nostrconnect://` URI. */
+  origin: "bunker" | "nostrconnect";
+  /** Where the client paired with this secret is answered. */
+  relays: string[];
+  clientPubkey?: string;
+  confirmed: boolean;
+  /** Unix ms. Only an unconfirmed secret lapses; absent means never. */
+  expiresAt?: number;
+}
+
+/** One paired client as a host persists it. */
+export interface BunkerClientRecord {
+  clientPubkey: string;
+  /** Its own relay set: where its responses go, and nowhere else. */
+  relays: string[];
+  secret?: string;
+  /** Unix ms. */
+  connectedAt: number;
+}
+
+/**
+ * Everything a host must persist for paired clients to survive a restart:
+ * hand it to {@link BunkerServer.restore} on the way back up, with the same
+ * connection key. Secrets carry their bindings, clients carry their relays.
+ * Pending approvals are exported as bound but unconfirmed: the same client may
+ * retry, another is refused.
+ */
+export interface BunkerState {
+  secrets: BunkerSecretRecord[];
+  clients: BunkerClientRecord[];
 }
 
 /**
