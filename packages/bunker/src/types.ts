@@ -122,6 +122,13 @@ export interface BunkerServerOptions {
    */
   secretTtlMs?: number;
   /**
+   * The highest state generation this host has recorded, kept beside the key
+   * (keychain), not with the state. Default 0. See {@link BunkerState.generation}.
+   */
+  generation?: number;
+  /** Called whenever the generation advances (every revocation). Write the value beside the key. */
+  onGenerationChange?: (generation: number) => void;
+  /**
    * Called with a fresh {@link BunkerState} every time something a host would
    * persist changes: a secret minted, bound, confirmed, released, revoked or
    * lapsed; a client admitted or forgotten. Hand the latest one back to
@@ -189,10 +196,24 @@ export interface BunkerClientRecord {
  * duplicates, within the ceilings) and applied all at once or not at all.
  */
 export interface BunkerState {
-  /** Format version. Unsigned pre-2 states are refused unless `restore` is told to migrate them. */
+  /**
+   * Format version, read before anything else. A version 2 state must be
+   * signed; stripping its `mac` does not make it a pre-2 state that
+   * `allowUnsigned` would migrate. Versions above 2 are refused.
+   */
   version: 2;
   /** The connection key this state belongs to. `restore` refuses a state minted under another key. */
   connectionPubkey: string;
+  /**
+   * Monotonic, inside the MAC. Every revocation bumps it (`onGenerationChange`
+   * reports the new value; the host keeps it beside the key, in the keychain,
+   * where the state is not) and `restore` refuses a state whose generation is
+   * behind the host's. That makes revocation durable against a storage
+   * rollback by someone who can write the app's storage but not its keychain.
+   * A host that lost its counter (starts at 0) adopts the state's generation:
+   * the guarantee is as strong as the keychain, no more.
+   */
+  generation: number;
   secrets: BunkerSecretRecord[];
   clients: BunkerClientRecord[];
   /** HMAC-SHA256, hex, under a key derived from the connection secret key. */
@@ -204,11 +225,13 @@ export type UnsignedBunkerState = Omit<BunkerState, "mac">;
 
 export interface RestoreOptions {
   /**
-   * Accept a state with no `mac` (the pre-2 format) once, to migrate it. The
-   * state is validated exactly as a signed one and, after it lands, the next
+   * Accept a pre-2 state (no `version`) once, to migrate it. The state is
+   * validated exactly as a signed one and, after it lands, the next
    * `exportState` / `onStateChange` is signed; persist that and drop the flag.
-   * Only pass it for storage you already trust: an unsigned state is as
-   * trustworthy as wherever it came from, and no more.
+   * It does nothing for a state at version 2 or above: those must be signed,
+   * so a stripped `mac` cannot be turned into a migration. Only pass it for
+   * storage you already trust, and gate it on something the storage cannot
+   * change (a keychain marker), never on "the stored state has no mac".
    */
   allowUnsigned?: boolean;
 }

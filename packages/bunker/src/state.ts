@@ -27,7 +27,13 @@ export function canonicalState(state: UnsignedBunkerState): Uint8Array {
     connectedAt: c?.connectedAt,
   }));
   return utf8Encoder.encode(
-    JSON.stringify({ version: state.version, connectionPubkey: state.connectionPubkey, secrets, clients }),
+    JSON.stringify({
+      version: state.version,
+      connectionPubkey: state.connectionPubkey,
+      generation: state.generation,
+      secrets,
+      clients,
+    }),
   );
 }
 
@@ -45,7 +51,7 @@ export function stateMac(connectionSecretKey: Uint8Array, state: UnsignedBunkerS
  * state by hand and holds the key.
  */
 export function signBunkerState(connectionSecretKey: Uint8Array, state: UnsignedBunkerState): BunkerState {
-  const unsigned: UnsignedBunkerState = { ...state, version: STATE_VERSION };
+  const unsigned: UnsignedBunkerState = { ...state, version: state.version ?? STATE_VERSION, generation: state.generation ?? 0 };
   return { ...unsigned, mac: stateMac(connectionSecretKey, unsigned) };
 }
 

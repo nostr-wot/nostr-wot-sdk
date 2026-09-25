@@ -29,8 +29,21 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Check built output matches its inputs
+      - name: Check built output matches its inputs and its stamp
         run: npm run check:dist -w @nostr-wot/bunker
+
+      - name: check:dist must fail on a tampered or incomplete copy
+        run: |
+          cp -R packages/bunker/dist /tmp/tampered && echo "garbage" >> /tmp/tampered/index.js
+          if node packages/bunker/scripts/check-dist.mjs --dist /tmp/tampered; then echo "check:dist passed a tampered copy" && exit 1; fi
+          cp -R packages/bunker/dist /tmp/partial && rm /tmp/partial/index.cjs /tmp/partial/index.d.ts
+          if node packages/bunker/scripts/check-dist.mjs --dist /tmp/partial; then echo "check:dist passed a partial copy" && exit 1; fi
+
+      - name: The packed tarball carries a dist that matches this tree
+        run: |
+          tarball=$(cd packages/bunker && npm pack --silent | tail -1)
+          mkdir -p /tmp/vendored && tar -xzf "packages/bunker/$tarball" -C /tmp/vendored
+          node packages/bunker/scripts/check-dist.mjs --dist /tmp/vendored/package/dist
 
       - name: Type check
         run: npm run typecheck

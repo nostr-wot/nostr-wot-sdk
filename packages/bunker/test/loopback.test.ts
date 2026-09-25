@@ -1364,7 +1364,7 @@ describe("BunkerServer loopback", () => {
       const a = await connectWithNostrTools();
       const good = server.exportState();
       expect(good.connectionPubkey).toBe(connectionPubkey);
-      const empty = { version: 2, connectionPubkey, secrets: [], clients: [], mac: expect.any(String) };
+      const empty = { version: 2, connectionPubkey, generation: 0, secrets: [], clients: [], mac: expect.any(String) };
       const forgedSk = generateSecretKey();
       const forgedPubkey = getPublicKey(forgedSk);
       const rec = good.secrets[0]!;
@@ -1418,7 +1418,8 @@ describe("BunkerServer loopback", () => {
       const a = BunkerSigner.fromBunker(generateSecretKey(), bp, { pool });
       const connecting = a.connect();
       await wait(100); // pending inside the handler
-      await expect(gated.restore({ ...before, secrets: [{ secret, origin: "bunker", relays: [relay.url], confirmed: false }] })).rejects.toThrow(/pending/);
+      // A genuine export (the MAC is verified before the pending check), refused only because an approval is in flight.
+      await expect(gated.restore(before)).rejects.toThrow(/pending/);
       gate.resolve("ack");
       await connecting;
       expect(await a.getPublicKey()).toBe(userPubkey);
@@ -1567,7 +1568,7 @@ describe("BunkerServer loopback", () => {
       const good = server.exportState();
       expect(good).toMatchObject({ version: 2, connectionPubkey, mac: expect.any(String) });
       const forgedPubkey = getPublicKey(generateSecretKey());
-      const empty = { version: 2, connectionPubkey, secrets: [], clients: [], mac: expect.any(String) };
+      const empty = { version: 2, connectionPubkey, generation: 0, secrets: [], clients: [], mac: expect.any(String) };
       // The exact shape a legitimate export has, with the pubkey swapped for one the attacker chose.
       const lie: BunkerState = {
         ...good,
@@ -1773,8 +1774,9 @@ describe("BunkerServer loopback", () => {
 
     it("revocation is durable against a storage rollback: an export from before the revoke is refused by generation", async () => {
       const generations: number[] = [];
+      const guardedSk = generateSecretKey(); // its own key: two servers with one key on one relay would both answer
       const guarded = new BunkerServer({
-        connectionSecretKey: connectionSk,
+        connectionSecretKey: guardedSk,
         relays: [relay.url],
         handler: signerHandler(user),
         onGenerationChange: (g) => generations.push(g),
@@ -1798,7 +1800,7 @@ describe("BunkerServer loopback", () => {
       await expect(guarded.restore(before)).rejects.toThrow(/generation 0 .*behind.*1/);
       expect(guarded.connectedClients).toEqual([]);
       // Fresh process that kept its keychain counter: still refused.
-      const restarted = new BunkerServer({ connectionSecretKey: connectionSk, relays: [relay.url], handler: signerHandler(user), generation: 1 });
+      const restarted = new BunkerServer({ connectionSecretKey: guardedSk, relays: [relay.url], handler: signerHandler(user), generation: 1 });
       cleanups.push(() => restarted.stop());
       await expect(restarted.restore(before)).rejects.toThrow(/generation/);
       expect(restarted.connectedClients).toEqual([]);
@@ -1807,7 +1809,7 @@ describe("BunkerServer loopback", () => {
       // The generation is inside the MAC: bumping it by hand in the old export is a forgery, not a newer state.
       await expect(restarted.restore({ ...before, generation: 5 })).rejects.toThrow(/authentication/);
       // A process whose keychain counter was lost (0) has nothing to compare against and adopts the state's generation: as strong as the keychain, no more.
-      const amnesiac = new BunkerServer({ connectionSecretKey: connectionSk, relays: [relay.url], handler: signerHandler(user) });
+      const amnesiac = new BunkerServer({ connectionSecretKey: guardedSk, relays: [relay.url], handler: signerHandler(user) });
       cleanups.push(() => amnesiac.stop());
       await amnesiac.restore(after);
       expect(amnesiac.generation).toBe(1);

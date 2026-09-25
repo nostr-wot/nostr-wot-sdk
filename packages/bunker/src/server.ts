@@ -163,8 +163,11 @@ export class BunkerServer {
   #pendingApprovals = 0;
   /** Resolvers waiting for `#pendingApprovals` to reach zero. */
   #idleWaiters: Array<() => void> = [];
-  /** Clients whose admission is pending and who are not connected yet; they count toward `maxClients`. */
-  readonly #pendingAdmissions = new Set<string>();
+  /** Pending admissions per client pubkey (one client may have several requests in flight); they count toward `maxClients`. */
+  readonly #pendingAdmissions = new Map<string, number>();
+  /** See {@link BunkerState.generation}. */
+  #generation: number;
+  readonly #onGenerationChange: ((generation: number) => void) | undefined;
   /** While a restore applies, nothing is emitted; one snapshot goes out after it succeeds. */
   #muted = false;
   /** The earliest expiry among unclaimed secrets; the sweep is a no-op before then. */
@@ -182,6 +185,8 @@ export class BunkerServer {
     this.#mapError = options.mapError ?? defaultMapError;
     this.#log = options.logger ?? {};
     this.#onStateChange = options.onStateChange;
+    this.#onGenerationChange = options.onGenerationChange;
+    this.#generation = Number.isInteger(options.generation) && (options.generation as number) >= 0 ? (options.generation as number) : 0;
     this.#opts = {
       requireSecret: options.requireSecret ?? DEFAULTS.requireSecret,
       secretTtlMs: options.secretTtlMs ?? DEFAULTS.secretTtlMs,
@@ -247,14 +252,32 @@ export class BunkerServer {
     return new Promise((resolve) => this.#idleWaiters.push(resolve));
   }
 
+  /** The generation the host should hold beside the key. Advances on every revocation. */
+  get generation(): number {
+    return this.#generation;
+  }
+
+  #setGeneration(generation: number): void {
+    if (generation === this.#generation) return;
+    this.#generation = generation;
+    try {
+      this.#onGenerationChange?.(generation);
+    } catch (err) {
+      this.#log.warn?.("onGenerationChange threw", { error: errorText(err) });
+    }
+  }
+
   #beginApproval(clientPubkey: string): void {
     this.#pendingApprovals += 1;
-    if (!this.#clients.has(clientPubkey)) this.#pendingAdmissions.add(clientPubkey);
+    // Counted per request, not per client: a client's first attempt settling must not free the slot its retry still holds.
+    this.#pendingAdmissions.set(clientPubkey, (this.#pendingAdmissions.get(clientPubkey) ?? 0) + 1);
   }
 
   #endApproval(clientPubkey: string): void {
     this.#pendingApprovals -= 1;
-    this.#pendingAdmissions.delete(clientPubkey);
+    const left = (this.#pendingAdmissions.get(clientPubkey) ?? 1) - 1;
+    if (left <= 0) this.#pendingAdmissions.delete(clientPubkey);
+    else this.#pendingAdmissions.set(clientPubkey, left);
     if (this.#pendingApprovals === 0) {
       const waiters = this.#idleWaiters;
       this.#idleWaiters = [];
@@ -266,6 +289,11 @@ export class BunkerServer {
   #overClientCeiling(clientPubkey: string): boolean {
     if (this.#clients.has(clientPubkey) || this.#pendingAdmissions.has(clientPubkey)) return false;
     return this.#clients.size + this.#pendingAdmissions.size >= this.#opts.maxClients;
+  }
+
+  /** Re-checked after the handler await, in case the accounting above ever misses a path: the ceiling is hard. */
+  #roomFor(clientPubkey: string): boolean {
+    return this.#clients.has(clientPubkey) || this.#clients.size < this.#opts.maxClients;
   }
 
   /** The relays a connected client's responses go to; `[]` for a client that is not connected. */
@@ -293,6 +321,7 @@ export class BunkerServer {
     const record = this.#secrets.get(secret);
     if (!record) return false;
     this.#secrets.delete(secret);
+    this.#setGeneration(this.#generation + 1); // an export from before this moment must not restore
     const bound = record.clientPubkey ? this.#clients.get(record.clientPubkey) : undefined;
     if (record.clientPubkey && bound && bound.secret === secret) {
       this.disconnectClient(record.clientPubkey); // emits
@@ -319,7 +348,7 @@ export class BunkerServer {
       if (c.secret) out.secret = c.secret;
       return out;
     });
-    return signBunkerState(this.#sk, { version: 2, connectionPubkey: this.#pubkey, secrets, clients });
+    return signBunkerState(this.#sk, { version: 2, connectionPubkey: this.#pubkey, generation: this.#generation, secrets, clients });
   }
 
   /**
@@ -343,17 +372,39 @@ export class BunkerServer {
    */
   async restore(state: BunkerState, options: RestoreOptions = {}): Promise<void> {
     if (!state || typeof state !== "object") throw new Error("restore refused: state is not an object");
+    // The version decides whether a MAC is required, so it is the one field read before the MAC.
+    const version = (state as { version?: unknown }).version;
+    const mac = (state as { mac?: unknown }).mac;
+    let signed: boolean;
+    let generation: number;
+    if (version === undefined || version === 1) {
+      if (!options.allowUnsigned) {
+        throw new Error(
+          "restore refused: state is unsigned (pre-2 format); pass { allowUnsigned: true } once to migrate it, then persist the signed export",
+        );
+      }
+      signed = false;
+      generation = 0;
+    } else if (version === 2) {
+      if (mac === undefined) {
+        throw new Error("restore refused: a version 2 state must be signed; allowUnsigned only migrates pre-2 states");
+      }
+      if (typeof mac !== "string" || !verifyBunkerState(this.#sk, state)) throw new Error("restore refused: state authentication failed");
+      signed = true;
+      generation = state.generation;
+      if (!Number.isInteger(generation) || generation < 0) throw new Error("restore refused: state generation must be a non-negative integer");
+    } else {
+      throw new Error(`restore refused: unsupported state version ${String(version)}`);
+    }
     if (state.connectionPubkey !== this.#pubkey) throw new Error("restore refused: state belongs to a different connection key");
-    const signed = typeof (state as { mac?: unknown }).mac === "string";
-    if (!signed && !options.allowUnsigned) {
+    if (generation < this.#generation) {
       throw new Error(
-        "restore refused: state is unsigned (pre-2 format); pass { allowUnsigned: true } once to migrate it, then persist the signed export",
+        `restore refused: state generation ${generation} is behind the host's ${this.#generation}; a revocation since then would be undone`,
       );
     }
     if (this.#pendingApprovals > 0) {
       throw new Error(`restore refused: ${this.#pendingApprovals} approval${this.#pendingApprovals === 1 ? "" : "s"} pending`);
     }
-    if (signed && !verifyBunkerState(this.#sk, state)) throw new Error("restore refused: state authentication failed");
     const plan = this.#validateState(state);
     // Decide everything before touching anything.
     const setSecrets: Array<[string, SecretState]> = [];
@@ -385,8 +436,9 @@ export class BunkerServer {
     } finally {
       this.#muted = false;
     }
+    if (generation > this.#generation) this.#setGeneration(generation); // a host that lost its counter adopts the state's
     this.#emit();
-    this.#log.info?.("state restored", { secrets: this.#secrets.size, clients: this.#clients.size, signed });
+    this.#log.info?.("state restored", { secrets: this.#secrets.size, clients: this.#clients.size, signed, generation: this.#generation });
     await Promise.all(admitted);
   }
 
@@ -611,6 +663,11 @@ export class BunkerServer {
       record.pending -= 1;
       for (const url of parsed.relays) this.#closeSocket(url);
       throw new BunkerError("secret revoked");
+    }
+    if (!this.#roomFor(parsed.clientPubkey)) {
+      this.#unbind(record, parsed.secret);
+      for (const url of parsed.relays) this.#closeSocket(url);
+      throw new Error(`too many clients (limit ${this.#opts.maxClients}): disconnect some first`);
     }
     record.pending -= 1;
     record.confirmed = true;
@@ -979,12 +1036,16 @@ export class BunkerServer {
       throw err;
     }
     this.#endApproval(request.clientPubkey);
+    if (record && this.#secrets.get(secret) !== record) {
+      // Revoked while the user was deciding: the approval is discarded.
+      record.pending -= 1;
+      throw new BunkerError("secret revoked");
+    }
+    if (!this.#roomFor(request.clientPubkey)) {
+      if (record) this.#unbind(record, secret);
+      throw new BunkerError("too many clients");
+    }
     if (record) {
-      if (this.#secrets.get(secret) !== record) {
-        // Revoked while the user was deciding: the approval is discarded.
-        record.pending -= 1;
-        throw new BunkerError("secret revoked");
-      }
       record.pending -= 1;
       record.confirmed = true;
       delete record.expiresAt;

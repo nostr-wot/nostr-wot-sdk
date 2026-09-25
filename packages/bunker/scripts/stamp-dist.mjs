@@ -1,8 +1,11 @@
-// Run by tsup's onSuccess: writes dist/.src-hash, a hash of everything the
-// build depends on: src/, tsup.config.ts, package.json, the RESOLVED TypeScript
-// config (tsc --showConfig, so a change in ../../tsconfig.base.json counts),
-// and the versions of tsup, esbuild and typescript. `npm run check:dist`
-// compares; CI runs it after the build, and so should anyone vendoring by path.
+// Run by tsup's onSuccess: writes dist/.src-hash, a JSON stamp with a hash of
+// everything the build depends on (src/, tsup.config.ts, package.json, the
+// RESOLVED TypeScript config via tsc --showConfig so ../../tsconfig.base.json
+// counts, and the tsup/esbuild/typescript versions) AND a hash of everything
+// the build produced. `npm run check:dist` compares both, so a stale, tampered
+// or partially deleted dist/ fails. CI runs it after the build, proves it bites
+// on a tampered copy, and checks the packed tarball; vendoring by path should
+// run it too.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
@@ -25,11 +28,12 @@ export function toolVersions() {
   return ["tsup", "esbuild", "typescript"].map((name) => `${name}@${require(`${name}/package.json`).version}`).join(",");
 }
 
-export function hashSrc(root = join(pkg, "src")) {
+export function hashSrc(root = join(pkg, "src"), skip = () => false) {
   const files = [];
   const walk = (dir) => {
     for (const name of readdirSync(dir).sort()) {
       const full = join(dir, name);
+      if (skip(name)) continue;
       if (statSync(full).isDirectory()) walk(full);
       else files.push(full);
     }
@@ -55,7 +59,15 @@ export function hashBuildInputs() {
   return h.digest("hex");
 }
 
+export const STAMP = ".src-hash";
+
+/** Hash of every file in a dist directory except the stamp itself. */
+export function hashOutputs(distDir = join(pkg, "dist")) {
+  return hashSrc(distDir, (name) => name === STAMP);
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   mkdirSync(join(pkg, "dist"), { recursive: true });
-  writeFileSync(join(pkg, "dist", ".src-hash"), hashBuildInputs() + "\n");
+  const stamp = { inputs: hashBuildInputs(), outputs: hashOutputs(), tools: toolVersions() };
+  writeFileSync(join(pkg, "dist", STAMP), JSON.stringify(stamp, null, 2) + "\n");
 }
