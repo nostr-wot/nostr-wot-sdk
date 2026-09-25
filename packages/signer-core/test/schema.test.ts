@@ -81,6 +81,21 @@ describe('the envelope', () => {
     }
   });
 
+  test('a bare identifier has to be a hostname: lowercased, trailing dots off, an address written one way', () => {
+    for (const [identifier, canonical] of [
+      ['EXAMPLE.COM.', 'example.com'],
+      ['127.1', '127.0.0.1'],
+      ['0x7f.0.0.1', '127.0.0.1'],
+      ['localhost', 'localhost'],
+    ]) {
+      const input = { ...base('getPublicKey', {}), origin: { kind: 'web' as const, identifier: identifier! } };
+      expect(validateRequest(input).request.origin.identifier).toBe(canonical);
+    }
+    for (const identifier of ['example.com/', 'user@example.com', 'exa mple.com', 'example..com', 'ex\tample.com', '256.1.1.1']) {
+      expect(invalid({ ...base('getPublicKey', {}), origin: { kind: 'web', identifier } })).toMatch(/origin|hostname/i);
+    }
+  });
+
   test('an http(s) URL that is not an origin, or carries credentials, is refused', () => {
     for (const identifier of [
       'https://example.com/',

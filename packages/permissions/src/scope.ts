@@ -180,6 +180,22 @@ export function canonicalHttpOrigin(value: string): string | null {
   return `${scheme}://${host}${port}`;
 }
 
+/**
+ * The one spelling of a bare hostname, or null when `value` is not one.
+ *
+ * The legacy key: lowercased, trailing dots removed (older stores never kept one), an IPv4
+ * address written as a dotted quad, and only the characters a hostname a page reports can
+ * hold. Anything else — a path, credentials, whitespace, a port, a bracketed address, an
+ * empty label — is not a hostname and is refused rather than becoming its own key.
+ */
+export function canonicalHostname(value: string): string | null {
+  const lowered = value.toLowerCase().replace(/\.+$/, '');
+  if (lowered.length === 0 || !DOMAIN.test(lowered)) return null;
+  const ipv4 = canonicalIpv4(lowered);
+  if (ipv4 === false) return null;
+  return ipv4 ?? lowered;
+}
+
 /** The bare hostname of a canonical origin: what older stores keyed on. */
 function hostnameOf(canonical: string): string {
   const authority = canonical.slice(canonical.indexOf('//') + 2);

@@ -11,7 +11,7 @@
  * checks that the implementation never consulted `URL` at all.
  */
 import { describe, test, expect, vi, afterEach } from 'vitest';
-import { canonicalHttpOrigin, siteScopes } from '../src/index.js';
+import { canonicalHostname, canonicalHttpOrigin, siteScopes } from '../src/index.js';
 
 const CANONICAL: Array<[string, string]> = [
   ['https://example.com', 'https://example.com'],
@@ -88,6 +88,27 @@ describe('canonicalHttpOrigin', () => {
   test('canonical output is a fixed point', () => {
     for (const [, canonical] of CANONICAL) expect(canonicalHttpOrigin(canonical)).toBe(canonical);
   });
+});
+
+describe('canonicalHostname', () => {
+  test.each([
+    ['example.com', 'example.com'],
+    ['EXAMPLE.COM.', 'example.com'],
+    ['sub.example.com...', 'sub.example.com'],
+    ['127.1', '127.0.0.1'],
+    ['0x7f.0.0.1', '127.0.0.1'],
+    ['localhost', 'localhost'],
+    ['xn--bcher-kva.example', 'xn--bcher-kva.example'],
+  ] as Array<[string, string]>)('%s -> %s', (input, expected) => {
+    expect(canonicalHostname(input)).toBe(expected);
+  });
+
+  test.each(['', '...', 'example.com/', 'user@example.com', 'exa mple.com', 'example..com', 'https://example.com', '[::1]', 'localhost:3000', '256.1.1.1', 'ex\tample.com'])(
+    '%j is not a hostname',
+    (input) => {
+      expect(canonicalHostname(input)).toBeNull();
+    },
+  );
 });
 
 describe('siteScopes reads the canonical origin, then the legacy hostname', () => {

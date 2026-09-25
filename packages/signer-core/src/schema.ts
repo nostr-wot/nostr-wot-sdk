@@ -19,7 +19,7 @@ import {
   ORIGIN_KINDS,
   SIGNER_METHODS,
 } from './constants.js';
-import { canonicalHttpOrigin } from '@nostr-wot/permissions';
+import { canonicalHostname, canonicalHttpOrigin } from '@nostr-wot/permissions';
 import { SignerError } from './errors.js';
 import type {
   EventTemplateInput,
@@ -118,13 +118,16 @@ function deepFreeze<T>(value: T): T {
  * not fold case or ports, and a rule that only held under Node's parser held nowhere it
  * mattered.
  *
- * The second is a bare hostname, the legacy key: folded to lowercase, trailing dots removed,
- * because `EXAMPLE.COM` and `example.com.` would otherwise dodge a deny stored for
- * `example.com`. Anything else containing a `:` is refused. The permission key for every
- * other origin kind is `kind:identifier`, so a web caller naming itself `nip55:com.evil.app`
- * would read the grant a real Android package earned; and `localhost:3000` or `[::1]` as bare
- * forms are refused deliberately, since a local development page arrives as
- * `http://localhost:3000` or `http://[::1]:8080`, which the origin form accepts.
+ * The second is a bare hostname, the legacy key, canonicalised by `canonicalHostname` from
+ * the same package: folded to lowercase, trailing dots removed, an IPv4 address written one
+ * way, because `EXAMPLE.COM`, `example.com.` and `127.1` would otherwise dodge a deny stored
+ * for the canonical spelling. Anything that is not a hostname — a path, credentials,
+ * whitespace, a `:` — is refused rather than becoming its own key. The permission key for
+ * every other origin kind is `kind:identifier`, so a web caller naming itself
+ * `nip55:com.evil.app` would read the grant a real Android package earned; and
+ * `localhost:3000` or `[::1]` as bare forms are refused deliberately, since a local
+ * development page arrives as `http://localhost:3000` or `http://[::1]:8080`, which the
+ * origin form accepts.
  *
  * A NIP-46 client is its hex pubkey and is folded to lowercase for the same reason.
  */
@@ -133,12 +136,10 @@ function canonicalIdentifier(kind: RequestOrigin['kind'], identifier: string): s
     case 'web': {
       const origin = canonicalHttpOrigin(identifier);
       if (origin !== null) return origin;
-      if (identifier.includes(':')) {
-        throw invalid('origin.identifier for a web origin must be an exact http(s) origin or a bare hostname');
-      }
-      const host = identifier.toLowerCase().replace(/\.+$/, '');
-      if (host.length === 0) throw invalid('origin.identifier must not be empty');
-      return host;
+      const host = canonicalHostname(identifier);
+      if (host !== null) return host;
+      if (identifier.replace(/\.+$/, '').length === 0) throw invalid('origin.identifier must not be empty');
+      throw invalid('origin.identifier for a web origin must be an exact http(s) origin or a bare hostname');
     }
     case 'nip46':
       return requirePubkey(identifier.toLowerCase(), 'origin.identifier for a nip46 origin');
