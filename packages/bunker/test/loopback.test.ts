@@ -5,7 +5,7 @@ import { v2 as nip44 } from "nostr-tools/nip44";
 import { NostrConnect } from "nostr-tools/kinds";
 import { BunkerSigner, parseBunkerInput } from "nostr-tools/nip46";
 import { Nip46Signer, PrivateKeySigner } from "@nostr-wot/signers";
-import { BunkerError, BunkerServer, type BunkerHandler, type BunkerRequest, type BunkerState } from "../src";
+import { BunkerError, BunkerServer, signBunkerState, type BunkerHandler, type BunkerRequest, type BunkerState } from "../src";
 import { TestRelay } from "./relay";
 
 /**
@@ -1358,7 +1358,7 @@ describe("BunkerServer loopback", () => {
       const a = await connectWithNostrTools();
       const good = server.exportState();
       expect(good.connectionPubkey).toBe(connectionPubkey);
-      const empty = { connectionPubkey, secrets: [], clients: [] };
+      const empty = { version: 2, connectionPubkey, secrets: [], clients: [], mac: expect.any(String) };
       const forgedSk = generateSecretKey();
       const forgedPubkey = getPublicKey(forgedSk);
       const rec = good.secrets[0]!;
@@ -1549,6 +1549,190 @@ describe("BunkerServer loopback", () => {
       const minted = server.createBunkerUri({ ttlMs: 50 });
       await wait(100);
       expect(server.exportState().secrets.map((r) => r.secret)).not.toContain(minted.secret);
+    });
+
+    it("a well-formed lie is refused: restored state must carry a MAC made with the connection key", async () => {
+      const a = await connectWithNostrTools();
+      const good = server.exportState();
+      expect(good).toMatchObject({ version: 2, connectionPubkey, mac: expect.any(String) });
+      const forgedPubkey = getPublicKey(generateSecretKey());
+      const empty = { version: 2, connectionPubkey, secrets: [], clients: [], mac: expect.any(String) };
+      // The exact shape a legitimate export has, with the pubkey swapped for one the attacker chose.
+      const lie: BunkerState = {
+        ...good,
+        secrets: [{ ...good.secrets[0]!, clientPubkey: forgedPubkey }],
+        clients: [{ ...good.clients[0]!, clientPubkey: forgedPubkey }],
+      };
+      const { mac: _drop, ...unsignedLie } = lie;
+      const cases: Array<[string, BunkerState]> = [
+        ["stale mac copied from a real export", lie],
+        ["mac made with a different key", signBunkerState(generateSecretKey(), unsignedLie)],
+        ["one field changed after signing", { ...good, secrets: [{ ...good.secrets[0]!, confirmed: true, relays: [...good.secrets[0]!.relays, "wss://evil.example/"] }] }],
+      ];
+      for (const [label, state] of cases) {
+        const fresh = new BunkerServer({ connectionSecretKey: connectionSk, relays: [relay.url], handler: signerHandler(user) });
+        await fresh.start();
+        cleanups.push(() => fresh.stop());
+        await expect(fresh.restore(state), label).rejects.toThrow(/authentication/);
+        expect(fresh.exportState()).toEqual(empty);
+      }
+      // What the connection key signed restores; what the host holds is exactly what it exported.
+      const fresh = new BunkerServer({ connectionSecretKey: connectionSk, relays: [relay.url], handler: signerHandler(user) });
+      await fresh.start();
+      cleanups.push(() => fresh.stop());
+      await fresh.restore(good);
+      expect(fresh.exportState()).toEqual(good);
+      expect(await a.getPublicKey()).toBe(userPubkey);
+    });
+
+    it("a failed restore emits nothing and applies nothing, even when the bad entry is the last one", async () => {
+      const snapshots: BunkerState[] = [];
+      const watched = new BunkerServer({
+        connectionSecretKey: connectionSk,
+        relays: [relay.url],
+        handler: signerHandler(user),
+        onStateChange: (state) => snapshots.push(state),
+      });
+      await watched.start();
+      cleanups.push(() => watched.stop());
+      const pk = () => getPublicKey(generateSecretKey());
+      const offCurve = "ff".repeat(32); // 64 hex characters, not a point on secp256k1
+      const pubkeys = [pk(), pk(), offCurve];
+      const hostile = signBunkerState(connectionSk, {
+        version: 2,
+        connectionPubkey,
+        secrets: pubkeys.map((p, i) => ({ secret: `s${i}`, origin: "bunker" as const, relays: [relay.url], clientPubkey: p, confirmed: true })),
+        clients: pubkeys.map((p, i) => ({ clientPubkey: p, relays: [relay.url], secret: `s${i}`, connectedAt: 1 })),
+      });
+      await expect(watched.restore(hostile)).rejects.toThrow(/curve/);
+      expect(snapshots).toEqual([]); // a host persisting on every callback saw nothing partial
+      expect(watched.connectedClients).toEqual([]);
+      expect(watched.exportState().secrets).toEqual([]);
+
+      const a = await connectWithNostrTools(server.createBunkerUri().uri);
+      const good = server.exportState();
+      await watched.restore(good);
+      expect(snapshots).toHaveLength(1); // one snapshot for the whole restore, after it succeeded
+      expect(snapshots[0]!.clients).toHaveLength(1);
+      expect(await a.getPublicKey()).toBe(userPubkey);
+    });
+
+    it("maxClients counts approvals in flight, so two pending connects cannot both land under a ceiling of one", async () => {
+      const gate = deferred<string>();
+      const aSk = generateSecretKey();
+      const capped = new BunkerServer({
+        connectionSecretKey: generateSecretKey(),
+        relays: [relay.url],
+        maxClients: 1,
+        // A's approval waits on the gate; anyone else's is instant, so a soft ceiling shows up as an admission, not a hang.
+        handler: async (req, ctx) => (req.method === "connect" ? (req.clientPubkey === getPublicKey(aSk) ? gate.promise : "ack") : signerHandler(user)(req, ctx)),
+      });
+      await capped.start();
+      cleanups.push(() => capped.stop());
+      const pool = new SimplePool();
+      cleanups.push(() => pool.close([relay.url]));
+      const a = BunkerSigner.fromBunker(aSk, (await parseBunkerInput(capped.createBunkerUri().uri))!, { pool });
+      const b = BunkerSigner.fromBunker(generateSecretKey(), (await parseBunkerInput(capped.createBunkerUri().uri))!, { pool });
+      const connectingA = a.connect();
+      await wait(100); // A is pending inside the handler
+      await expect(b.connect()).rejects.toBe("too many clients");
+      gate.resolve("ack");
+      await connectingA;
+      expect(capped.connectedClients).toEqual([getPublicKey(aSk)]);
+      await a.close();
+      await b.close();
+    });
+
+    it("an unsigned (round-8) state gets its own error and an explicit one-time migration", async () => {
+      const a = await connectWithNostrTools();
+      const { version: _v, mac: _m, ...legacy } = server.exportState();
+      const next = new BunkerServer({ connectionSecretKey: connectionSk, relays: [relay.url], handler: signerHandler(user) });
+      await next.start();
+      cleanups.push(() => next.stop());
+      await expect(next.restore(legacy as unknown as BunkerState)).rejects.toThrow(/unsigned/);
+      expect(next.connectedClients).toEqual([]);
+      await next.restore(legacy as unknown as BunkerState, { allowUnsigned: true });
+      expect(next.connectedClients).toEqual([getPublicKey((a as unknown as { secretKey: Uint8Array }).secretKey)]);
+      const migrated = next.exportState();
+      expect(migrated).toMatchObject({ version: 2, mac: expect.any(String) });
+      // From now on the signed export is what the host keeps; the unsigned shape is refused again.
+      const again = new BunkerServer({ connectionSecretKey: connectionSk, relays: [relay.url], handler: signerHandler(user) });
+      cleanups.push(() => again.stop());
+      await again.restore(migrated);
+      expect(again.connectedClients).toEqual(next.connectedClients);
+    });
+
+    it("pending approvals are visible and awaitable, so a host knows when restore will be accepted", async () => {
+      const gate = deferred<string>();
+      const gated = new BunkerServer({
+        connectionSecretKey: generateSecretKey(),
+        relays: [relay.url],
+        handlerTimeoutMs: 0,
+        handler: async (req, ctx) => (req.method === "connect" ? gate.promise : signerHandler(user)(req, ctx)),
+      });
+      await gated.start();
+      cleanups.push(() => gated.stop());
+      const before = gated.exportState();
+      expect(gated.pendingApprovals).toBe(0);
+      await gated.whenIdle(); // resolves at once when nothing is pending
+      const pool = new SimplePool();
+      cleanups.push(() => pool.close([relay.url]));
+      const a = BunkerSigner.fromBunker(generateSecretKey(), (await parseBunkerInput(gated.createBunkerUri().uri))!, { pool });
+      const connecting = a.connect();
+      await wait(100);
+      expect(gated.pendingApprovals).toBe(1);
+      let idle = false;
+      const waiting = gated.whenIdle().then(() => {
+        idle = true;
+      });
+      await wait(50);
+      expect(idle).toBe(false);
+      await expect(gated.restore(before)).rejects.toThrow(/pending/);
+      gate.resolve("ack");
+      await connecting;
+      await waiting;
+      expect(gated.pendingApprovals).toBe(0);
+      await gated.restore(gated.exportState()); // accepted now
+      await a.close();
+    });
+
+    it("restore keeps the invariants the live path keeps", async () => {
+      const a = await connectWithNostrTools();
+      const good = server.exportState();
+      const { mac: _m, ...unsigned } = good;
+      const fresh = new BunkerServer({ connectionSecretKey: connectionSk, relays: [relay.url], handler: signerHandler(user) });
+      await fresh.start();
+      cleanups.push(() => fresh.stop());
+      // A client's relays are its secret's relays: the live path never lets them diverge.
+      const diverged = signBunkerState(connectionSk, { ...unsigned, clients: [{ ...good.clients[0]!, relays: ["wss://elsewhere.example/"] }] });
+      await expect(fresh.restore(diverged)).rejects.toThrow(/relays/);
+      // Re-minting a bound secret with other relays does not move it either.
+      server.createBunkerUri({ secret: good.secrets[0]!.secret, relays: [relay.url, "wss://elsewhere.example/"] });
+      expect(server.exportState().secrets[0]!.relays).toEqual([relay.url]);
+      expect(await a.getPublicKey()).toBe(userPubkey);
+
+      // A bound-but-unconfirmed record (a process that died mid-approval) is not immortal after restore.
+      const pendingRecord = signBunkerState(connectionSk, {
+        ...unsigned,
+        secrets: [{ secret: "died-mid-approval", origin: "nostrconnect", relays: [relay.url], clientPubkey: getPublicKey(generateSecretKey()), confirmed: false }],
+        clients: [],
+      });
+      await fresh.restore(pendingRecord);
+      const restored = fresh.exportState().secrets.find((r) => r.secret === "died-mid-approval");
+      expect(restored?.expiresAt).toEqual(expect.any(Number));
+      expect(restored!.expiresAt!).toBeGreaterThan(Date.now());
+
+      // Host-facing ceiling errors on a scan are plain errors, not wire-visible ones, both of them.
+      const tiny = new BunkerServer({ connectionSecretKey: generateSecretKey(), relays: [relay.url], maxSecrets: 1, maxClients: 1, handler: signerHandler(user) });
+      await tiny.start();
+      cleanups.push(() => tiny.stop());
+      const held = await connectWithNostrTools(tiny.createBunkerUri().uri);
+      expect(await held.getPublicKey()).toBe(userPubkey);
+      const scan = (secret: string) => `nostrconnect://${getPublicKey(generateSecretKey())}?relay=${encodeURIComponent(relay.url)}&secret=${secret}`;
+      const notWire = (e: unknown) => e instanceof Error && (e as { wireVisible?: unknown }).wireVisible !== true;
+      await expect(tiny.acceptNostrConnect(scan("one-more"))).rejects.toSatisfy(notWire);
+      tiny.disconnectClient(tiny.connectedClients[0]!);
+      await expect(tiny.acceptNostrConnect(scan("one-more"))).rejects.toSatisfy(notWire);
     });
 
     it("the server-level secretTtlMs applies to every mint, and 0 disables it", async () => {
