@@ -65,7 +65,7 @@ type Mode = boolean | 'never';
 
 interface RecordingApproval extends ApprovalPort {
   presented: Array<{ request: SignerRequest; account: SafeAccount }>;
-  cancelled: Array<{ id: string; reason: string }>;
+  cancelled: Array<{ origin: string; id: string; reason: string }>;
   /** Replaceable per test, for a prompt that does something before it answers. */
   decide: (request: SignerRequest, account: SafeAccount) => Promise<ApprovalDecision>;
 }
@@ -82,8 +82,8 @@ function recordingApproval(mode: Mode): RecordingApproval {
       port.presented.push({ request, account });
       return port.decide(request, account);
     },
-    cancel(id, reason) {
-      port.cancelled.push({ id, reason });
+    cancel(origin, id, reason) {
+      port.cancelled.push({ origin, id, reason });
     },
   };
   return port;
@@ -658,6 +658,29 @@ describe('the approval queue', () => {
     expect(core.pending().filter((entry) => entry.kind === 'approval')).toHaveLength(1);
   });
 
+  test('cancel names the origin, so two clients sharing a request id never withdraw each other\'s prompt', async () => {
+    // The queue keys entries by origin, kind and id; a NIP-46 request id is chosen by the
+    // client, so two connected clients using the same id is trivially arranged. The host has
+    // to be able to match what the queue matched, or a timeout for one client's request
+    // drops the other client's prompt.
+    vi.useFakeTimers();
+    const { core, approval } = await fixture('never');
+    const first = { ...req('getPublicKey'), id: 'shared-id', origin: { kind: 'web' as const, identifier: 'https://one.example' } };
+    const second = { ...req('getPublicKey'), id: 'shared-id', origin: { kind: 'web' as const, identifier: 'https://two.example' } };
+    // Settled into values at creation: the rejections land inside the timer advances, before
+    // a later `.rejects` could attach, and an unhandled one fails the run without failing a test.
+    const firstOutcome = core.handle(first).then(() => 'resolved', (error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(1000);
+    const secondOutcome = core.handle(second).then(() => 'resolved', (error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS - 1000);
+    expect(await firstOutcome).toMatchObject({ code: 'timeout' });
+    expect(approval.cancelled).toEqual([{ origin: 'https://one.example', id: 'shared-id', reason: expect.stringMatching(/timed out/i) }]);
+    expect(core.pending().map((entry) => entry.origin)).toEqual(['https://two.example']);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await secondOutcome).toMatchObject({ code: 'timeout' });
+    expect(approval.cancelled[1]).toEqual({ origin: 'https://two.example', id: 'shared-id', reason: expect.stringMatching(/timed out/i) });
+  });
+
   test('a request nobody answers times out and the prompt is cancelled', async () => {
     vi.useFakeTimers();
     const { core, approval } = await fixture('never');
@@ -668,7 +691,7 @@ describe('the approval queue', () => {
     expect(approval.cancelled).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(1);
     await expect(promise).rejects.toThrow(/timed out/i);
-    expect(approval.cancelled).toEqual([{ id: request.id, reason: expect.stringMatching(/timed out/i) }]);
+    expect(approval.cancelled).toEqual([{ origin: 'example.com', id: request.id, reason: expect.stringMatching(/timed out/i) }]);
     expect(core.pending()).toHaveLength(0);
   });
 
@@ -690,7 +713,7 @@ describe('switching accounts', () => {
     await settle();
     await core.onActiveAccountChanged('acct_1', 'acct_2');
     await expect(inflight).rejects.toThrow(/account switched/i);
-    expect(approval.cancelled).toEqual([{ id: request.id, reason: 'Account switched' }]);
+    expect(approval.cancelled).toEqual([{ origin: 'example.com', id: request.id, reason: 'Account switched' }]);
   });
 
   test('a request queued for another account is left alone', async () => {
@@ -1138,7 +1161,7 @@ describe('host-side cancel', () => {
     expect(core.pending()).toHaveLength(1);
     expect(core.cancel('example.com', request.id)).toBe(true);
     await expect(inflight).rejects.toMatchObject({ code: 'rejected', message: 'Cancelled by user' });
-    expect(approval.cancelled).toEqual([{ id: request.id, reason: 'Cancelled by user' }]);
+    expect(approval.cancelled).toEqual([{ origin: 'example.com', id: request.id, reason: 'Cancelled by user' }]);
   });
 });
 

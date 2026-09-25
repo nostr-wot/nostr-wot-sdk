@@ -125,7 +125,7 @@ export class SignerCore {
       now: this.#now,
       onCancel: (entry, reason) => {
         try {
-          this.#approval.cancel(entry.id, reason);
+          this.#approval.cancel(entry.origin, entry.id, reason);
         } catch (error) {
           this.#logger?.warn('approval port failed to cancel', {
             requestId: entry.id,

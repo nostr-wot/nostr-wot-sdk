@@ -106,10 +106,16 @@ export interface ApprovalDecision {
  * tag; the pipeline never truncates on the way in. `cancel` is called when a request the host
  * is still showing has been settled from elsewhere: timed out, disposed, or rejected because
  * the account changed. The host should close the prompt; its eventual answer is ignored.
+ *
+ * `cancel` names the origin as well as the id, because the id alone does not identify a
+ * prompt: the queue keys entries by origin, kind and id, a NIP-46 request id is chosen by the
+ * client, and two connected clients using the same id is trivially arranged. `origin` is the
+ * permission key exactly as {@link PendingEntry.origin} and `permissionOrigin` spell it, so
+ * the host can match what the queue matched.
  */
 export interface ApprovalPort {
   present(request: SignerRequest, account: SafeAccount): Promise<ApprovalDecision>;
-  cancel(requestId: string, reason: string): void;
+  cancel(origin: string, requestId: string, reason: string): void;
 }
 
 // ── Activity ──

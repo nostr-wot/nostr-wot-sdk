@@ -35,7 +35,7 @@ const core = new SignerCore({
   vault,        // @nostr-wot/vault
   permissions,  // @nostr-wot/permissions
   identity,     // your source of truth for the active account, locked or not
-  approval,     // your prompt: present(request, account) and cancel(requestId, reason)
+  approval,     // your prompt: present(request, account) and cancel(origin, requestId, reason)
   activity,     // your log: record(entry)
 });
 
@@ -109,7 +109,8 @@ every such page reports the same string and one remembered allow would cover all
 `MAX_PENDING_PER_ORIGIN` (5) caps the prompts one origin may have open; unlock markers and
 in-flight remote work do not count toward it, and are bounded by the in-flight caps instead.
 `REQUEST_TIMEOUT_MS` (120 s) rejects anything unanswered. `core.pending()` lists what is
-waiting, for a badge or a list; `core.cancel(origin, id)` settles one from the host's side,
+waiting, for a badge or a list; `core.cancel(origin, id)` settles one from the host's side, and
+the port's `cancel(origin, id, reason)` is told the origin for the same reason,
 scoped to the origin because NIP-46 request ids are chosen by the client.
 
 ## Wiring to `@nostr-wot/bunker`
