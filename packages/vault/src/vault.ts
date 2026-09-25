@@ -225,6 +225,9 @@ export class Vault {
    */
   async create(password: string, accounts: Account[]): Promise<void> {
     assertPassword(password, 'Password');
+    if (new Set(accounts.map((account) => account.id)).size !== accounts.length) {
+      throw new Error('Account ids must be unique');
+    }
     // This replaces whatever session was open, so anything already in flight against the old
     // one is cancelled here rather than allowed to land on top of the new vault.
     this.#invalidateSession();

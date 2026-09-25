@@ -1166,6 +1166,14 @@ describe('a write that fails after the session has died', () => {
   });
 });
 
+describe('create and addAccount agree', () => {
+  test('create refuses duplicate account ids, as addAccount does', async () => {
+    const vault = new Vault({ store: new MemoryStore(), kdf: fastKdf });
+    await expect(vault.create('hunter22', [account, { ...seeded, id: 'acct_1' }])).rejects.toThrow(/unique|already exists/i);
+    expect(await vault.exists()).toBe(false);
+  });
+});
+
 describe('imported post-quantum keys', () => {
   test('setImportedPqKeys stores the pair, hasImportedPqKeys sees it, and the record carries it', async () => {
     const { vault, store } = await openVault([account]);
