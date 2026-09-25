@@ -34,159 +34,27 @@ import {
   type UnlockPort,
 } from '../src/index.js';
 
-// ── Fixtures ──
-
-const PRIVKEY_1 = 'cd'.repeat(32);
-const PUBKEY_1 = getPublicKey(hexToBytes(PRIVKEY_1));
-const PRIVKEY_2 = '11'.repeat(32);
-const PUBKEY_2 = getPublicKey(hexToBytes(PRIVKEY_2));
-const PASSWORD = 'correct horse battery staple';
-
-function account(id: string, privkey: string | null, extra: Partial<Account> = {}): Account {
-  return {
-    id,
-    name: id,
-    type: privkey ? 'generated' : 'npub',
-    pubkey: privkey ? getPublicKey(hexToBytes(privkey)) : PUBKEY_2,
-    privkey,
-    mnemonic: null,
-    nip46Config: null,
-    readOnly: !privkey,
-    createdAt: 1,
-    ...extra,
-  };
-}
-
-/** Real PBKDF2, scaled so the suite is fast; the work factor is not under test here. */
-const fastKdf: Pbkdf2Port = {
-  derive: (password, salt, iterations) =>
-    noblePbkdf2.derive(password, salt, Math.max(1, Math.round(iterations / 100_000))),
-};
-
-type Mode = boolean | 'never';
-
-interface RecordingApproval extends ApprovalPort {
-  presented: Array<{ request: SignerRequest; account: SafeAccount }>;
-  presentedBatches: Array<{ batch: SignerBatchRequest; account: SafeAccount }>;
-  cancelled: Array<{ origin: string; id: string; reason: string }>;
-  /** Replaceable per test, for a prompt that does something before it answers. */
-  decide: (request: SignerRequest, account: SafeAccount) => Promise<ApprovalDecision>;
-  decideBatch: (batch: SignerBatchRequest, account: SafeAccount) => Promise<ApprovalDecision>;
-}
-
-function recordingApproval(mode: Mode): RecordingApproval {
-  const answer = async (): Promise<ApprovalDecision> => {
-    if (mode === 'never') return new Promise<ApprovalDecision>(() => {});
-    return { allow: mode };
-  };
-  const port: RecordingApproval = {
-    presented: [],
-    presentedBatches: [],
-    cancelled: [],
-    decide: answer,
-    decideBatch: answer,
-    async present(request, account) {
-      port.presented.push({ request, account });
-      return port.decide(request, account);
-    },
-    async presentBatch(batch, account) {
-      port.presentedBatches.push({ batch, account });
-      return port.decideBatch(batch, account);
-    },
-    cancel(origin, id, reason) {
-      port.cancelled.push({ origin, id, reason });
-    },
-  };
-  return port;
-}
-
-interface RecordingActivity extends ActivityPort {
-  entries: ActivityEntry[];
-}
-
-function recordingActivity(): RecordingActivity {
-  const port: RecordingActivity = {
-    entries: [],
-    async record(entry) {
-      port.entries.push(entry);
-    },
-  };
-  return port;
-}
-
-interface FixtureOptions {
-  accounts?: Account[];
-  locked?: boolean;
-  unlock?: UnlockPort;
-  identity?: IdentityPort;
-  remote?: RemoteSignerPort;
-  logger?: SignerLogger;
-}
-
-const cores: SignerCore[] = [];
-afterEach(() => {
-  for (const core of cores.splice(0)) core.dispose();
-  vi.useRealTimers();
-});
-
-/**
- * The host's source of truth for the active account, as the extension keeps one outside the
- * vault: follows the vault while it is open, and still answers while it is locked.
- */
-function vaultIdentity(vault: Vault, accounts: Account[]): IdentityPort & { active: string } {
-  const port = {
-    active: accounts[0]!.id,
-    async getActiveAccount() {
-      const id = vault.isLocked() ? port.active : await vault.getActiveAccountId();
-      const found = accounts.find((candidate) => candidate.id === id);
-      return found ? toSafeAccount({ ...found, readOnly: found.readOnly || !found.privkey }) : null;
-    },
-  };
-  return port;
-}
-
-async function fixture(approve: Mode, options: FixtureOptions = {}) {
-  const vault = new Vault({ store: new MemoryStore(), kdf: fastKdf });
-  const accounts = options.accounts ?? [account('acct_1', PRIVKEY_1)];
-  await vault.create(PASSWORD, accounts);
-  if (options.locked) vault.lock();
-  const permissions = new Permissions(new MemoryStore());
-  const approval = recordingApproval(approve);
-  const activity = recordingActivity();
-  const identity = options.identity ?? vaultIdentity(vault, accounts);
-  const core = new SignerCore({
-    vault,
-    permissions,
-    approval,
-    activity,
-    identity,
-    unlock: options.unlock,
-    remote: options.remote,
-    logger: options.logger,
-  });
-  cores.push(core);
-  return { core, vault, permissions, approval, activity, accounts, identity };
-}
-
-let counter = 0;
-
-/**
- * A request from `example.com` with a fresh id. For `signEvent` the params are the event
- * template, with `content` and `tags` defaulted so `req('signEvent', { kind: 1 })` is complete.
- */
-function req(method: SignerMethod, params: Record<string, unknown> = {}): SignerRequest {
-  const wrapped = method === 'signEvent' ? { event: { content: '', tags: [], ...params } } : params;
-  return {
-    id: `req_${++counter}`,
-    origin: { kind: 'web', identifier: 'example.com' },
-    method,
-    params: wrapped,
-    receivedAt: Date.now(),
-  };
-}
-
-/** Lets the pipeline run up to its first await on the host, without a real clock. */
-const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+import {
+  PRIVKEY_1,
+  PUBKEY_1,
+  PRIVKEY_2,
+  PUBKEY_2,
+  PASSWORD,
+  account,
+  fastKdf,
+  Mode,
+  RecordingApproval,
+  recordingApproval,
+  RecordingActivity,
+  recordingActivity,
+  FixtureOptions,
+  cores,
+  vaultIdentity,
+  fixture,
+  req,
+  settle,
+  nextId,
+} from './harness.js';
 
 // ── One clock ──
 
@@ -1268,7 +1136,7 @@ describe('disposal', () => {
 /** A batch from `example.com` with a fresh id; item ids default to `i0`, `i1`, ... */
 function batchReq(items: Array<Partial<SignerBatchItem> & { method: SignerMethod }>): SignerBatchRequest {
   return {
-    id: `batch_${++counter}`,
+    id: nextId('batch'),
     origin: { kind: 'web', identifier: 'example.com' },
     items: items.map((item, index) => ({ id: item.id ?? `i${index}`, method: item.method, params: item.params ?? {} })),
     receivedAt: Date.now(),
