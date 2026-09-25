@@ -129,15 +129,35 @@ keychain, and passes it back as the `generation` option on startup. `restore` re
 whose generation is behind the host's, so restoring an export taken before a revoke does not
 bring the revoked client back. The generation is inside the MAC, so it cannot be edited upward.
 A host that lost its counter (starts at 0) adopts the state's generation: as strong as the
-keychain, no more.
+keychain, no more. The `generation` option must be a non-negative integer; anything else throws,
+because keychain APIs return strings and a `"1"` silently read as `0` would drop the guarantee
+with no signal. Parse before passing.
+
+**Which to write first after a revoke.** `onStateChange` fires with the new state before
+`onGenerationChange` fires with the new counter, and that is the order to persist in: storage
+first, keychain second. A crash between the two leaves storage at generation N+1 and the
+keychain at N; on restart the host passes N, the state is ahead, and it is adopted: nothing is
+lost, and the rollback window is the length of one write, which an attacker would have to hit
+at that instant. The other order, keychain first, turns the same crash into a keychain at N+1
+with storage still at N, and on restart every pairing is refused as behind: the bunker forgets
+everyone, safely but destructively. Storage first is the recommendation. `exportState()` inside
+`onGenerationChange` is consistent (the revoked client and its secret are already gone) and
+restores.
 
 **The rest of `restore`, in order.** `version` is read first, because it decides whether a MAC
 is required: a version 2 state must be signed, and stripping its `mac` does not turn it into a
 pre-2 state; versions above 2 are refused. Then the MAC is verified, before anything else is
-read. A pre-2 state (no `version`) migrates once with `restore(state, { allowUnsigned: true })`;
-persist the signed export afterwards and drop the flag, and gate the flag on something the
-storage cannot change (a keychain marker), never on "the stored state has no mac". The state must
-belong to this connection key and not be behind the host's generation; no approval may be pending (`pendingApprovals` says how many, `whenIdle()`
+read. A pre-2 state (no `version`) migrates once with `restore(state, { allowUnsigned: true })`.
+Be precise about what that flag can and cannot do: `version` and `mac` sit in the same storage
+the attacker can write, so nothing in the blob proves a state is genuinely pre-2, and someone who
+strips both fields, or edits `version` to 1, presents a legitimate-looking legacy state. What
+closes that is the host's generation, which lives in the keychain: at 1 or more (the host has
+revoked at least once) an unsigned state is refused as behind; at 0 the library requires the
+host to have passed `generation: 0` itself, so the legacy path is asserted, never reached by
+omission, and a host that asserts it is trusting its storage for that one restore. Gate the
+flag on a keychain marker, never on "the stored state has no mac", persist the signed export
+afterwards, and drop the flag. The state must belong to this connection key and not be behind
+the host's generation; no approval may be pending (`pendingApprovals` says how many, `whenIdle()`
 resolves when none is, so a host with `handlerTimeoutMs: 0` and an unanswered prompt knows when
 to retry); the MAC must verify; then the whole object is validated (shapes and types, relay URLs
 by the pairing rules, pubkeys on the curve, every client backed by a secret in the same state
@@ -194,16 +214,17 @@ and see the package report for the upstream defect.
 
 ## Vendoring
 
-Prefer `npm pack`: `prepack` rebuilds, so a tarball is never stale. The build writes
-`dist/.src-hash` (tsup's `onSuccess`, so it cannot exist without a build): a hash of every build
-input (`src/`, `tsup.config.ts`, `package.json`, the TypeScript config as tsc resolves it so the
+Prefer `npm pack`: `prepack` rebuilds, so a tarball is never stale. The build script
+(`tsup && node scripts/stamp-dist.mjs`, after tsup and its declaration worker have both exited)
+writes `dist/.src-hash`: a hash of every build input (`src/`, `tsup.config.ts`, `package.json`, the TypeScript config as tsc resolves it so the
 monorepo's `tsconfig.base.json` counts, and the tsup/esbuild/typescript versions) and a hash of
 every file the build produced. `npm run check:dist -w @nostr-wot/bunker` fails when `dist/` is
 missing, behind any input, or no longer what the build produced (tampered or partially deleted);
-`--dist DIR` checks a packed or vendored copy against this tree. CI runs it after the build,
-proves it fails on a tampered and on a partial copy, and checks the packed tarball. There is
-deliberately no vitest test for this: `dist/` is gitignored, so such a test would run against
-nothing in CI.
+`--dist DIR` checks a packed or vendored copy against this tree. The CI workflow runs it after
+the build, proves it fails on a tampered and on a partial copy, and checks the packed tarball;
+until this branch has a pull request those steps have only been run locally, command for
+command. There is deliberately no vitest test for this: `dist/` is gitignored, so such a test
+would run against nothing in CI.
 
 ## React Native
 
