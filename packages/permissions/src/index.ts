@@ -23,6 +23,7 @@ export type {
   OriginPermissions,
   PermissionMap,
   PermissionLogger,
+  RetiredPermissionKey,
 } from './types.js';
 
 export {
@@ -37,7 +38,16 @@ export {
   COMMON_PERM_KEYS,
 } from './constants.js';
 
-export { permissionKey, consultedKeys, resolve, resolveDetailed, type KindFor, type KindForWrite } from './key.js';
+export {
+  permissionKey,
+  consultedKeys,
+  resolve,
+  resolveDetailed,
+  resolveBlanketSignEvent,
+  BLANKET_SIGN_EVENT_KEY,
+  type KindFor,
+  type KindForWrite,
+} from './key.js';
 
 export { canonicalHostname, canonicalHttpOrigin, siteScopes, hasSiteScope, originPermissionBucket, storageLabel } from './scope.js';
 

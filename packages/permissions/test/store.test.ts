@@ -18,6 +18,7 @@ import {
   permissionKey,
   siteScopes,
   type PermissionMap,
+  type RetiredPermissionKey,
 } from '../src/index.js';
 
 /** The stored tree, read straight out of the store rather than through the class. */
@@ -1012,5 +1013,119 @@ describe('the injected logger', () => {
     });
     const permissions = new Permissions(store);
     expect(await permissions.check('a.com', 'signEvent', 1, 'acct')).toBe('deny');
+  });
+});
+
+/**
+ * The two capabilities a consumer needed and the class did not have.
+ *
+ * Both came out of an actual migration attempt, not a review: a shipping browser extension's
+ * own test suite had ten assertions the package could not satisfy, and neither was a matter of
+ * adapter work. One question could be *answered* by the store and not *asked* of it; one
+ * migration could not be given the data it exists to migrate.
+ */
+describe('the blanket signEvent read', () => {
+  test('resolves the blanket key a "remember for every kind" write stores', async () => {
+    const permissions = new Permissions(new MemoryStore());
+    // This is exactly what `remember: true, rememberKind: false` writes: the bare
+    // `signEvent` key, through `save(…, null, …)`.
+    await permissions.save('site-a.com', 'signEvent', null, 'allow', DEFAULT_BUCKET);
+    await permissions.save('site-b.com', 'signEvent', null, 'deny', DEFAULT_BUCKET);
+
+    expect(await permissions.checkBlanketSignEvent('site-a.com', DEFAULT_BUCKET)).toBe('allow');
+    expect(await permissions.checkBlanketSignEvent('site-b.com', DEFAULT_BUCKET)).toBe('deny');
+    expect(await permissions.checkBlanketSignEvent('site-c.com', DEFAULT_BUCKET)).toBe('ask');
+  });
+
+  test('is not authorization for a kind: a per-kind deny under a blanket allow is invisible to it', async () => {
+    const permissions = new Permissions(new MemoryStore());
+    await permissions.save('site.com', 'signEvent', null, 'allow', DEFAULT_BUCKET);
+    await permissions.save('site.com', 'signEvent', 1, 'deny', DEFAULT_BUCKET);
+
+    // The blanket question has an answer and this is it: the user did say "every kind".
+    expect(await permissions.checkBlanketSignEvent('site.com', DEFAULT_BUCKET)).toBe('allow');
+    // Which is precisely why it is not the gate. `check` sees the kind and denies.
+    expect(await permissions.check('site.com', 'signEvent', 1, DEFAULT_BUCKET)).toBe('deny');
+    expect(await permissions.check('site.com', 'signEvent', 2, DEFAULT_BUCKET)).toBe('allow');
+  });
+
+  test('deny wins across the blanket and wildcard levels', async () => {
+    const permissions = new Permissions(new MemoryStore());
+    await permissions.saveDirect('site.com', 'signEvent', 'allow', DEFAULT_BUCKET);
+    await permissions.saveDirect('site.com', '*', 'deny', DEFAULT_BUCKET);
+    expect(await permissions.checkBlanketSignEvent('site.com', DEFAULT_BUCKET)).toBe('deny');
+  });
+
+  test('a wildcard allow answers it when no blanket key is stored', async () => {
+    const permissions = new Permissions(new MemoryStore());
+    await permissions.saveDirect('site.com', '*', 'allow', DEFAULT_BUCKET);
+    expect(await permissions.checkBlanketSignEvent('site.com', DEFAULT_BUCKET)).toBe('allow');
+  });
+
+  test('a kind-specific rule alone does not answer it', async () => {
+    const permissions = new Permissions(new MemoryStore());
+    await permissions.save('site.com', 'signEvent', 1, 'allow', DEFAULT_BUCKET);
+    expect(await permissions.checkBlanketSignEvent('site.com', DEFAULT_BUCKET)).toBe('ask');
+  });
+
+  test('`check` with no integer kind still answers from the deny levels alone', async () => {
+    // Unchanged, and deliberately so: the strict read is the gate every request passes.
+    const permissions = new Permissions(new MemoryStore());
+    await permissions.save('site.com', 'signEvent', null, 'allow', DEFAULT_BUCKET);
+    expect(await permissions.check('site.com', 'signEvent' as string, undefined, DEFAULT_BUCKET)).toBe('ask');
+  });
+});
+
+describe('writing a retired key', () => {
+  test('seeds the DM-kind keys `migrateDmKindsToSendMessages` exists to fold away', async () => {
+    const store = new MemoryStore();
+    const permissions = new Permissions(store);
+    await permissions.saveRetiredKey('chat.com', 'signEvent:4', 'allow', DEFAULT_BUCKET);
+    expect(await raw(store)).toEqual({ 'chat.com': { [DEFAULT_BUCKET]: { 'signEvent:4': 'allow' } } });
+
+    await permissions.migrateDmKindsToSendMessages();
+    const bucket = await permissions.getForOrigin('chat.com', DEFAULT_BUCKET);
+    expect(bucket['signEvent:4']).toBeUndefined();
+    expect(bucket['sendMessages']).toBe('allow');
+  });
+
+  test('deny wins when several retired DM kinds fold into one', async () => {
+    const permissions = new Permissions(new MemoryStore());
+    await permissions.saveRetiredKey('chat.com', 'signEvent:4', 'allow', DEFAULT_BUCKET);
+    await permissions.saveRetiredKey('chat.com', 'signEvent:13', 'deny', DEFAULT_BUCKET);
+    await permissions.saveRetiredKey('chat.com', 'signEvent:1059', 'allow', DEFAULT_BUCKET);
+    await permissions.migrateDmKindsToSendMessages();
+    const bucket = await permissions.getForOrigin('chat.com', DEFAULT_BUCKET);
+    expect(bucket['sendMessages']).toBe('deny');
+  });
+
+  test('a retired key grants nothing while it sits there: the cascade never consults it', async () => {
+    const permissions = new Permissions(new MemoryStore());
+    await permissions.saveRetiredKey('chat.com', 'signEvent:4', 'allow', DEFAULT_BUCKET);
+    // Which is why this write is safe to offer at all. `signEvent` of kind 4 resolves to
+    // `sendMessages`, so the rule is dead on arrival — it is data for a migration, not a grant.
+    expect(await permissions.check('chat.com', 'signEvent', 4, DEFAULT_BUCKET)).toBe('ask');
+  });
+
+  test('the closed union covers exactly the DM sign kinds, so neither can drift', () => {
+    // `RetiredPermissionKey` is written out by hand — a template literal over a ReadonlySet is
+    // not computable — so this is what keeps it honest if a kind joins or leaves the set.
+    const covered: RetiredPermissionKey[] = ['signEvent:4', 'signEvent:13', 'signEvent:14', 'signEvent:1059'];
+    expect(covered.sort()).toEqual([...DM_SIGN_KINDS].map((kind) => `signEvent:${kind}`).sort());
+  });
+
+  test('a key outside the union is refused at runtime as well as in the type', async () => {
+    const permissions = new Permissions(new MemoryStore());
+    await expect(
+      // JavaScript callers and casts reach this; the cast is the test.
+      permissions.saveRetiredKey('chat.com', 'signEvent:1' as RetiredPermissionKey, 'allow', DEFAULT_BUCKET),
+    ).rejects.toThrow(/not a retired permission key/);
+  });
+
+  test('`saveDirect` still refuses the same keys, because a UI writing one ships a dead rule', async () => {
+    const permissions = new Permissions(new MemoryStore());
+    await expect(permissions.saveDirect('chat.com', 'signEvent:4', 'deny', DEFAULT_BUCKET)).rejects.toThrow(
+      /never consulted/,
+    );
   });
 });

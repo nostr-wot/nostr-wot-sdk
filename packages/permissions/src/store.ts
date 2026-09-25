@@ -47,7 +47,13 @@ import {
   MIGRATION_VERSION_KEY,
   PERMISSIONS_STORAGE_KEY,
 } from './constants.js';
-import { permissionKey, resolveDetailed, type KindFor, type KindForWrite } from './key.js';
+import {
+  permissionKey,
+  resolveBlanketSignEvent,
+  resolveDetailed,
+  type KindFor,
+  type KindForWrite,
+} from './key.js';
 import { AsyncLock } from './lock.js';
 import { originPermissionBucket, siteScopes, storageLabel } from './scope.js';
 import type {
@@ -56,6 +62,7 @@ import type {
   PermissionDecision,
   PermissionLogger,
   PermissionMap,
+  RetiredPermissionKey,
 } from './types.js';
 
 /** Optional collaborators. Everything here is opt-in; a store alone is enough. */
@@ -208,6 +215,35 @@ export class Permissions {
     return decision;
   }
 
+  /**
+   * What `origin` stored under the BLANKET `signEvent` key: "may this site sign at all?"
+   *
+   * **Not the gate.** {@link check} is, and it stays strict: a `signEvent` read that cannot
+   * name an integer kind is answered from the deny levels alone there, because a broad allow
+   * must never answer for a kind the caller failed to state. This method answers the other
+   * question — the one a settings screen, a connected-sites list or a "remember for every
+   * kind" toggle asks — and a bucket of `{ signEvent: 'allow', 'signEvent:1': 'deny' }`
+   * answers `allow` here and `deny` from {@link check} for a kind-1 event.
+   *
+   * It exists because the blanket key is one the store can be *told* (`save(…, null, …)` is
+   * exactly that write) and, until now, could not be *asked*. A capability that can only be
+   * written is how a UI ends up showing a decision it cannot read back.
+   *
+   * Deny still wins across the blanket key and the wildcard, and a denial is logged, as on
+   * {@link check}: a refusal in force is a refusal however broadly the question is put.
+   *
+   * @param origin - the caller, read as given; canonicalise first (`canonicalHttpOrigin`)
+   * @param accountId - required, exactly as on {@link check}
+   */
+  async checkBlanketSignEvent(origin: string, accountId: string): Promise<PermissionDecision> {
+    const bucket = await this.getForOrigin(origin, accountId);
+    const { decision, key } = resolveBlanketSignEvent(bucket);
+    if (decision === 'deny') {
+      this.#logger?.warn('permission denied', { origin, key, method: 'signEvent', kind: null });
+    }
+    return decision;
+  }
+
   /** Every origin's rules in the active bucket: `{ origin: { permissionKey: decision } }`. */
   async getAll(accountId: string): Promise<Record<string, PermissionBucket>> {
     const bucket = await this.#activeBucket(accountId);
@@ -300,6 +336,48 @@ export class Permissions {
     }
     // Written under the canonical spelling, so the label a read consults is the one a write
     // produced whatever the caller's casing or port: see `canonicalHttpOrigin`.
+    const label = storageLabel(origin);
+    await this.#lock.run(async () => {
+      const bucket = await this.#writeBucket(accountId);
+      const perms = await this.#draft();
+      if (!perms[label]) perms[label] = {};
+      if (!perms[label][bucket]) perms[label][bucket] = {};
+      perms[label][bucket][key] = decision;
+      await this.#commit(perms);
+    });
+  }
+
+  /**
+   * Writes a key the current model RETIRED, so a migration can be given its own input.
+   *
+   * {@link saveDirect} refuses `signEvent:4`, `:13`, `:14` and `:1059` on purpose: nothing
+   * consults them, so a UI writing one ships a `deny` the user believes is in force and that
+   * never fires. That refusal left {@link migrateDmKindsToSendMessages} unexercisable from
+   * outside the class — the only write path rejected exactly the data the migration exists to
+   * fold away, so a consumer could neither test it nor seed a store it had to convert. A
+   * migration function that cannot be fed its own input is not usable.
+   *
+   * This is the narrow way in, and it is narrow in the type rather than in a comment: `key` is
+   * {@link RetiredPermissionKey}, a closed union every member of which the cascade provably
+   * ignores. Writing one therefore cannot grant anything — `a retired key grants nothing while
+   * it sits there` in the suite is that claim, checked — which is the entire reason it is safe
+   * to offer a write that {@link saveDirect} declines. Widening this parameter to `string`
+   * would make it a way to write `signEvent:1`, which is not the same method at all.
+   *
+   * Everything else matches {@link saveDirect}: the canonical label, the lock, the cache drop.
+   */
+  async saveRetiredKey(
+    origin: string,
+    key: RetiredPermissionKey,
+    decision: PermissionDecision,
+    accountId: string,
+  ): Promise<void> {
+    requireLabel(origin, 'origin');
+    if (!DM_PERMISSION_KEYS.includes(key)) {
+      // Unreachable through the type; reachable from JavaScript, and the point of the
+      // parameter is that it cannot become a general-purpose write.
+      throw new Error(`${key} is not a retired permission key`);
+    }
     const label = storageLabel(origin);
     await this.#lock.run(async () => {
       const bucket = await this.#writeBucket(accountId);

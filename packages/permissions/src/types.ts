@@ -36,3 +36,17 @@ export type PermissionMap = Record<string, OriginPermissions>;
 export interface PermissionLogger {
   warn(message: string, context?: Record<string, unknown>): void;
 }
+
+/**
+ * A permission key the current model retired: the DM sign kinds `permissionKey` folds into
+ * `sendMessages`, so nothing ever consults one.
+ *
+ * A closed union rather than `string`, because that is the whole safety argument for having a
+ * write path for these at all. Every member is a key the cascade provably ignores, so writing
+ * one cannot grant anything; a `string` parameter would let the same method write
+ * `signEvent:1`, which very much can.
+ *
+ * Derived from `DM_SIGN_KINDS` by hand and pinned to it by a test, because a template literal
+ * over a `ReadonlySet` is not something the type system can compute.
+ */
+export type RetiredPermissionKey = 'signEvent:4' | 'signEvent:13' | 'signEvent:14' | 'signEvent:1059';

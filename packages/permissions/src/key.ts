@@ -128,3 +128,44 @@ export function resolveDetailed<M extends string>(
   }
   return { decision: 'ask' };
 }
+
+/**
+ * The key a "remember for every kind" decision is stored under: the bare method name.
+ *
+ * Named rather than spelled inline so the blanket read and {@link permissionKey}'s `null`
+ * branch cannot drift apart. It is wire format — vaults in the field hold it — so it is not
+ * renameable.
+ */
+export const BLANKET_SIGN_EVENT_KEY = 'signEvent';
+
+/**
+ * What the user stored for the BLANKET `signEvent` key, and only that.
+ *
+ * **This is not authorization.** It answers "did the user say yes to signing in general?",
+ * which is a settings-screen question, not a gate: a bucket of
+ * `{ signEvent: 'allow', 'signEvent:1': 'deny' }` answers `allow` here and `deny` from
+ * {@link resolve} for a kind-1 event, and the second answer is the one a request obeys.
+ * {@link resolve} exists so a broad allow can never answer for a kind the caller failed to
+ * state; this exists so a decision the store was explicitly told can be read back.
+ *
+ * Why it is a separate function rather than a relaxation of the kind-less {@link resolve}
+ * path: the two questions have different answers and only one of them is safe to sign on, so
+ * they get different names. A consumer asking this one has said which it means.
+ *
+ * Deny still wins, across the blanket key and the wildcard, because a refusal in force is a
+ * refusal however broadly the question is put. `ask` means neither level is set — a
+ * kind-specific rule alone does not answer the blanket question.
+ */
+export function resolveBlanketSignEvent(bucket: PermissionBucket): {
+  decision: PermissionDecision;
+  key?: string;
+} {
+  const consulted = [BLANKET_SIGN_EVENT_KEY, '*'];
+  for (const key of consulted) {
+    if (bucket[key] === 'deny') return { decision: 'deny', key };
+  }
+  for (const key of consulted) {
+    if (bucket[key]) return { decision: bucket[key], key };
+  }
+  return { decision: 'ask' };
+}
