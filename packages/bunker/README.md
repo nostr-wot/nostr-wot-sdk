@@ -110,12 +110,29 @@ secret keeps its binding: a different client presenting it is refused exactly as
 restart. Restored clients carry on without re-pairing, on their own relays. Pending approvals
 are exported as bound but unconfirmed, so the same client may retry and nobody else can.
 
+On the way back in the state is **untrusted input**. `restore` validates the whole object first
+(the `connectionPubkey` must be this server's; shapes and types; relay URLs by the same rules as
+pairing; every client must reference a secret in the same state that is bound to it and
+confirmed, unless `requireSecret: false`; no duplicate secrets or clients; `confirmed` only with
+a `clientPubkey`; within the ceilings) and applies all of it or none of it. It is refused while
+any approval is pending (a restore mid-approval would replace the record the approval is about
+to confirm, and waiting could take as long as the host allows, so the caller retries) and when
+a secret is bound in memory to a different client than the state says. Where memory already
+holds a binding or a client, memory wins: a live handshake outranks a stored record.
+
 ### Secrets do not pile up
 
-`revokeSecret(secret)` forgets a secret; a client already connected through it stays connected
-until `disconnectClient`. Unclaimed secrets lapse after `secretTtlMs` (default 15 minutes,
-`createBunkerUri({ ttlMs })` per mint, `0` disables) and are swept on mint, connect and export.
-A confirmed binding never expires, since paired clients reconnect with it indefinitely.
+`revokeSecret(secret)` revokes a secret in the sense a user expects: `connect` with it is refused
+from then on, an approval pending for it is discarded when the handler answers (the client gets
+`secret revoked`, nothing is admitted), and the client bound to it is disconnected. Unclaimed
+secrets lapse after `secretTtlMs` (default 15 minutes, `createBunkerUri({ ttlMs })` per mint,
+`0` disables); the sweep is O(1) until the earliest expiry has passed and never runs on behalf
+of an unauthenticated request, which checks its one secret instead. A confirmed binding never
+expires, since paired clients reconnect with it indefinitely.
+
+Ceilings, live and restored alike: `maxSecrets` (256; minting past it throws), `maxClients` (64;
+a `connect` past it is refused with `too many clients`), `maxRelaysPerClient` (8; a longer
+`nostrconnect://` URI or client record is refused).
 
 ### Relays are per client
 
@@ -146,11 +163,14 @@ attempt against a slow relay, retries included, leaks one socket for the process
 Prefer relays that accept promptly, set the timeout generously on hosts that run for hours,
 and see the package report for the upstream defect.
 
-## Vendoring by path
+## Vendoring
 
-`npm run build` stamps `dist/.src-hash` with a hash of `src/`, and `test/dist-fresh.test.ts`
-fails whenever a `dist/` present in the tree is behind the source. A stale build cannot pass
-the suite, so anyone installing this package from a checkout gets current code or a red test.
+Prefer `npm pack`: `prepack` rebuilds, so a tarball is never stale. If you must vendor by path,
+run `npm run check:dist -w @nostr-wot/bunker` first: the build stamps `dist/.src-hash` with a
+hash of every build input (`src/`, `tsup.config.ts`, `tsconfig.json`, `package.json`, written by
+tsup's `onSuccess` so it cannot exist without a build), and the check fails when `dist/` is
+missing or behind them. There is deliberately no test for this: `dist/` is gitignored, so a
+test would run against nothing in CI and could never fail there.
 
 ## React Native
 
