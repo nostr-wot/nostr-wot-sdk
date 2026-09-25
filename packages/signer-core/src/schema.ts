@@ -11,6 +11,9 @@
  * is what keeps it true through every port the copy passes.
  */
 import {
+  KEY_METHODS,
+  MAX_BATCH_BYTES,
+  MAX_BATCH_ITEMS,
   MAX_CRYPTO_CIPHERTEXT_LENGTH,
   MAX_CRYPTO_PLAINTEXT_BYTES,
   MAX_EVENT_BYTES,
@@ -28,8 +31,12 @@ import { SignerError } from './errors.js';
 import type {
   EventTemplateInput,
   RequestOrigin,
+  SignerBatchItem,
+  SignerBatchRequest,
   SignerMethod,
   SignerRequest,
+  ValidatedBatch,
+  ValidatedBatchItem,
   ValidatedParams,
   ValidatedRequest,
 } from './types.js';
@@ -191,7 +198,8 @@ function validateOrigin(value: unknown): RequestOrigin {
   return origin;
 }
 
-const tooLarge = (): SignerError => invalid(`event is too large: at most ${MAX_EVENT_BYTES} bytes as JSON`);
+const eventTooLarge = (): SignerError => invalid(`event is too large: at most ${MAX_EVENT_BYTES} bytes as JSON`);
+const batchTooLarge = (): SignerError => invalid(`batch is too large: at most ${MAX_BATCH_BYTES} bytes as JSON across every item`);
 
 /**
  * The limits bite BEFORE anything is walked in full, copied or serialised. A caller can hand
@@ -201,12 +209,17 @@ const tooLarge = (): SignerError => invalid(`event is too large: at most ${MAX_E
  * least one byte, so a count over the byte limit is already over), and tag bytes are
  * accumulated while the tags are checked, stopping at the first tag that crosses the line.
  * The exact byte measurement afterwards runs only over something already known to be small.
+ *
+ * `limit` is the per-event cap, or less: inside a batch it is whatever of the batch budget
+ * is left, so the aggregate cap bites on exactly the same checks, before the crossing item
+ * is walked. `tooLarge` names which of the two was hit. Returns the exact byte count with
+ * the template, so a batch can charge it against the budget.
  */
-function validateTemplate(value: unknown): EventTemplateInput {
+function validateTemplate(value: unknown, limit: number, tooLarge: () => SignerError): { event: EventTemplateInput; bytes: number } {
   if (!isRecord(value)) throw invalid('signEvent needs an event template');
   const kind = requireNonNegativeInteger(value['kind'], 'event.kind', MAX_KIND);
   const content = requireString(value['content'], 'event.content');
-  if (content.length > MAX_EVENT_BYTES) throw tooLarge();
+  if (content.length > limit) throw tooLarge();
   const rawTags = value['tags'];
   if (!Array.isArray(rawTags)) throw invalid('event.tags must be an array');
   if (rawTags.length > MAX_EVENT_TAGS) throw invalid(`event.tags may hold at most ${MAX_EVENT_TAGS} tags`);
@@ -217,10 +230,10 @@ function validateTemplate(value: unknown): EventTemplateInput {
     if (tag.length > MAX_TAG_VALUES) throw invalid(`event.tags[${index}] may hold at most ${MAX_TAG_VALUES} values`);
     // Brackets, then quotes and a comma per value, then the values themselves.
     tagBytes += 2 + tag.length * 3;
-    if (tagBytes > MAX_EVENT_BYTES) throw tooLarge();
+    if (tagBytes > limit) throw tooLarge();
     for (const entry of tag as unknown[]) {
       tagBytes += requireString(entry, `event.tags[${index}] values`).length;
-      if (tagBytes > MAX_EVENT_BYTES) throw tooLarge();
+      if (tagBytes > limit) throw tooLarge();
     }
   }
   // Bounded now, so copying is safe.
@@ -232,35 +245,56 @@ function validateTemplate(value: unknown): EventTemplateInput {
   if (value['pubkey'] !== undefined) event.pubkey = requirePubkey(value['pubkey'], 'event.pubkey');
   // Measured as the JSON that will be hashed and stored, so the limit means the same thing
   // whatever mix of content and tags a caller chooses.
-  if (utf8ByteLength(JSON.stringify(event)) > MAX_EVENT_BYTES) throw tooLarge();
-  return event;
+  const bytes = utf8ByteLength(JSON.stringify(event));
+  if (bytes > limit) throw tooLarge();
+  return { event, bytes };
 }
 
-function validateParams(method: SignerMethod, raw: Record<string, unknown>): ValidatedParams {
+/** Validated params and what they weigh against a batch budget, in the unit each limit uses. */
+interface MeasuredParams {
+  params: ValidatedParams;
+  bytes: number;
+}
+
+/**
+ * `budget` is what a batch has left; a single request has no budget and gets each method's
+ * own limit. Inside a batch the effective limit is the smaller of the two, and when it is the
+ * budget that is hit, the error says the batch is too large rather than the item.
+ */
+function validateParams(method: SignerMethod, raw: Record<string, unknown>, budget = Infinity): MeasuredParams {
   switch (method) {
     case 'getPublicKey':
     case 'getRelays':
-      return { method };
-    case 'signEvent':
-      return { method, event: validateTemplate(raw['event']) };
+      return { params: { method }, bytes: 0 };
+    case 'signEvent': {
+      const limit = Math.min(MAX_EVENT_BYTES, budget);
+      const { event, bytes } = validateTemplate(raw['event'], limit, limit < MAX_EVENT_BYTES ? batchTooLarge : eventTooLarge);
+      return { params: { method, event }, bytes };
+    }
     case 'nip04Encrypt':
     case 'nip44Encrypt': {
       const pubkey = requirePubkey(raw['pubkey'], 'pubkey');
       const plaintext = requireString(raw['plaintext'], 'plaintext');
+      const limit = Math.min(MAX_CRYPTO_PLAINTEXT_BYTES, budget);
+      const tooLarge = (): SignerError =>
+        limit < MAX_CRYPTO_PLAINTEXT_BYTES ? batchTooLarge() : invalid(`plaintext may be at most ${MAX_CRYPTO_PLAINTEXT_BYTES} bytes`);
       // Character count first: it is O(1) and a character is at least a byte.
-      if (plaintext.length > MAX_CRYPTO_PLAINTEXT_BYTES || utf8ByteLength(plaintext) > MAX_CRYPTO_PLAINTEXT_BYTES) {
-        throw invalid(`plaintext may be at most ${MAX_CRYPTO_PLAINTEXT_BYTES} bytes`);
-      }
-      return { method, pubkey, plaintext };
+      if (plaintext.length > limit) throw tooLarge();
+      const bytes = utf8ByteLength(plaintext);
+      if (bytes > limit) throw tooLarge();
+      return { params: { method, pubkey, plaintext }, bytes };
     }
     case 'nip04Decrypt':
     case 'nip44Decrypt': {
       const pubkey = requirePubkey(raw['pubkey'], 'pubkey');
       const ciphertext = requireNonEmptyString(raw['ciphertext'], 'ciphertext');
-      if (ciphertext.length > MAX_CRYPTO_CIPHERTEXT_LENGTH) {
-        throw invalid(`ciphertext may be at most ${MAX_CRYPTO_CIPHERTEXT_LENGTH} characters`);
+      const limit = Math.min(MAX_CRYPTO_CIPHERTEXT_LENGTH, budget);
+      if (ciphertext.length > limit) {
+        throw limit < MAX_CRYPTO_CIPHERTEXT_LENGTH
+          ? batchTooLarge()
+          : invalid(`ciphertext may be at most ${MAX_CRYPTO_CIPHERTEXT_LENGTH} characters`);
       }
-      return { method, pubkey, ciphertext };
+      return { params: { method, pubkey, ciphertext }, bytes: ciphertext.length };
     }
   }
 }
@@ -315,7 +349,7 @@ function validate(input: unknown): ValidatedRequest {
   const rawParams = input['params'];
   if (!isRecord(rawParams)) throw invalid('params must be an object');
 
-  const params = validateParams(method as SignerMethod, rawParams);
+  const { params } = validateParams(method as SignerMethod, rawParams);
   const request: SignerRequest = {
     id,
     origin,
@@ -324,4 +358,69 @@ function validate(input: unknown): ValidatedRequest {
     receivedAt,
   };
   return { request: deepFreeze(request), params: deepFreeze(params) };
+}
+
+/**
+ * Check a batch from any transport and return a frozen copy of it, typed per item.
+ *
+ * The count is checked before a single item is read, and the byte budget is charged item by
+ * item so the item that crosses it is refused before its tags are walked: a batch whose every
+ * item is legal on its own and whose whole is not stops at the first item that does not fit,
+ * with everything before it, by construction, inside the budget.
+ *
+ * @throws {SignerError} with code `invalid_request`, naming the item by index.
+ */
+export function validateBatchRequest(input: unknown): ValidatedBatch {
+  try {
+    return validateBatch(input);
+  } catch (error) {
+    if (error instanceof SignerError) throw error;
+    throw invalid('batch could not be read');
+  }
+}
+
+function validateBatch(input: unknown): ValidatedBatch {
+  if (!isRecord(input)) throw invalid('batch must be an object');
+  const id = requireNonEmptyString(requireBoundedString(input['id'], 'id', MAX_REQUEST_ID_LENGTH), 'id');
+  const origin = validateOrigin(input['origin']);
+  const receivedAt = input['receivedAt'];
+  if (typeof receivedAt !== 'number' || !Number.isFinite(receivedAt)) {
+    throw invalid('receivedAt must be a finite number');
+  }
+  const rawItems = input['items'];
+  if (!Array.isArray(rawItems)) throw invalid('items must be an array');
+  // O(1), before any item is read.
+  if (rawItems.length === 0) throw invalid('items must hold at least one item');
+  if (rawItems.length > MAX_BATCH_ITEMS) throw invalid(`items may hold at most ${MAX_BATCH_ITEMS} items`);
+
+  const seen = new Set<string>();
+  const items: ValidatedBatchItem[] = [];
+  const wire: SignerBatchItem[] = [];
+  let remaining = MAX_BATCH_BYTES;
+  for (let index = 0; index < rawItems.length; index++) {
+    const at = `items[${index}]`;
+    const raw: unknown = rawItems[index];
+    if (!isRecord(raw)) throw invalid(`${at} must be an object`);
+    const itemId = requireNonEmptyString(requireBoundedString(raw['id'], `${at}.id`, MAX_REQUEST_ID_LENGTH), `${at}.id`);
+    if (seen.has(itemId)) throw invalid(`${at}.id must be unique within the batch`);
+    seen.add(itemId);
+    const method = raw['method'];
+    if (typeof method !== 'string' || !KEY_METHODS.has(method)) {
+      throw invalid(`${at}.method must be one of ${[...KEY_METHODS].join(', ')}`);
+    }
+    const rawParams = raw['params'];
+    if (!isRecord(rawParams)) throw invalid(`${at}.params must be an object`);
+    let measured: MeasuredParams;
+    try {
+      measured = validateParams(method as SignerMethod, rawParams, remaining);
+    } catch (error) {
+      if (error instanceof SignerError) throw invalid(`${at}: ${error.message}`);
+      throw error;
+    }
+    remaining -= measured.bytes;
+    items.push({ id: itemId, params: measured.params });
+    wire.push({ id: itemId, method: method as SignerMethod, params: wireParams(measured.params) });
+  }
+  const request: SignerBatchRequest = { id, origin, items: wire, receivedAt };
+  return { request: deepFreeze(request), items: deepFreeze(items) };
 }

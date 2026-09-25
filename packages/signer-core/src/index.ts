@@ -13,6 +13,12 @@ export type {
   EventTemplateInput,
   ValidatedParams,
   ValidatedRequest,
+  SignerBatchItem,
+  SignerBatchRequest,
+  ValidatedBatchItem,
+  ValidatedBatch,
+  BatchItemOutcome,
+  BatchResult,
   ApprovalDecision,
   ApprovalPort,
   ActivityEntry,
@@ -42,12 +48,14 @@ export {
   MAX_TAG_VALUES,
   MAX_CRYPTO_PLAINTEXT_BYTES,
   MAX_CRYPTO_CIPHERTEXT_LENGTH,
+  MAX_BATCH_ITEMS,
+  MAX_BATCH_BYTES,
   SIGNER_METHODS,
   ORIGIN_KINDS,
   KEY_METHODS,
 } from './constants.js';
 
 export { SignerError, type SignerErrorCode } from './errors.js';
-export { validateRequest, utf8ByteLength } from './schema.js';
+export { validateRequest, validateBatchRequest, utf8ByteLength } from './schema.js';
 export { ApprovalQueue, type ApprovalQueueOptions, type TrackInput } from './queue.js';
 export { SignerCore, permissionOrigin } from './core.js';

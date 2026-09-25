@@ -15,7 +15,11 @@ import {
   MAX_CRYPTO_PLAINTEXT_BYTES,
   MAX_CRYPTO_CIPHERTEXT_LENGTH,
   MAX_EVENT_BYTES,
+  MAX_BATCH_ITEMS,
+  MAX_BATCH_BYTES,
+  validateBatchRequest,
   type SignerRequest,
+  type SignerBatchRequest,
 } from '../src/index.js';
 
 const PUBKEY = 'ab'.repeat(32);
@@ -390,5 +394,191 @@ describe('the parameterless methods', () => {
     const { params, request } = validateRequest(base(method, { anything: true }));
     expect(params).toEqual({ method });
     expect(request.params).toEqual({});
+  });
+});
+
+// ── Batches ──
+
+/** A template with content and one tag, so `event({ kind: 7 })` is complete. */
+const event = (overrides: Record<string, unknown> = {}) => ({ kind: 1, content: 'hello', tags: [['t', 'x']], ...overrides });
+
+/** A batch from `example.com`, with item ids defaulted to their index. */
+function batch(items: Array<{ id?: string; method: SignerRequest['method']; params: Record<string, unknown> }>): SignerBatchRequest {
+  return {
+    id: 'batch_1',
+    origin: { kind: 'web', identifier: 'example.com' },
+    items: items.map((item, index) => ({ id: item.id ?? `item_${index}`, method: item.method, params: item.params })),
+    receivedAt: 1,
+  };
+}
+
+const invalidBatch = (input: unknown) => {
+  expect(() => validateBatchRequest(input)).toThrow(SignerError);
+  try {
+    validateBatchRequest(input);
+  } catch (error) {
+    expect((error as SignerError).code).toBe('invalid_request');
+    return (error as SignerError).message;
+  }
+  throw new Error('unreachable');
+};
+
+describe('a batch at the boundary', () => {
+  test('accepts a batch of key methods, typed per item, copied and frozen', () => {
+    const input = batch([
+      { method: 'signEvent', params: { event: event({ kind: 7, content: '+', tags: [['e', 'a'.repeat(64)]] }) } },
+      { method: 'nip44Encrypt', params: { pubkey: PUBKEY, plaintext: 'hi', extra: 1 } },
+      { method: 'nip04Decrypt', params: { pubkey: PUBKEY, ciphertext: 'c2VjcmV0' } },
+    ]);
+    const { request, items } = validateBatchRequest(input);
+    expect(request).not.toBe(input);
+    expect(request.id).toBe('batch_1');
+    expect(request.items.map((item) => item.id)).toEqual(['item_0', 'item_1', 'item_2']);
+    expect(items.map((item) => item.params)).toEqual([
+      { method: 'signEvent', event: { kind: 7, content: '+', tags: [['e', 'a'.repeat(64)]] } },
+      { method: 'nip44Encrypt', pubkey: PUBKEY, plaintext: 'hi' },
+      { method: 'nip04Decrypt', pubkey: PUBKEY, ciphertext: 'c2VjcmV0' },
+    ]);
+    // The wire copy carries only what was validated, and none of it is the caller's object.
+    expect(request.items[1]!.params).toEqual({ pubkey: PUBKEY, plaintext: 'hi' });
+    expect(request.items[0]!.params['event']).not.toBe(input.items[0]!.params['event']);
+    expect(Object.isFrozen(request)).toBe(true);
+    expect(Object.isFrozen(request.items)).toBe(true);
+    expect(Object.isFrozen((request.items[0]!.params['event'] as { tags: string[][] }).tags[0])).toBe(true);
+    expect(Object.isFrozen(items[0]!.params)).toBe(true);
+  });
+
+  test('an empty batch is refused: there is nothing to approve', () => {
+    expect(invalidBatch(batch([]))).toMatch(/at least one/i);
+  });
+
+  test('more items than the cap are refused before a single item is read', () => {
+    const template = { method: 'signEvent', params: { event: event({}) } };
+    const items: unknown[] = new Array(MAX_BATCH_ITEMS + 1).fill(template);
+    let reads = 0;
+    Object.defineProperty(items, 0, {
+      get() {
+        reads += 1;
+        return template;
+      },
+    });
+    expect(invalidBatch({ ...batch([]), items })).toMatch(new RegExp(`at most ${MAX_BATCH_ITEMS} items`));
+    expect(reads).toBe(0);
+    // And exactly the cap is fine.
+    const exact = Array.from({ length: MAX_BATCH_ITEMS }, (_, i) => ({ id: `i${i}`, ...template }));
+    expect(validateBatchRequest({ ...batch([]), items: exact }).items).toHaveLength(MAX_BATCH_ITEMS);
+  });
+
+  test('a duplicate item id is refused, so every outcome can be matched to its item', () => {
+    const input = batch([
+      { id: 'same', method: 'signEvent', params: { event: event({}) } },
+      { id: 'same', method: 'signEvent', params: { event: event({}) } },
+    ]);
+    expect(invalidBatch(input)).toMatch(/items\[1\].*id.*unique|duplicate/i);
+  });
+
+  test.each(['getPublicKey', 'getRelays'] as const)('%s is not a batch item: it does not use the key', (method) => {
+    expect(invalidBatch(batch([{ method, params: {} }]))).toMatch(/items\[0\].*method/i);
+  });
+
+  test('an item id is bounded like a request id, and must not be empty', () => {
+    const okId = 'a'.repeat(MAX_REQUEST_ID_LENGTH);
+    expect(() => validateBatchRequest(batch([{ id: okId, method: 'signEvent', params: { event: event({}) } }]))).not.toThrow();
+    expect(invalidBatch(batch([{ id: okId + 'a', method: 'signEvent', params: { event: event({}) } }]))).toMatch(/at most/i);
+    expect(invalidBatch(batch([{ id: '', method: 'signEvent', params: { event: event({}) } }]))).toMatch(/empty/i);
+  });
+
+  test('a malformed item names its index', () => {
+    const input = batch([
+      { method: 'signEvent', params: { event: event({}) } },
+      { method: 'signEvent', params: { event: event({ kind: '1' as unknown as number }) } },
+    ]);
+    expect(invalidBatch(input)).toMatch(/items\[1\]/);
+    expect(invalidBatch({ ...batch([]), items: [null] })).toMatch(/items\[0\]/);
+  });
+
+  test('each item is still bounded on its own', () => {
+    const content = 'x'.repeat(MAX_EVENT_BYTES);
+    expect(invalidBatch(batch([{ method: 'signEvent', params: { event: event({ content }) } }]))).toMatch(/event is too large/i);
+  });
+
+  test('a batch can hold no more than one request can: the aggregate cap is the per-event cap', () => {
+    // A batch is one queued request and is bounded like one. Whatever the pipeline may hold
+    // in flight for N single requests, N batches hold no more; batching is not the way
+    // around the per-event limit, and this is the line that makes that so.
+    expect(MAX_BATCH_BYTES).toBe(MAX_EVENT_BYTES);
+  });
+
+  test('every item legal on its own, the whole over the cap: refused before the crossing item is walked', () => {
+    // Three events of 400 KiB each. Each is well under MAX_EVENT_BYTES; together they are
+    // over MAX_BATCH_BYTES. The third item's content is over the remaining budget, so its
+    // tags must never be read, let alone copied: the cap has to bite on the O(1) length
+    // check, before the walk.
+    const content = 'x'.repeat(400 * 1024);
+    let tagsRead = 0;
+    const third = {
+      kind: 1,
+      content,
+      get tags() {
+        tagsRead += 1;
+        return [] as string[][];
+      },
+    };
+    const input = batch([
+      { method: 'signEvent', params: { event: event({ content }) } },
+      { method: 'signEvent', params: { event: event({ content }) } },
+      { method: 'signEvent', params: { event: third } },
+    ]);
+    const started = performance.now();
+    expect(invalidBatch(input)).toMatch(/batch is too large/i);
+    expect(performance.now() - started).toBeLessThan(200);
+    expect(tagsRead).toBe(0);
+    // Two of them fit.
+    expect(() => validateBatchRequest(batch(input.items.slice(0, 2).map((item) => ({ method: item.method, params: item.params }))))).not.toThrow();
+  });
+
+  test('the aggregate is measured over the tags too, and stops at the tag that crosses', () => {
+    const tag = ['t', 'v'.repeat(1000)];
+    const tags = Array.from({ length: 500 }, () => tag); // ~500 KiB per event
+    const one = { method: 'signEvent' as const, params: { event: event({ tags }) } };
+    expect(() => validateBatchRequest(batch([one]))).not.toThrow();
+    expect(() => validateBatchRequest(batch([one, one]))).not.toThrow();
+    const started = performance.now();
+    expect(invalidBatch(batch([one, one, one]))).toMatch(/batch is too large/i);
+    expect(performance.now() - started).toBeLessThan(200);
+  });
+
+  test('crypto items count toward the aggregate as well', () => {
+    const plaintext = 'x'.repeat(MAX_CRYPTO_PLAINTEXT_BYTES);
+    const count = Math.ceil(MAX_BATCH_BYTES / MAX_CRYPTO_PLAINTEXT_BYTES) + 1;
+    expect(count).toBeLessThanOrEqual(MAX_BATCH_ITEMS);
+    const items = Array.from({ length: count }, () => ({ method: 'nip44Encrypt' as const, params: { pubkey: PUBKEY, plaintext } }));
+    expect(invalidBatch(batch(items))).toMatch(/batch is too large/i);
+    const ciphertext = 'x'.repeat(MAX_CRYPTO_CIPHERTEXT_LENGTH);
+    const decrypts = Array.from({ length: Math.ceil(MAX_BATCH_BYTES / MAX_CRYPTO_CIPHERTEXT_LENGTH) + 1 }, () => ({
+      method: 'nip04Decrypt' as const,
+      params: { pubkey: PUBKEY, ciphertext },
+    }));
+    expect(invalidBatch(batch(decrypts))).toMatch(/batch is too large/i);
+  });
+
+  test('the batch envelope is validated like a request envelope', () => {
+    const one = { method: 'signEvent' as const, params: { event: event({}) } };
+    expect(invalidBatch({ ...batch([one]), id: '' })).toMatch(/id/);
+    expect(invalidBatch({ ...batch([one]), origin: { kind: 'web', identifier: 'null' } })).toMatch(/opaque/i);
+    expect(invalidBatch({ ...batch([one]), receivedAt: 'now' })).toMatch(/receivedAt/);
+    expect(invalidBatch({ ...batch([one]), items: 'nope' })).toMatch(/items must be an array/i);
+    expect(invalidBatch(null)).toMatch(/object/i);
+    expect(validateBatchRequest({ ...batch([one]), origin: { kind: 'web', identifier: 'EXAMPLE.COM.' } }).request.origin.identifier).toBe('example.com');
+  });
+
+  test('a batch whose item throws when read is a SignerError, never a raw error', () => {
+    const trapped = new Proxy(batch([{ method: 'signEvent', params: { event: event({}) } }]), {
+      get(target, property) {
+        if (property === 'items') throw new Error('EACCES /Users/leon/secret');
+        return Reflect.get(target, property);
+      },
+    });
+    expect(invalidBatch(trapped)).not.toMatch(/leon/);
   });
 });

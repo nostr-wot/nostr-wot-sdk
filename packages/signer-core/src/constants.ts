@@ -67,6 +67,26 @@ export const MAX_CRYPTO_PLAINTEXT_BYTES = 65535;
 /** Ciphertext handed to a decrypt method, in characters. */
 export const MAX_CRYPTO_CIPHERTEXT_LENGTH = 131072;
 
+// ── Batches ──
+//
+// A batch is one request carrying many items, approved once. On iOS every signature costs a
+// user gesture that nothing can suppress, so a burst of ten reactions and two zaps is twelve
+// prompts, roughly a minute of the user's attention; one batch is one prompt. These two
+// numbers keep a batch from becoming the way around the per-event limits above.
+
+/** Items in one batch. A burst is a dozen; this leaves room without inviting a dump. */
+export const MAX_BATCH_ITEMS = 64;
+
+/**
+ * The whole batch, in UTF-8 bytes: every event as JSON, every plaintext, every ciphertext.
+ *
+ * Equal to {@link MAX_EVENT_BYTES} on purpose. A batch is one queued request, and it is
+ * bounded like one: whatever the pipeline may hold in flight for N single requests, N batches
+ * hold no more. A batch of one can still carry a full-size contact list; a batch of many
+ * carries the small events bursts are made of.
+ */
+export const MAX_BATCH_BYTES = MAX_EVENT_BYTES;
+
 /** The wire methods, as a runtime set for the boundary check. */
 export const SIGNER_METHODS = [
   'getPublicKey',

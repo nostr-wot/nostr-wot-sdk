@@ -87,6 +87,67 @@ export interface ValidatedRequest {
   params: ValidatedParams;
 }
 
+// ── The batch ──
+
+/** One item of a batch: a request without an envelope, since the batch carries that. */
+export interface SignerBatchItem {
+  /** Unique within the batch; how the caller matches each outcome to what it asked. */
+  id: string;
+  /** A method that uses the key: `signEvent` or one of the four crypto methods. */
+  method: SignerMethod;
+  params: Record<string, unknown>;
+}
+
+/**
+ * Many items, one origin, one approval.
+ *
+ * A first-class request, not a loop over single ones: the user is shown every item and
+ * answers once, the permission cascade is consulted for every item, and the caller is told
+ * what happened to each. Bounded at the boundary by `MAX_BATCH_ITEMS` and `MAX_BATCH_BYTES`
+ * before anything is walked or copied. Validated by `validateBatchRequest`, and nowhere else.
+ *
+ * Only methods that use the key may be batched. `getPublicKey` has its own consent model (a
+ * cooldown, an answer while locked, a prompt even for a remote account) and `getRelays` never
+ * prompts; folding either in would give it the batch's consent or the batch its own. A
+ * transport that receives a mixed wire batch answers those two through `handle`.
+ */
+export interface SignerBatchRequest {
+  id: string;
+  origin: RequestOrigin;
+  items: SignerBatchItem[];
+  receivedAt: number;
+}
+
+/** One validated item: its id and its params, typed by method. */
+export interface ValidatedBatchItem {
+  id: string;
+  params: ValidatedParams;
+}
+
+/** A batch that passed the boundary: the frozen deep copy the user is shown, and typed items. */
+export interface ValidatedBatch {
+  request: SignerBatchRequest;
+  items: readonly ValidatedBatchItem[];
+}
+
+/**
+ * What became of one item. `ok` with the method's result, or a stable code and fixed text
+ * exactly as a single request's refusal would carry them.
+ */
+export type BatchItemOutcome =
+  | { id: string; ok: true; result: unknown }
+  | { id: string; ok: false; code: SignerErrorCode; message: string };
+
+/**
+ * The answer to a batch that was approved and executed: an outcome per item, in the order the
+ * items were given. A caller reads exactly which items were signed and which were not, and
+ * why; nothing is collapsed into a count.
+ */
+export interface BatchResult {
+  id: string;
+  items: readonly BatchItemOutcome[];
+}
+
 // ── Approval ──
 
 export interface ApprovalDecision {
@@ -115,6 +176,13 @@ export interface ApprovalDecision {
  */
 export interface ApprovalPort {
   present(request: SignerRequest, account: SafeAccount): Promise<ApprovalDecision>;
+  /**
+   * The prompt for a batch: the whole batch, every item, full content and every tag, answered
+   * once. `cancel` names the batch id. A host that does not implement this cannot show a
+   * batch, so a batch that needs a prompt is refused as `unsupported` rather than shown as a
+   * count with a button; a batch every item of which is already allowed still signs.
+   */
+  presentBatch?(batch: SignerBatchRequest, account: SafeAccount): Promise<ApprovalDecision>;
   cancel(origin: string, requestId: string, reason: string): void;
 }
 
@@ -147,6 +215,8 @@ export interface ActivityEntry {
   ciphertext?: string;
   /** What a `signEvent` signed. */
   event?: EventTemplateInput;
+  /** The batch this item arrived in, when it did. `requestId` is then the item's id. */
+  batchId?: string;
 }
 
 export interface ActivityPort {
@@ -182,6 +252,8 @@ export interface IdentityPort {
  */
 export interface UnlockPort {
   requestUnlock(request: SignerRequest, account: SafeAccount): Promise<void>;
+  /** The same, on a batch's behalf. Without it a batch that finds the vault locked is refused. */
+  requestUnlockBatch?(batch: SignerBatchRequest, account: SafeAccount): Promise<void>;
 }
 
 /**
