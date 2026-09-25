@@ -10,8 +10,7 @@
  * optional and each one unlocks a capability the host may not have.
  */
 import type { SafeAccount } from '@nostr-wot/accounts';
-import type { Permissions } from '@nostr-wot/permissions';
-import type { Vault } from '@nostr-wot/vault';
+import type { PermissionsPort, VaultPort } from './ports.js';
 import type { SignerErrorCode } from './errors.js';
 
 // ── The request ──
@@ -405,8 +404,14 @@ export interface PendingEntry {
  * clock and faking time is done in one place.
  */
 export interface SignerCoreDeps {
-  vault: Vault;
-  permissions: Permissions;
+  /**
+   * Key material, as an INTERFACE. It was the `Vault` class, whose `#private` field makes its
+   * type nominal, so no host facade could ever satisfy it — see `ports.ts` for the TS2740 that
+   * cost the extension its migration. `@nostr-wot/vault`'s `Vault` satisfies this.
+   */
+  vault: VaultPort;
+  /** Authorization, as an INTERFACE, for the same reason. `Permissions` satisfies it. */
+  permissions: PermissionsPort;
   approval: ApprovalPort;
   activity: ActivityPort;
   identity: IdentityPort;

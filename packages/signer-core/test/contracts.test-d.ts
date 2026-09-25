@@ -24,8 +24,11 @@ import {
   type SignerErrorCode,
   type UnlockPort,
   type ValidatedParams,
+  type PermissionsPort,
+  type VaultPort,
   withPqKeys,
 } from '../src/index.js';
+import { handWrittenPermissions, handWrittenVault, HAND_PRIVKEY } from './handwritten.js';
 
 const ports = {
   vault: new Vault({ store: new MemoryStore() }),
@@ -140,4 +143,58 @@ test('the post-quantum scope names its account and hands out no key outside the 
   });
   expectTypeOf<PqKeyScope>().not.toHaveProperty('mnemonic');
   expectTypeOf<PqKeyScope>().not.toHaveProperty('seed');
+});
+
+test('the vault dependency is a PORT: a hand-written object satisfies it', () => {
+  // The regression this pins. `SignerCoreDeps.vault` was the `Vault` class, whose `#private`
+  // field makes the type nominal, so this assignment was `TS2740: … is missing the following
+  // properties from type 'Vault': #private, exists, create, unlock, and 21 more` and no host
+  // facade could be written at all. If the dependency ever goes back to naming a class, these
+  // three lines stop compiling — which a runtime suite cannot notice, since vitest never
+  // typechecks a `*.test.ts` file.
+  const vault = handWrittenVault(HAND_PRIVKEY);
+  const permissions = handWrittenPermissions();
+  new SignerCore({
+    vault,
+    permissions,
+    approval: { present: async () => ({ allow: true }), cancel: () => {} },
+    activity: { record: async () => {} },
+    identity: { getActiveAccount: async () => null },
+  });
+  expectTypeOf(vault).toExtend<SignerCoreDeps['vault']>();
+  expectTypeOf(permissions).toExtend<SignerCoreDeps['permissions']>();
+});
+
+test('the concrete Vault and Permissions satisfy the ports they are the reference for', () => {
+  // The other direction: the interface is not allowed to drift away from the implementation
+  // the packages ship, or every host would be adapting to a contract nothing meets.
+  expectTypeOf(new Vault({ store: new MemoryStore() })).toExtend<VaultPort>();
+  expectTypeOf(new Permissions(new MemoryStore())).toExtend<PermissionsPort>();
+});
+
+test('the port is the smallest set the pipeline uses, so a host owes nothing more', () => {
+  // Adding a member here is a breaking change for every host, so the shape is asserted
+  // exactly rather than described in a comment that can go stale.
+  expectTypeOf<keyof VaultPort>().toEqualTypeOf<
+    | 'now'
+    | 'isLocked'
+    | 'hasMnemonic'
+    | 'hasImportedPqKeys'
+    | 'withPrivkey'
+    | 'withMnemonic'
+    | 'withImportedPqKeys'
+    | 'withDerivedSecrets'
+  >();
+  expectTypeOf<keyof PermissionsPort>().toEqualTypeOf<'check' | 'save'>();
+  // None of the vault's lifecycle is the pipeline's business.
+  expectTypeOf<VaultPort>().not.toHaveProperty('create');
+  expectTypeOf<VaultPort>().not.toHaveProperty('unlock');
+  expectTypeOf<VaultPort>().not.toHaveProperty('changePassword');
+  expectTypeOf<VaultPort>().not.toHaveProperty('addAccount');
+});
+
+test('the post-quantum scope takes the port too, not the class', () => {
+  const vault = handWrittenVault(HAND_PRIVKEY);
+  const account = {} as SafeAccount;
+  void withPqKeys(vault, account, async () => undefined);
 });

@@ -29,9 +29,9 @@
  */
 import type { SafeAccount } from '@nostr-wot/accounts';
 import { mnemonicToSeed } from '@nostr-wot/accounts';
-import type { Vault } from '@nostr-wot/vault';
 import { derivePqKeys, fromBase64, type PqKeys } from '@nostr-wot/pq';
 import { SignerError } from './errors.js';
+import type { VaultPort } from './ports.js';
 import type { ValidatedParams } from './types.js';
 
 /** Words a seed phrase needs to derive post-quantum keys: 256 bits, as the extension requires. */
@@ -76,7 +76,7 @@ function countWords(value: string): number {
  * must not be answered with another's keys.
  */
 export async function withPqKeys<T>(
-  vault: Vault,
+  vault: VaultPort,
   account: SafeAccount,
   fn: (scope: PqKeyScope) => Promise<T>,
 ): Promise<T> {

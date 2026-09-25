@@ -57,6 +57,7 @@ export {
   KEY_METHODS,
 } from './constants.js';
 
+export type { VaultPort, PermissionsPort, ImportedPqKeys } from './ports.js';
 export { SignerError, type SignerErrorCode } from './errors.js';
 export { validateRequest, validateBatchRequest, utf8ByteLength, disclosedRequest, disclosedBatch } from './schema.js';
 export { ApprovalQueue, type ApprovalQueueOptions, type TrackInput } from './queue.js';

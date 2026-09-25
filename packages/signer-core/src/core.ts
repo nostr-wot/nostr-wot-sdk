@@ -46,16 +46,15 @@
  * caller of `handle` decides what to do with the value.
  */
 import type { SafeAccount } from '@nostr-wot/accounts';
-import type { Permissions } from '@nostr-wot/permissions';
 import { PrivateKeySigner } from '@nostr-wot/signers';
 import { canonicalHostname, canonicalHttpOrigin, siteScopes } from '@nostr-wot/permissions';
 import { PQC_KIND, buildAttestationTags } from '@nostr-wot/pq';
-import type { Vault } from '@nostr-wot/vault';
 import { GET_PUBLIC_KEY_COOLDOWN_MS, KEY_METHODS, ORIGIN_KINDS } from './constants.js';
 import { SignerError, errorMessage } from './errors.js';
 import { needsPqKeys, remotePqRefusal, withPqKeys, type PqKeyScope } from './pq.js';
 import { ApprovalQueue } from './queue.js';
 import { disclosedBatch, disclosedRequest, validateBatchRequest, validateRequest } from './schema.js';
+import type { PermissionsPort, VaultPort } from './ports.js';
 import type {
   ActivityEntry,
   ActivityPort,
@@ -239,8 +238,8 @@ function permissionRule(params: ValidatedParams): Asked {
 }
 
 export class SignerCore {
-  readonly #vault: Vault;
-  readonly #permissions: Permissions;
+  readonly #vault: VaultPort;
+  readonly #permissions: PermissionsPort;
   readonly #approval: ApprovalPort;
   readonly #activity: ActivityPort;
   readonly #identity: IdentityPort;
