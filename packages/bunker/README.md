@@ -83,7 +83,7 @@ await server.acceptNostrConnect(scannedUri);
 | `connect` | The pairing secret is verified first (`invalid secret`, `secret already used by another client`); only then does the handler see the request. The wire result is always `ack`. A secret is bound to the first client that presents it, synchronously, before the handler's approval is awaited, so two clients racing one secret get exactly one `ack`. The binding counts pending approvals: it is freed only when the bound client's last pending `connect` is rejected and none was ever confirmed. The bound client may reconnect with it indefinitely. |
 | `nostrconnect://` | The secret is bound and the URI's relays registered before the handler runs, so a concurrent accept with the same secret is refused and an `auth_url` sent during approval reaches the client's own relays. The handler sees a synthetic `connect` carrying the URI's secret, perms and metadata. On approval the server subscribes on the URI's relays for that client alone and publishes the acknowledgement (`result` = the client's secret) there. |
 | Unconnected clients | Any method other than `connect` and `ping` from a client that has not connected gets `error: "unauthorized: connect first"`. |
-| `ping` / `switch_relays` | Answered without the handler: `pong` (for anyone, per the NIP), and the JSON list of the relays this client's responses go to. |
+| `ping` / `switch_relays` | Answered without the handler: `pong` (for anyone, per the NIP), and the JSON list of the relays this client's responses go to, in the pool's normalized spelling (lower-case host, trailing slash, no default port) rather than the client's own. A client that compares by string, as nostr-tools does, may re-subscribe once on the same relay; harmless. |
 | `logout` | Forwarded to the handler; after the ack the client is forgotten and relays only it used are unsubscribed. A request still in flight at that moment is dropped rather than answered, so no released relay is re-opened for a client that has left. |
 | Deduplication | By request id and by event id, per client. Connected clients keep their own window; senders that have not connected share a bounded pool of windows, so junk from fresh keypairs cannot evict a real client's replay protection. A redelivered request is answered once. |
 | Concurrency | Requests are dispatched independently; a slow `sign_event` never delays a later `get_public_key`. |
@@ -110,6 +110,15 @@ server opened, publish-only ones included.
 - NIP-04 transport. Every message is NIP-44, matching the extension's documented position.
 - `create_account`, NIP-05 provider discovery (NIP-89), relay AUTH.
 - Any notion of permissions, sessions or users. Put those in the handler.
+
+## Connect timeout caveat
+
+`connectTimeoutMs` (default 3000) bounds how long a relay may take to accept. In nostr-tools
+2.24.1 a connect that times out leaves its socket open and unreachable: the relay's handlers
+are nulled without a close, and the pool forgets the relay, so `stop()` cannot close it. Each
+attempt against a slow relay, retries included, leaks one socket for the process lifetime.
+Prefer relays that accept promptly, set the timeout generously on hosts that run for hours,
+and see the package report for the upstream defect.
 
 ## React Native
 

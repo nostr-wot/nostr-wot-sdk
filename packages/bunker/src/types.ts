@@ -95,7 +95,18 @@ export interface BunkerServerOptions {
    * Default 120000 ms. `0` disables the limit.
    */
   handlerTimeoutMs?: number;
-  /** How long a relay may take to connect before the attempt counts as failed. Default 3000 ms. */
+  /**
+   * How long a relay may take to connect before the attempt counts as failed.
+   * Default 3000 ms.
+   *
+   * Caveat (nostr-tools 2.24.1): when this timeout fires, `AbstractRelay.connect`
+   * nulls the socket's handlers without closing the socket, and the pool drops the
+   * relay from its map, so the still-connecting socket is orphaned and `stop()`
+   * cannot reach it. Against a relay that takes longer than this to accept, every
+   * attempt (including each backoff retry) leaks one socket for the process
+   * lifetime. Set it generously on long-running hosts, and prefer relays that
+   * accept quickly. Tracked as an upstream defect; see the package report.
+   */
   connectTimeoutMs?: number;
   /** Delay before re-subscribing to a relay that dropped. Default 3000 ms; doubles per failure up to `maxReconnectDelayMs`. */
   reconnectDelayMs?: number;
