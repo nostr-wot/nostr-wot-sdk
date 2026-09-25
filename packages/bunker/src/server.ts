@@ -193,7 +193,7 @@ export class BunkerServer {
     if (options.generation !== undefined) {
       const g = options.generation as unknown;
       if (typeof g !== "number" || !Number.isInteger(g) || g < 0) {
-        throw new Error(`generation must be a non-negative integer (got ${typeof g === "bigint" ? `${g}n` : JSON.stringify(g) ?? String(g)})`);
+        throw new Error(`generation must be a non-negative integer (got ${describeValue(g)})`);
       }
     }
     this.#generationExplicit = options.generation !== undefined;
@@ -1012,8 +1012,14 @@ export class BunkerServer {
     this.#log.debug?.("request", { clientPubkey, id: request.id, method: request.method });
     const wasConnected = this.#clients.has(clientPubkey);
     // A client that logged out while this request was in flight has released
-    // its relays; answering now would re-open one of them for nobody.
-    const goneMeanwhile = () => wasConnected && !this.#clients.has(clientPubkey);
+    // its relays; answering now would re-open one of them for nobody. The one
+    // exception is `connect`: a client that is being refused admission must be
+    // told so (nostr-tools' client has no request timeout, so a dropped refusal
+    // is an indefinite hang), and any socket that delivery re-opened is closed.
+    const goneMeanwhile = () => wasConnected && !this.#clients.has(clientPubkey) && request.method !== "connect";
+    const closeUnclaimed = (relays: string[]) => {
+      if (wasConnected && !this.#clients.has(clientPubkey)) for (const url of relays) this.#closeSocket(url);
+    };
     let result: string;
     try {
       if (request.method === "ping") {
@@ -1034,14 +1040,18 @@ export class BunkerServer {
         this.#log.debug?.("response dropped: client left while the request was in flight", { clientPubkey, id: request.id });
         return;
       }
-      await this.#send(clientPubkey, { id: request.id, error }, this.#clients.get(clientPubkey)?.relays ?? [sourceRelay]);
+      const relays = this.#clients.get(clientPubkey)?.relays ?? [sourceRelay];
+      await this.#send(clientPubkey, { id: request.id, error }, relays);
+      closeUnclaimed(relays);
       return;
     }
     if (goneMeanwhile()) {
       this.#log.debug?.("response dropped: client left while the request was in flight", { clientPubkey, id: request.id });
       return;
     }
-    await this.#send(clientPubkey, { id: request.id, result }, this.#clients.get(clientPubkey)?.relays ?? [sourceRelay]);
+    const relays = this.#clients.get(clientPubkey)?.relays ?? [sourceRelay];
+    await this.#send(clientPubkey, { id: request.id, result }, relays);
+    closeUnclaimed(relays);
     // After the ack, not before: disconnecting first would release the client's
     // relays and then re-open one of them just to deliver this response.
     if (request.method === "logout") this.disconnectClient(clientPubkey);
@@ -1245,6 +1255,14 @@ function randomHex(byteLength: number): string {
   const bytes = new Uint8Array(byteLength);
   crypto.getRandomValues(bytes);
   return bytesToHex(bytes);
+}
+
+/** A value as a reader would write it: `NaN`, `Infinity`, `"1"`, `1n`, `null`, not JSON's idea of them. */
+function describeValue(value: unknown): string {
+  if (typeof value === "bigint") return `${value}n`;
+  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "symbol") return value.toString();
+  return String(value);
 }
 
 /** For the log only; never sent to a client. */
