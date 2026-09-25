@@ -54,6 +54,13 @@ const seed = mnemonicToSeedSync(mnemonic); // 24 words
 const { kem, dsa } = derivePqKeys(seed, 0);
 ```
 
+The second argument names the account: a NIP-06 account index, or the canonical BIP-32 path
+the account was restored at. A path in the NIP-06 sequence (`m/44'/1237'/0'/0/{n}`) selects
+the same keys as the index `n`; any other path gets its own namespace, `path/<path>`, and is
+never collapsed to its last child index, so two custom paths sharing a last index do not
+share post-quantum keys. A path that is not canonical (`h` for hardened, whitespace) is
+refused rather than derived under a spelling no other implementation would produce.
+
 ### Publish an attestation
 
 ```ts
@@ -78,13 +85,12 @@ separately.
 ### Check whether someone can receive post-quantum messages
 
 ```ts
-import { attestationFilter, parseAttestation, encapsulate, hybridKey } from '@nostr-wot/pq';
-import { verifyEvent } from 'nostr-tools';
+import { attestationFilter, verifyAttestation, encapsulate, hybridKey } from '@nostr-wot/pq';
 
 const event = await pool.get(relays, attestationFilter([theirPubkey]));
-if (!event || !verifyEvent(event)) return; // verify the signature yourself first
+if (!event) return;
 
-const att = parseAttestation(event);
+const att = verifyAttestation(event); // kind, secp256k1 signature, then the tags
 if (!att.usable) {
   console.warn('not usable:', att.problems); // typed codes, not prose
   return;
@@ -99,7 +105,11 @@ const key = hybridKey(sharedSecret, nip44ConversationKey);
 failure worth engineering against is a sender *believing* a recipient is reachable
 post-quantum when they are not.
 
-`parseAttestation` does **not** verify the event's secp256k1 signature. Do that yourself.
+`verifyAttestation` is the whole check for an event fetched from a relay: a wrong kind or a
+signature that does not verify yields `usable: false` with no key at all (`wrongKind`,
+`badSignature`) before a single tag is read. `parseAttestation` underneath it reads the tags
+only and does **not** verify the event's secp256k1 signature; use it when the signature has
+already been checked.
 
 ## Proof of possession
 

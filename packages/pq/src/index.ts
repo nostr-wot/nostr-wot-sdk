@@ -26,6 +26,7 @@ import { ml_kem1024 } from '@noble/post-quantum/ml-kem.js';
 import { ml_dsa87 } from '@noble/post-quantum/ml-dsa.js';
 import { extract as hkdfExtract, expand as hkdfExpand } from '@noble/hashes/hkdf.js';
 import { sha256 } from '@noble/hashes/sha2.js';
+import { verifyEvent } from 'nostr-tools';
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -44,6 +45,12 @@ export const DSA_PUBLIC_KEY_BYTES = 2592;
 
 const KEM_SEED_BYTES = 64; // d || z
 const DSA_SEED_BYTES = 32; // xi
+
+/** The NIP-06 sequence: `m/44'/1237'/0'/0/{index}`. Only its members have a numeric selector. */
+const NIP06_ACCOUNT_PREFIX = "m/44'/1237'/0'/0/";
+/** A canonical private BIP-32 path: `m`, then non-negative indexes, hardened ones with `'`. */
+const CANONICAL_PATH = /^m(?:\/(?:0|[1-9]\d*)'?)*$/;
+const MAX_BIP32_INDEX = 0x7fffffff;
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -69,7 +76,11 @@ export interface PqProblem {
     | 'derivedWeakSeed'
     | 'derivedMissingSeedStrength'
     | 'missingPop'
-    | 'popFailed';
+    | 'popFailed'
+    /** `verifyAttestation` only: the event is not a `kind:10203`. */
+    | 'wrongKind'
+    /** `verifyAttestation` only: the event's secp256k1 signature does not verify. */
+    | 'badSignature';
   params?: Record<string, string | number>;
 }
 
@@ -92,6 +103,14 @@ export interface PqEventLike {
   pubkey: string;
   kind: number;
   tags: string[][];
+}
+
+/** A signed event as a relay serves it: what {@link verifyAttestation} takes. */
+export interface PqSignedEventLike extends PqEventLike {
+  id: string;
+  created_at: number;
+  content: string;
+  sig: string;
 }
 
 // ── Encoding helpers (no Buffer; works in browsers and Node) ────────────────
@@ -127,14 +146,52 @@ function deriveSeed(seed: Uint8Array, info: string, length: number): Uint8Array 
   }
 }
 
-/** `info` string for the ML-KEM seed at a NIP-06 account index. */
-export function kemInfo(account = 0): string {
-  return `${PQ_PROFILE}/${ALG_KEM}/${account}`;
+/**
+ * Which account a derivation is for: a NIP-06 account index, or the canonical BIP-32 path
+ * the account was restored at. See {@link derivationSelector}.
+ */
+export type PqAccount = number | string;
+
+/**
+ * The account's place in the `info` string.
+ *
+ * A number is the NIP-06 account index and is spelled as itself, the published selector. A
+ * string is a BIP-32 path: a member of the NIP-06 sequence (`m/44'/1237'/0'/0/{n}`) keeps
+ * the numeric selector `n`, so an account restored at its standard path derives the same
+ * keys it did before paths were stored; any other path gets the namespace `path/<path>`
+ * and is never collapsed to its last child index, since two custom paths sharing a last
+ * index would otherwise share post-quantum keys. This is the extension's rule, spelled
+ * the same, so the two derive the same keys for the same account.
+ *
+ * The path has to be canonical already: `m`, then decimal indexes, hardened ones marked
+ * with `'` (not `h` or `H`), no whitespace. The caller that stores paths canonicalises them
+ * (`normalizeDerivationPath` in `@nostr-wot/accounts`); anything else is refused rather than
+ * derived under a spelling no other implementation would produce.
+ */
+function derivationSelector(account: PqAccount): string {
+  if (typeof account === 'number') {
+    if (!Number.isInteger(account) || account < 0) throw new Error('Invalid account index');
+    return String(account);
+  }
+  if (typeof account !== 'string' || !CANONICAL_PATH.test(account)) throw new Error('Invalid derivation path');
+  for (const part of account.split('/').slice(1)) {
+    if (Number(part.replace("'", '')) > MAX_BIP32_INDEX) throw new Error('Invalid derivation path');
+  }
+  if (account.startsWith(NIP06_ACCOUNT_PREFIX)) {
+    const suffix = account.slice(NIP06_ACCOUNT_PREFIX.length);
+    if (/^\d+$/.test(suffix)) return suffix;
+  }
+  return `path/${account}`;
 }
 
-/** `info` string for the ML-DSA seed at a NIP-06 account index. */
-export function dsaInfo(account = 0): string {
-  return `${PQ_PROFILE}/${ALG_DSA}/${account}`;
+/** `info` string for the ML-KEM seed at a NIP-06 account index or canonical path. */
+export function kemInfo(account: PqAccount = 0): string {
+  return `${PQ_PROFILE}/${ALG_KEM}/${derivationSelector(account)}`;
+}
+
+/** `info` string for the ML-DSA seed at a NIP-06 account index or canonical path. */
+export function dsaInfo(account: PqAccount = 0): string {
+  return `${PQ_PROFILE}/${ALG_DSA}/${derivationSelector(account)}`;
 }
 
 /**
@@ -142,11 +199,12 @@ export function dsaInfo(account = 0): string {
  *
  * @param seed - the 64-byte BIP-39 seed. NOT a secp256k1 private key; passing one
  *               produces different, unrelated keys and defeats the whole design.
- * @param account - NIP-06 account index
+ * @param account - NIP-06 account index, or the canonical BIP-32 path the account was
+ *                  restored at (see {@link PqAccount})
  */
-export function derivePqKeys(seed: Uint8Array, account = 0): PqKeys {
+export function derivePqKeys(seed: Uint8Array, account: PqAccount = 0): PqKeys {
   if (!(seed instanceof Uint8Array) || seed.length === 0) throw new Error('Invalid seed');
-  if (!Number.isInteger(account) || account < 0) throw new Error('Invalid account index');
+  derivationSelector(account); // refuses a bad account before any secret is expanded
 
   const kemSeed = deriveSeed(seed, kemInfo(account), KEM_SEED_BYTES);
   const dsaSeed = deriveSeed(seed, dsaInfo(account), DSA_SEED_BYTES);
@@ -338,6 +396,39 @@ export function parseAttestation(event: PqEventLike): PqAttestation {
     problems,
     usable: kem !== null && problems.length === 0,
   };
+}
+
+/**
+ * The whole check for an attestation fetched from a relay: the kind, the event's secp256k1
+ * signature, then the tags through {@link parseAttestation}.
+ *
+ * `parseAttestation` reads tags and trusts the caller to have verified the signature. A
+ * caller that forgets is trusting tags anyone could have published under any pubkey, and the
+ * result is a sender encrypting to an attacker's KEM key while believing the recipient is
+ * reachable post-quantum. So this refuses first: a wrong kind or a bad signature yields
+ * `usable: false` with no key at all, before a single tag is read.
+ */
+export function verifyAttestation(event: PqSignedEventLike): PqAttestation {
+  const refused = (code: 'wrongKind' | 'badSignature'): PqAttestation => ({
+    pubkey: event.pubkey,
+    kem: null,
+    dsa: null,
+    origin: null,
+    seedStrength: null,
+    profile: null,
+    popValid: null,
+    problems: [{ code }],
+    usable: false,
+  });
+  if (event.kind !== PQC_KIND) return refused('wrongKind');
+  let valid = false;
+  try {
+    valid = verifyEvent(event);
+  } catch {
+    valid = false;
+  }
+  if (!valid) return refused('badSignature');
+  return parseAttestation(event);
 }
 
 /** Filter for fetching an identity's attestation from relays. */
