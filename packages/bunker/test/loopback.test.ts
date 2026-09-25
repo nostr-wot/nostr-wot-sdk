@@ -1958,6 +1958,57 @@ describe("BunkerServer loopback", () => {
       expect(capped.connectedClients.sort()).toEqual([aPubkey, B.pubkey].sort());
     });
 
+    it("a slot-free reconnect that resolves after the host disconnected the client and others filled the ceiling is refused, and told so", async () => {
+      // The post-await re-check is load-bearing here: A's reconnect took no slot (A was connected),
+      // the host then dropped A, B and C filled the ceiling, and A's approval resolves last.
+      const gate = deferred<string>();
+      const aSk = generateSecretKey();
+      const aPubkey = getPublicKey(aSk);
+      let aConnects = 0;
+      const capped = new BunkerServer({
+        connectionSecretKey: generateSecretKey(),
+        relays: [relay.url],
+        maxClients: 2,
+        handler: async (req, ctx) => {
+          if (req.method !== "connect") return signerHandler(user)(req, ctx);
+          if (req.clientPubkey === aPubkey && ++aConnects === 2) return gate.promise;
+          return "ack";
+        },
+      });
+      await capped.start();
+      cleanups.push(() => capped.stop());
+      const A = new RawClient([relay.url], capped.connectionPubkey, aSk);
+      const B = new RawClient([relay.url], capped.connectionPubkey);
+      const C = new RawClient([relay.url], capped.connectionPubkey);
+      cleanups.push(() => A.close(), () => B.close(), () => C.close());
+      await Promise.all([A.listen(), B.listen(), C.listen()]);
+      const secretA = capped.createBunkerUri().secret;
+      await A.send("a1", "connect", [capped.connectionPubkey, secretA]);
+      expect(await A.waitFor("a1")).toEqual({ id: "a1", result: "ack" });
+      await A.send("a2", "connect", [capped.connectionPubkey, secretA]); // slot-free: A is connected
+      await wait(100);
+      capped.disconnectClient(aPubkey); // the host drops A while its reconnect is pending
+      await B.send("b1", "connect", [capped.connectionPubkey, capped.createBunkerUri().secret]);
+      await C.send("c1", "connect", [capped.connectionPubkey, capped.createBunkerUri().secret]);
+      expect(await B.waitFor("b1")).toEqual({ id: "b1", result: "ack" });
+      expect(await C.waitFor("c1")).toEqual({ id: "c1", result: "ack" });
+      expect(capped.connectedClients).toHaveLength(2);
+      gate.resolve("ack"); // A's approval resolves into a full house
+      // A must learn it was refused: nostr-tools' client has no request timeout, so a dropped refusal is a hang.
+      expect(await A.waitFor("a2", 2000)).toEqual({ id: "a2", error: "too many clients" });
+      expect(capped.connectedClients.sort()).toEqual([B.pubkey, C.pubkey].sort());
+    });
+
+    it("the generation error names the value it was given", () => {
+      const attempt = (g: unknown) => () => new BunkerServer({ connectionSecretKey: connectionSk, relays: [relay.url], handler: signerHandler(user), generation: g as number });
+      expect(attempt(Number.NaN)).toThrow(/\(got NaN\)/);
+      expect(attempt(Number.POSITIVE_INFINITY)).toThrow(/\(got Infinity\)/);
+      expect(attempt("1")).toThrow(/\(got "1"\)/);
+      expect(attempt(null)).toThrow(/\(got null\)/);
+      expect(attempt(1n)).toThrow(/\(got 1n\)/);
+      expect(attempt(-1)).toThrow(/\(got -1\)/);
+    });
+
     it("the server-level secretTtlMs applies to every mint, and 0 disables it", async () => {
       const ttl = new BunkerServer({ connectionSecretKey: generateSecretKey(), relays: [relay.url], secretTtlMs: 100, handler: signerHandler(user) });
       await ttl.start();
