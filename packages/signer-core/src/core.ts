@@ -38,9 +38,11 @@ import type { SafeAccount } from '@nostr-wot/accounts';
 import type { Permissions } from '@nostr-wot/permissions';
 import { PrivateKeySigner } from '@nostr-wot/signers';
 import { canonicalHostname, canonicalHttpOrigin, siteScopes } from '@nostr-wot/permissions';
+import { PQC_KIND, buildAttestationTags } from '@nostr-wot/pq';
 import type { Vault } from '@nostr-wot/vault';
 import { GET_PUBLIC_KEY_COOLDOWN_MS, KEY_METHODS, ORIGIN_KINDS } from './constants.js';
 import { SignerError, errorMessage } from './errors.js';
+import { needsPqKeys, remotePqRefusal, withPqKeys, type PqKeyScope } from './pq.js';
 import { ApprovalQueue } from './queue.js';
 import { validateBatchRequest, validateRequest } from './schema.js';
 import type {
@@ -166,6 +168,23 @@ type ItemRun =
 interface Asked {
   method: SignerMethod;
   kind: number | undefined;
+}
+
+/**
+ * The permission rule a request is decided by. Every method is its own rule except the
+ * attestation, which is the `signEvent` rule for kind 10203: it signs a `kind:10203`, so a
+ * stored deny on that kind, or on signing at all, holds for it, and a remembered approval is
+ * stored where a user looking for "kind 10203" will find it.
+ */
+function permissionRule(params: ValidatedParams): Asked {
+  switch (params.method) {
+    case 'signEvent':
+      return { method: 'signEvent', kind: params.event.kind };
+    case 'signPqAttestation':
+      return { method: 'signEvent', kind: PQC_KIND };
+    default:
+      return { method: params.method, kind: undefined };
+  }
 }
 
 export class SignerCore {
@@ -399,7 +418,7 @@ export class SignerCore {
     const { request, params } = validated;
     const method = params.method;
     const originKey = permissionOrigin(request.origin);
-    const kind = params.method === 'signEvent' ? params.event.kind : undefined;
+    const rule = permissionRule(params);
 
     // 1. Resolve the active account. The identity port answers locked or not, which is what
     //    lets the permission check come next whatever the vault's state.
@@ -408,7 +427,7 @@ export class SignerCore {
     context.account = account;
 
     // 2. Permissions, before lock state, before routing, before anything. A deny is the end.
-    const decision = await this.#permissions.check(originKey, method, kind, account.id);
+    const decision = await this.#permissions.check(originKey, rule.method, rule.kind, account.id);
     if (decision === 'deny') throw new SignerError('permission_denied', 'Permission denied');
 
     // Whether this account can do this at all. After the gate, so a denied origin learns
@@ -418,6 +437,12 @@ export class SignerCore {
     if (needsKey && !remote && account.readOnly) {
       throw new SignerError('unsupported', 'This account has no signing key');
     }
+    // A post-quantum request on a remote account is refused here, at the routing step,
+    // whatever the host's ports: the bunker would answer a hybrid encrypt with classic
+    // ciphertext the caller cannot tell apart, which is the downgrade the opt-in exists to
+    // prevent. See `remotePqRefusal`.
+    const pqRefusal = remote ? remotePqRefusal(params) : null;
+    if (pqRefusal !== null) throw new SignerError('unsupported', pqRefusal);
     if (needsKey && remote && !this.#remote) {
       throw new SignerError('unsupported', 'Remote signing is not available on this host');
     }
@@ -434,13 +459,13 @@ export class SignerCore {
         () => this.#approval.present(request, account),
       );
       if (!outcome.allow) {
-        if (outcome.remember) await this.#remember(originKey, method, kind, outcome, 'deny', account);
+        if (outcome.remember) await this.#remember(originKey, rule, outcome, 'deny', account);
         throw new SignerError('rejected', outcome.reason || 'Request rejected by user');
       }
       // The user approved THIS identity. If the active account moved while the prompt was
       // open, the answer is no, not the new account's key, and nothing is remembered.
       await this.#assertStillActive(account);
-      if (outcome.remember) await this.#remember(originKey, method, kind, outcome, 'allow', account);
+      if (outcome.remember) await this.#remember(originKey, rule, outcome, 'allow', account);
       if (method === 'getPublicKey') {
         this.#cooldowns.set(originKey, {
           expiresAt: this.#now() + GET_PUBLIC_KEY_COOLDOWN_MS,
@@ -530,8 +555,7 @@ export class SignerCore {
     const consulted = new Set<string>();
     const asked: Asked[] = [];
     for (const item of items) {
-      const method = item.params.method;
-      const kind = item.params.method === 'signEvent' ? item.params.event.kind : undefined;
+      const { method, kind } = permissionRule(item.params);
       const rule = `${method}\u0000${kind ?? ''}`;
       if (consulted.has(rule)) continue;
       consulted.add(rule);
@@ -638,21 +662,25 @@ export class SignerCore {
    * One key scope: the key is copied in, checked against the identity, used, zeroed. A
    * failure comes out as an {@link ExecuteFailure} that says whether the vault or the
    * signing backend threw; a `SignerError` passes through as itself.
+   *
+   * A request that needs the account's post-quantum keys opens a second scope inside the
+   * first, `withPqKeys`, and only then: a classic request never reads the seed phrase or
+   * the imported keys, so the path everyone uses today does exactly what it did.
    */
   async #signLocally(account: SafeAccount, params: ValidatedParams): Promise<unknown> {
     try {
       // Pinned to the account the user saw, never "whatever is active now".
       return await this.#vault.withPrivkey(account.id, async (key) => {
-        const signer = new PrivateKeySigner(key);
         // The identity port is the host's, and it is what the user was shown and what
         // `getPublicKey` answers. Nothing else in the chain checks that its pubkey is the one
         // this key derives to under this id. If it is not, the user approved as one identity
         // and the signature would be another's, so the key is not used at all.
-        if ((await signer.getPublicKey()) !== account.pubkey) {
+        if ((await new PrivateKeySigner(key).getPublicKey()) !== account.pubkey) {
           throw new SignerError('author_mismatch', 'Event author does not match the active account');
         }
         try {
-          return await this.#execute(params, signer);
+          if (!needsPqKeys(params)) return await this.#execute(params, new PrivateKeySigner(key));
+          return await withPqKeys(this.#vault, account, (scope) => this.#executePq(params, key, scope, account));
         } catch (error) {
           if (error instanceof SignerError) throw error;
           throw new ExecuteFailure(error, 'callback', this.#vault.isLocked());
@@ -686,12 +714,53 @@ export class SignerCore {
       case 'nip04Decrypt':
         return signer.nip04Decrypt(params.pubkey, params.ciphertext);
       case 'nip44Encrypt':
+        if (params.scheme === 'pq') throw new SignerError('unsupported', 'nip44Encrypt with a post-quantum scheme needs the post-quantum keys');
         return signer.nip44Encrypt(params.pubkey, params.plaintext);
       case 'nip44Decrypt':
+        if (params.scheme === 'pq') throw new SignerError('unsupported', 'nip44Decrypt of a post-quantum payload needs the post-quantum keys');
+        // The signer routes on the envelope too; with no ML-KEM key configured this is the
+        // classic NIP-44 path and nothing else.
         return signer.nip44Decrypt(params.pubkey, params.ciphertext);
       default:
-        // `getPublicKey` and `getRelays` were answered before the key was ever read.
+        // `getPublicKey` and `getRelays` were answered before the key was ever read, and
+        // the attestation runs under the post-quantum scope.
         throw new SignerError('unsupported', `${params.method} does not use the key`);
+    }
+  }
+
+  /**
+   * The post-quantum backend, inside both scopes: the private key for the classic half of
+   * the hybrid, and the account's ML-KEM / ML-DSA keys for the rest. The signer is built
+   * with the KEM key so its own routing applies; the attestation's proof of possession is
+   * signed by the ML-DSA key and the event by the private key, as the extension does.
+   */
+  async #executePq(params: ValidatedParams, key: Uint8Array, scope: PqKeyScope, account: SafeAccount): Promise<unknown> {
+    const signer = new PrivateKeySigner(key, { pqKem: scope.keys.kem });
+    switch (params.method) {
+      case 'nip44Encrypt':
+        if (params.scheme !== 'pq') throw new SignerError('unsupported', 'classic nip44Encrypt does not use the post-quantum keys');
+        return signer.nip44Encrypt(params.pubkey, params.plaintext, { scheme: 'pq', recipientKemKey: params.recipientKemKey });
+      case 'nip44Decrypt':
+        if (params.scheme !== 'pq') throw new SignerError('unsupported', 'classic nip44Decrypt does not use the post-quantum keys');
+        return signer.nip44Decrypt(params.pubkey, params.ciphertext);
+      case 'signPqAttestation':
+        return signer.signEvent({
+          kind: PQC_KIND,
+          content: '',
+          // `derived` asserts one mnemonic restores these keys, which only a 24-word seed
+          // can; imported keys are `independent` and claim no seed strength, exactly as the
+          // extension tags them, so a relay reader can tell the two provenances apart.
+          tags: buildAttestationTags({
+            pubkey: account.pubkey,
+            kem: scope.keys.kem.publicKey,
+            dsa: scope.keys.dsa.publicKey,
+            origin: scope.source === 'derived' ? 'derived' : 'independent',
+            dsaSecretKey: scope.keys.dsa.secretKey,
+          }),
+          created_at: Math.floor(this.#now() / 1000),
+        });
+      default:
+        throw new SignerError('unsupported', `${params.method} does not use the post-quantum keys`);
     }
   }
 
@@ -744,8 +813,7 @@ export class SignerCore {
   /** Persist a prompt's decision, scoped to the event kind unless the host said otherwise. */
   async #remember(
     originKey: string,
-    method: SignerMethod,
-    kind: number | undefined,
+    { method, kind }: Asked,
     outcome: ApprovalDecision,
     decision: 'allow' | 'deny',
     account: SafeAccount,
@@ -828,14 +896,24 @@ export class SignerCore {
         entry.kind = params.event.kind;
         entry.event = params.event;
         break;
+      case 'signPqAttestation':
+        entry.kind = PQC_KIND;
+        break;
       case 'nip04Encrypt':
-      case 'nip44Encrypt':
         entry.theirPubkey = params.pubkey;
         break;
+      case 'nip44Encrypt':
+        entry.theirPubkey = params.pubkey;
+        entry.scheme = params.scheme;
+        break;
       case 'nip04Decrypt':
+        entry.theirPubkey = params.pubkey;
+        entry.ciphertext = params.ciphertext;
+        break;
       case 'nip44Decrypt':
         entry.theirPubkey = params.pubkey;
         entry.ciphertext = params.ciphertext;
+        entry.scheme = params.scheme;
         break;
       default:
         break;

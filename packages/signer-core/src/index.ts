@@ -50,6 +50,7 @@ export {
   MAX_CRYPTO_CIPHERTEXT_LENGTH,
   MAX_BATCH_ITEMS,
   MAX_BATCH_BYTES,
+  RECIPIENT_KEM_KEY_LENGTH,
   SIGNER_METHODS,
   ORIGIN_KINDS,
   KEY_METHODS,
@@ -59,3 +60,10 @@ export { SignerError, type SignerErrorCode } from './errors.js';
 export { validateRequest, validateBatchRequest, utf8ByteLength } from './schema.js';
 export { ApprovalQueue, type ApprovalQueueOptions, type TrackInput } from './queue.js';
 export { SignerCore, permissionOrigin } from './core.js';
+export { withPqKeys, PQ_SEED_WORD_COUNT, type PqKeyScope } from './pq.js';
+/**
+ * The attestation kind, and the check for someone else's attestation: kind, secp256k1
+ * signature, then the tags. Re-exported from `@nostr-wot/pq` so a host that only publishes
+ * and verifies attestations through this pipeline needs no second dependency.
+ */
+export { PQC_KIND, verifyAttestation as verifyPqAttestation, type PqAttestation, type PqProblem } from '@nostr-wot/pq';

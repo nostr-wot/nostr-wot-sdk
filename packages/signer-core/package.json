@@ -52,6 +52,7 @@
   "dependencies": {
     "@nostr-wot/accounts": "^0.1.0",
     "@nostr-wot/permissions": "^0.1.0",
+    "@nostr-wot/pq": "^0.2.2",
     "@nostr-wot/signers": "^1.2.0",
     "@nostr-wot/vault": "^0.1.0",
     "nostr-tools": "^2.24.1"

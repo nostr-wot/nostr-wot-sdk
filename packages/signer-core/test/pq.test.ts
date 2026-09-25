@@ -1,0 +1,669 @@
+/**
+ * Post-quantum support in the pipeline, held to the extension's behaviour.
+ *
+ * Three things are under test. The key scope: post-quantum secrets are key material, so
+ * every path to them goes through `withPqKeys`, which resolves them exactly as the
+ * extension's `activePqKeys` does (imported keys first, then a 24-word seed at the
+ * account's derivation path), zeroes its copies on every path and voids a result computed
+ * under a session that moved. Decrypt routing: `nip44Decrypt` reads the self-describing
+ * envelope and takes the hybrid path for a post-quantum payload, the existing path for a
+ * classic one, and fails as `operation_failed` for anything else, never silently. And the
+ * encrypt policy, which is the extension's and is opt-in: hybrid only when the caller
+ * passes `opts: { scheme: 'pq', recipientKemKey }`, never inferred from a relay lookup.
+ *
+ * The attestation is a signing request like any other: `signPqAttestation` runs the same
+ * pipeline under the `signEvent` rule for kind 10203, and a stored deny holds.
+ */
+import { describe, test, expect, vi } from 'vitest';
+import { finalizeEvent, generateSecretKey, getPublicKey, nip44, verifyEvent, type Event } from 'nostr-tools';
+import { randomBytes } from '@noble/hashes/utils.js';
+import { bytesToHex } from '@noble/hashes/utils.js';
+import type { Account } from '@nostr-wot/accounts';
+import { deriveFromMnemonic, mnemonicToSeed } from '@nostr-wot/accounts';
+import { PrivateKeySigner } from '@nostr-wot/signers';
+import {
+  ALG_DSA,
+  ALG_KEM,
+  buildAttestationTags,
+  decryptPq,
+  derivePqKeys,
+  encryptPq,
+  isPqEnvelope,
+  parseAttestation,
+  toBase64,
+  type PqKeys,
+} from '@nostr-wot/pq';
+import {
+  SignerError,
+  PQC_KIND,
+  PQ_SEED_WORD_COUNT,
+  verifyPqAttestation,
+  withPqKeys,
+  type PqKeyScope,
+  type RemoteSignerPort,
+} from '../src/index.js';
+import { account, fixture, req, nextId, PRIVKEY_2, PUBKEY_2 } from './harness.js';
+
+// ── Identities ──
+
+/** The 24-word mnemonic NIP-06 publishes, and the identity it derives at index 0. */
+const M24 =
+  'what bleak badge arrange retreat wolf trade produce cricket blur garlic valid proud rude strong choose busy staff weather area salt hollow arm fade';
+/** A valid 12-word phrase: 128 bits, which the extension refuses for post-quantum keys. */
+const M12 = 'legal winner thank year wave sausage worth useful legal winner thank yellow';
+
+function seededAccount(id: string, mnemonic: string, index = 0, extra: Partial<Account> = {}): Account {
+  const derived = deriveFromMnemonic(mnemonic, index);
+  return account(id, bytesToHex(derived.privkey), {
+    type: 'generated',
+    mnemonic,
+    derivationIndex: index,
+    derivationPath: derived.path,
+    ...extra,
+  });
+}
+
+/** An externally generated pair, in the shape the vault stores it. */
+function importedPair(): { keys: PqKeys; stored: NonNullable<Account['pqKeys']> } {
+  const keys = derivePqKeys(randomBytes(64), 0);
+  return {
+    keys,
+    stored: {
+      profile: 'nip-pqc/v1',
+      kem: { public: toBase64(keys.kem.publicKey), secret: toBase64(keys.kem.secretKey) },
+      dsa: { public: toBase64(keys.dsa.publicKey), secret: toBase64(keys.dsa.secretKey) },
+      importedAt: 1,
+    },
+  };
+}
+
+/** The keys the extension would derive for this account: what every derived path must equal. */
+function expectedKeys(mnemonic: string, selector: number | string): PqKeys {
+  const seed = mnemonicToSeed(mnemonic);
+  try {
+    return derivePqKeys(seed, selector);
+  } finally {
+    seed.fill(0);
+  }
+}
+
+/** Someone else, with a conversation key to our account, as a sender or a recipient. */
+function peer(ourPubkey: string) {
+  const sk = generateSecretKey();
+  const pk = getPublicKey(sk);
+  return { sk, pk, conversationKey: nip44.v2.utils.getConversationKey(sk, ourPubkey) };
+}
+
+/** A post-quantum payload for `recipientPubkey`, as a sender who holds their attestation builds it. */
+function hybridPayload(plaintext: string, from: ReturnType<typeof peer>, recipientPubkey: string, recipientKem: Uint8Array): string {
+  return encryptPq(plaintext, recipientKem, from.conversationKey, { sender: from.pk, recipient: recipientPubkey });
+}
+
+const zeros = (length: number) => new Array<number>(length).fill(0);
+
+// ── The key scope ──
+
+describe('withPqKeys resolves the account\'s post-quantum keys as the extension does', () => {
+  test('a 24-word account derives at its NIP-06 index, and the keys are the extension\'s', async () => {
+    const acct = seededAccount('acct_seed', M24);
+    const { vault, identity } = await fixture(true, { accounts: [acct] });
+    const active = (await identity.getActiveAccount())!;
+    const expected = expectedKeys(M24, 0);
+    const seen = await withPqKeys(vault, active, async (scope: PqKeyScope) => ({
+      source: scope.source,
+      kem: toBase64(scope.keys.kem.publicKey),
+      dsa: toBase64(scope.keys.dsa.publicKey),
+    }));
+    expect(seen).toEqual({
+      source: 'derived',
+      kem: toBase64(expected.kem.publicKey),
+      dsa: toBase64(expected.dsa.publicKey),
+    });
+  });
+
+  test('an account restored at a custom path derives under that path, never its last index', async () => {
+    const path = "m/44'/1237'/8'/0/2";
+    const derived = deriveFromMnemonic(M24, 0);
+    const acct = account('acct_path', bytesToHex(derived.privkey), { type: 'generated', mnemonic: M24, derivationPath: path });
+    const { vault, identity } = await fixture(true, { accounts: [acct] });
+    const active = (await identity.getActiveAccount())!;
+    const kem = await withPqKeys(vault, active, async (scope) => toBase64(scope.keys.kem.publicKey));
+    expect(kem).toBe(toBase64(expectedKeys(M24, path).kem.publicKey));
+    expect(kem).not.toBe(toBase64(expectedKeys(M24, 2).kem.publicKey));
+  });
+
+  test('a sub-account derives at its own index, so two accounts on one seed do not share keys', async () => {
+    const first = seededAccount('acct_0', M24, 0);
+    const second = seededAccount('acct_3', M24, 3);
+    const { vault, identity } = await fixture(true, { accounts: [first, second] });
+    await vault.setActiveAccountId('acct_3');
+    const active = (await identity.getActiveAccount())!;
+    expect(active.id).toBe('acct_3');
+    const kem = await withPqKeys(vault, active, async (scope) => toBase64(scope.keys.kem.publicKey));
+    expect(kem).toBe(toBase64(expectedKeys(M24, 3).kem.publicKey));
+    expect(kem).not.toBe(toBase64(expectedKeys(M24, 0).kem.publicKey));
+  });
+
+  test('imported keys win, because they are what the published attestation advertises', async () => {
+    const { keys, stored } = importedPair();
+    const acct = seededAccount('acct_both', M24, 0, { pqKeys: stored });
+    const { vault, identity } = await fixture(true, { accounts: [acct] });
+    const active = (await identity.getActiveAccount())!;
+    const seen = await withPqKeys(vault, active, async (scope) => ({
+      source: scope.source,
+      kem: toBase64(scope.keys.kem.publicKey),
+      kemSecret: toBase64(scope.keys.kem.secretKey),
+      dsa: toBase64(scope.keys.dsa.publicKey),
+    }));
+    expect(seen).toEqual({
+      source: 'imported',
+      kem: toBase64(keys.kem.publicKey),
+      kemSecret: toBase64(keys.kem.secretKey),
+      dsa: toBase64(keys.dsa.publicKey),
+    });
+    expect(seen.kem).not.toBe(toBase64(expectedKeys(M24, 0).kem.publicKey));
+  });
+
+  test('an account with no seed phrase is refused with the extension\'s reason', async () => {
+    const { vault, identity } = await fixture(true, { accounts: [account('acct_nsec', PRIVKEY_2)] });
+    const active = (await identity.getActiveAccount())!;
+    const error = await withPqKeys(vault, active, async () => 'never').catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(SignerError);
+    expect((error as SignerError).code).toBe('unsupported');
+    expect((error as SignerError).message).toBe('This account has no seed phrase, so it cannot use post-quantum keys');
+  });
+
+  test('a 12-word account is refused rather than handed a weak key that looks strong', async () => {
+    const { vault, identity } = await fixture(true, { accounts: [seededAccount('acct_12', M12)] });
+    const active = (await identity.getActiveAccount())!;
+    const error = await withPqKeys(vault, active, async () => 'never').catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(SignerError);
+    expect((error as SignerError).code).toBe('unsupported');
+    expect((error as SignerError).message).toBe('Post-quantum keys require a 24-word seed phrase');
+    expect(PQ_SEED_WORD_COUNT).toBe(24);
+  });
+
+  test('a 12-word account with imported keys uses them: the import exists for exactly this account', async () => {
+    const { keys, stored } = importedPair();
+    const { vault, identity } = await fixture(true, { accounts: [seededAccount('acct_12i', M12, 0, { pqKeys: stored })] });
+    const active = (await identity.getActiveAccount())!;
+    const kem = await withPqKeys(vault, active, async (scope) => toBase64(scope.keys.kem.publicKey));
+    expect(kem).toBe(toBase64(keys.kem.publicKey));
+  });
+
+  test('a watch-only account is refused before the vault is asked anything', async () => {
+    const { vault, identity } = await fixture(true, { accounts: [account('acct_watch', null)] });
+    const active = (await identity.getActiveAccount())!;
+    const mnemonic = vi.spyOn(vault, 'withMnemonic');
+    const imported = vi.spyOn(vault, 'withImportedPqKeys');
+    const error = await withPqKeys(vault, active, async () => 'never').catch((e: unknown) => e);
+    expect((error as SignerError).code).toBe('unsupported');
+    expect((error as SignerError).message).toBe('This account is watch-only, so it cannot use post-quantum keys');
+    expect(mnemonic).not.toHaveBeenCalled();
+    expect(imported).not.toHaveBeenCalled();
+  });
+
+  test('a locked vault refuses, and the lock is the reason', async () => {
+    const { vault, identity } = await fixture(true, { accounts: [seededAccount('acct_seed', M24)] });
+    const active = (await identity.getActiveAccount())!;
+    vault.lock();
+    await expect(withPqKeys(vault, active, async () => 'never')).rejects.toThrow(/locked/i);
+  });
+
+  test('derived secrets are zeroed once the callback returns, and when it throws', async () => {
+    const { vault, identity } = await fixture(true, { accounts: [seededAccount('acct_seed', M24)] });
+    const active = (await identity.getActiveAccount())!;
+    let kem: Uint8Array | null = null;
+    let dsa: Uint8Array | null = null;
+    await withPqKeys(vault, active, async (scope) => {
+      kem = scope.keys.kem.secretKey;
+      dsa = scope.keys.dsa.secretKey;
+      expect(kem.some((byte) => byte !== 0)).toBe(true);
+      expect(dsa.some((byte) => byte !== 0)).toBe(true);
+    });
+    expect(Array.from(kem!)).toEqual(zeros(kem!.length));
+    expect(Array.from(dsa!)).toEqual(zeros(dsa!.length));
+    await expect(
+      withPqKeys(vault, active, async (scope) => {
+        kem = scope.keys.kem.secretKey;
+        dsa = scope.keys.dsa.secretKey;
+        throw new Error('cipher blew up');
+      }),
+    ).rejects.toThrow(/cipher blew up/);
+    expect(Array.from(kem!)).toEqual(zeros(kem!.length));
+    expect(Array.from(dsa!)).toEqual(zeros(dsa!.length));
+  });
+
+  test('imported secrets are zeroed once the callback returns', async () => {
+    const { stored } = importedPair();
+    const { vault, identity } = await fixture(true, { accounts: [account('acct_imp', PRIVKEY_2, { pqKeys: stored })] });
+    const active = (await identity.getActiveAccount())!;
+    let kem: Uint8Array | null = null;
+    let dsa: Uint8Array | null = null;
+    await withPqKeys(vault, active, async (scope) => {
+      kem = scope.keys.kem.secretKey;
+      dsa = scope.keys.dsa.secretKey;
+    });
+    expect(Array.from(kem!)).toEqual(zeros(kem!.length));
+    expect(Array.from(dsa!)).toEqual(zeros(dsa!.length));
+  });
+
+  test('a callback that hands the secret back gets zeros out: no accessor returns key material', async () => {
+    const { vault, identity } = await fixture(true, { accounts: [seededAccount('acct_seed', M24)] });
+    const active = (await identity.getActiveAccount())!;
+    const leaked = await withPqKeys(vault, active, async (scope) => scope.keys.kem.secretKey);
+    expect(Array.from(leaked)).toEqual(zeros(leaked.length));
+  });
+
+  test('a result computed under a session that moved is voided, derived and imported alike', async () => {
+    const { stored } = importedPair();
+    const derived = seededAccount('acct_seed', M24);
+    const imported = account('acct_imp', PRIVKEY_2, { pqKeys: stored });
+    for (const acct of [derived, imported]) {
+      const { vault } = await fixture(true, { accounts: [acct] });
+      const safe = (await vault.getAccountById(acct.id))!;
+      await expect(
+        withPqKeys(vault, safe, async () => {
+          vault.lock();
+          return 'computed under a dead session';
+        }),
+      ).rejects.toThrow(/session changed/i);
+    }
+  });
+});
+
+// ── Decrypt routing ──
+
+describe('nip44Decrypt routes on the envelope', () => {
+  test('a classic payload decrypts as it does today, and the seed is never read', async () => {
+    const acct = seededAccount('acct_seed', M24);
+    const { core, vault } = await fixture(true, { accounts: [acct] });
+    const from = peer(acct.pubkey);
+    const ciphertext = nip44.v2.encrypt('classic, as everyone sends today', from.conversationKey);
+    expect(isPqEnvelope(ciphertext)).toBe(false);
+    const mnemonic = vi.spyOn(vault, 'withMnemonic');
+    const imported = vi.spyOn(vault, 'withImportedPqKeys');
+
+    const plaintext = await core.handle(req('nip44Decrypt', { pubkey: from.pk, ciphertext }));
+
+    expect(plaintext).toBe('classic, as everyone sends today');
+    // Byte-identical to the path everyone uses: the unwrapped signer, with no post-quantum key.
+    expect(plaintext).toBe(await new PrivateKeySigner(acct.privkey!).nip44Decrypt(from.pk, ciphertext));
+    expect(mnemonic).not.toHaveBeenCalled();
+    expect(imported).not.toHaveBeenCalled();
+  });
+
+  test('a post-quantum payload decrypts through the hybrid path with the account\'s derived key', async () => {
+    const acct = seededAccount('acct_seed', M24);
+    const { core, activity } = await fixture(true, { accounts: [acct] });
+    const from = peer(acct.pubkey);
+    const ciphertext = hybridPayload('for post-quantum eyes only', from, acct.pubkey, expectedKeys(M24, 0).kem.publicKey);
+    expect(isPqEnvelope(ciphertext)).toBe(true);
+
+    const plaintext = await core.handle(req('nip44Decrypt', { pubkey: from.pk, ciphertext }));
+
+    expect(plaintext).toBe('for post-quantum eyes only');
+    expect(activity.entries.at(-1)).toMatchObject({ method: 'nip44Decrypt', decision: 'allow', scheme: 'pq', ciphertext });
+  });
+
+  test('a post-quantum payload decrypts with imported keys', async () => {
+    const { keys, stored } = importedPair();
+    const acct = account('acct_imp', PRIVKEY_2, { pqKeys: stored });
+    const { core } = await fixture(true, { accounts: [acct] });
+    const from = peer(acct.pubkey);
+    const ciphertext = hybridPayload('imported, not derived', from, acct.pubkey, keys.kem.publicKey);
+
+    expect(await core.handle(req('nip44Decrypt', { pubkey: from.pk, ciphertext }))).toBe('imported, not derived');
+  });
+
+  test('an unrecognised payload fails as operation_failed, never as an empty or partial answer', async () => {
+    const acct = seededAccount('acct_seed', M24);
+    const { core, activity } = await fixture(true, { accounts: [acct] });
+    const from = peer(acct.pubkey);
+    for (const ciphertext of ['not a ciphertext at all', toBase64(randomBytes(200)), 'AgAAAA==']) {
+      const error = await core.handle(req('nip44Decrypt', { pubkey: from.pk, ciphertext })).catch((e: unknown) => e);
+      expect(error, ciphertext).toBeInstanceOf(SignerError);
+      expect((error as SignerError).code, ciphertext).toBe('operation_failed');
+      expect(activity.entries.at(-1), ciphertext).toMatchObject({ decision: 'deny', code: 'operation_failed', scheme: 'classic' });
+    }
+  });
+
+  test('a post-quantum payload sealed to someone else\'s key fails as operation_failed', async () => {
+    const acct = seededAccount('acct_seed', M24);
+    const { core } = await fixture(true, { accounts: [acct] });
+    const from = peer(acct.pubkey);
+    const someoneElse = derivePqKeys(randomBytes(64), 0);
+    const ciphertext = hybridPayload('wrong recipient', from, acct.pubkey, someoneElse.kem.publicKey);
+    const error = await core.handle(req('nip44Decrypt', { pubkey: from.pk, ciphertext })).catch((e: unknown) => e);
+    expect((error as SignerError).code).toBe('operation_failed');
+    expect((error as SignerError).message).toBe('Operation failed');
+  });
+
+  test('a post-quantum payload for an account with no seed is refused with the reason, and a classic one still opens', async () => {
+    const acct = account('acct_nsec', PRIVKEY_2);
+    const { core } = await fixture(true, { accounts: [acct] });
+    const from = peer(acct.pubkey);
+    const pq = hybridPayload('unreadable here', from, acct.pubkey, derivePqKeys(randomBytes(64), 0).kem.publicKey);
+    const error = await core.handle(req('nip44Decrypt', { pubkey: from.pk, ciphertext: pq })).catch((e: unknown) => e);
+    expect((error as SignerError).code).toBe('unsupported');
+    expect((error as SignerError).message).toBe('This account has no seed phrase, so it cannot use post-quantum keys');
+
+    const classic = nip44.v2.encrypt('still fine', from.conversationKey);
+    expect(await core.handle(req('nip44Decrypt', { pubkey: from.pk, ciphertext: classic }))).toBe('still fine');
+  });
+
+  test('a post-quantum payload for a 12-word account is refused with the reason', async () => {
+    const acct = seededAccount('acct_12', M12);
+    const { core } = await fixture(true, { accounts: [acct] });
+    const from = peer(acct.pubkey);
+    const pq = hybridPayload('unreadable here', from, acct.pubkey, derivePqKeys(randomBytes(64), 0).kem.publicKey);
+    const error = await core.handle(req('nip44Decrypt', { pubkey: from.pk, ciphertext: pq })).catch((e: unknown) => e);
+    expect((error as SignerError).code).toBe('unsupported');
+    expect((error as SignerError).message).toBe('Post-quantum keys require a 24-word seed phrase');
+  });
+
+  test('a stored deny holds before the account\'s shape is disclosed', async () => {
+    const acct = account('acct_nsec', PRIVKEY_2);
+    const { core, permissions, approval } = await fixture(true, { accounts: [acct] });
+    await permissions.save('example.com', 'nip44Decrypt', null, 'deny', acct.id);
+    const from = peer(acct.pubkey);
+    const pq = hybridPayload('x', from, acct.pubkey, derivePqKeys(randomBytes(64), 0).kem.publicKey);
+    const error = await core.handle(req('nip44Decrypt', { pubkey: from.pk, ciphertext: pq })).catch((e: unknown) => e);
+    expect((error as SignerError).code).toBe('permission_denied');
+    expect(approval.presented).toHaveLength(0);
+  });
+});
+
+// ── Remote accounts ──
+
+function remoteAccount(id = 'acct_remote'): Account {
+  return account(id, null, { type: 'nip46', pubkey: PUBKEY_2, readOnly: false });
+}
+
+function recordingRemote(): RemoteSignerPort & { calls: number } {
+  const port = {
+    calls: 0,
+    async execute() {
+      port.calls += 1;
+      return 'from the bunker';
+    },
+  };
+  return port;
+}
+
+describe('a remote account cannot do post-quantum, and is told so instead of being downgraded', () => {
+  test('a post-quantum decrypt is refused before the remote port sees it; a classic one is routed', async () => {
+    const remote = recordingRemote();
+    const { core, permissions } = await fixture(true, { accounts: [remoteAccount()], remote });
+    await permissions.save('example.com', 'nip44Decrypt', null, 'allow', 'acct_remote');
+    const from = peer(PUBKEY_2);
+    const pq = hybridPayload('x', from, PUBKEY_2, derivePqKeys(randomBytes(64), 0).kem.publicKey);
+    const error = await core.handle(req('nip44Decrypt', { pubkey: from.pk, ciphertext: pq })).catch((e: unknown) => e);
+    expect((error as SignerError).code).toBe('unsupported');
+    expect((error as SignerError).message).toBe('Remote signers cannot read post-quantum messages');
+    expect(remote.calls).toBe(0);
+
+    const classic = nip44.v2.encrypt('x', from.conversationKey);
+    expect(await core.handle(req('nip44Decrypt', { pubkey: from.pk, ciphertext: classic }))).toBe('from the bunker');
+    expect(remote.calls).toBe(1);
+  });
+
+  test('a post-quantum encrypt is refused before the remote port sees it; a classic one is routed', async () => {
+    const remote = recordingRemote();
+    const { core, permissions } = await fixture(true, { accounts: [remoteAccount()], remote });
+    await permissions.save('example.com', 'nip44Encrypt', null, 'allow', 'acct_remote');
+    const kem = toBase64(derivePqKeys(randomBytes(64), 0).kem.publicKey);
+    const error = await core
+      .handle(req('nip44Encrypt', { pubkey: PUBKEY_2, plaintext: 'x', opts: { scheme: 'pq', recipientKemKey: kem } }))
+      .catch((e: unknown) => e);
+    expect((error as SignerError).code).toBe('unsupported');
+    expect((error as SignerError).message).toBe('Remote signers do not support post-quantum encryption');
+    expect(remote.calls).toBe(0);
+
+    expect(await core.handle(req('nip44Encrypt', { pubkey: PUBKEY_2, plaintext: 'x' }))).toBe('from the bunker');
+    expect(remote.calls).toBe(1);
+  });
+
+  test('the attestation is refused for a remote account', async () => {
+    const remote = recordingRemote();
+    const { core, permissions } = await fixture(true, { accounts: [remoteAccount()], remote });
+    await permissions.save('example.com', 'signEvent', PQC_KIND, 'allow', 'acct_remote');
+    const error = await core.handle(req('signPqAttestation')).catch((e: unknown) => e);
+    expect((error as SignerError).code).toBe('unsupported');
+    expect((error as SignerError).message).toBe('Remote signers do not support post-quantum keys');
+    expect(remote.calls).toBe(0);
+  });
+
+  test('a stored deny is reported as the deny, not as the account\'s type', async () => {
+    const remote = recordingRemote();
+    const { core, permissions } = await fixture(true, { accounts: [remoteAccount()], remote });
+    await permissions.save('example.com', 'nip44Encrypt', null, 'deny', 'acct_remote');
+    const kem = toBase64(derivePqKeys(randomBytes(64), 0).kem.publicKey);
+    const error = await core
+      .handle(req('nip44Encrypt', { pubkey: PUBKEY_2, plaintext: 'x', opts: { scheme: 'pq', recipientKemKey: kem } }))
+      .catch((e: unknown) => e);
+    expect((error as SignerError).code).toBe('permission_denied');
+  });
+});
+
+// ── Encrypt policy ──
+
+describe('nip44Encrypt seals post-quantum only when the caller asks, as the extension does', () => {
+  test('without opts the result is classic NIP-44, whatever the recipient may have published', async () => {
+    const acct = seededAccount('acct_seed', M24);
+    const { core, activity } = await fixture(true, { accounts: [acct] });
+    const to = peer(acct.pubkey);
+    const ciphertext = (await core.handle(req('nip44Encrypt', { pubkey: to.pk, plaintext: 'plain' }))) as string;
+    expect(isPqEnvelope(ciphertext)).toBe(false);
+    expect(nip44.v2.decrypt(ciphertext, to.conversationKey)).toBe('plain');
+    expect(activity.entries.at(-1)).toMatchObject({ method: 'nip44Encrypt', decision: 'allow', scheme: 'classic', theirPubkey: to.pk });
+  });
+
+  test('with opts the result is the hybrid envelope the recipient\'s ML-KEM key opens', async () => {
+    const acct = seededAccount('acct_seed', M24);
+    const { core, activity, approval } = await fixture(true, { accounts: [acct] });
+    const to = peer(acct.pubkey);
+    const theirs = derivePqKeys(randomBytes(64), 0);
+    const opts = { scheme: 'pq', recipientKemKey: toBase64(theirs.kem.publicKey) };
+    const ciphertext = (await core.handle(req('nip44Encrypt', { pubkey: to.pk, plaintext: 'sealed', opts }))) as string;
+    expect(isPqEnvelope(ciphertext)).toBe(true);
+    expect(decryptPq(ciphertext, theirs.kem.secretKey, to.conversationKey, { sender: acct.pubkey, recipient: to.pk })).toBe('sealed');
+    expect(activity.entries.at(-1)).toMatchObject({ method: 'nip44Encrypt', decision: 'allow', scheme: 'pq', theirPubkey: to.pk });
+    // The prompt was shown the request with its options, so a host can say "post-quantum".
+    expect(approval.presented[0]!.request.params).toEqual({ pubkey: to.pk, plaintext: 'sealed', opts });
+  });
+
+  test('the sender needs its own post-quantum keys too, as the extension requires', async () => {
+    const { core } = await fixture(true, { accounts: [account('acct_nsec', PRIVKEY_2)] });
+    const to = peer(PUBKEY_2);
+    const opts = { scheme: 'pq', recipientKemKey: toBase64(derivePqKeys(randomBytes(64), 0).kem.publicKey) };
+    const error = await core.handle(req('nip44Encrypt', { pubkey: to.pk, plaintext: 'x', opts })).catch((e: unknown) => e);
+    expect((error as SignerError).code).toBe('unsupported');
+    expect((error as SignerError).message).toBe('This account has no seed phrase, so it cannot use post-quantum keys');
+  });
+
+  test('a stored allow for sending messages covers the post-quantum form without a prompt', async () => {
+    const acct = seededAccount('acct_seed', M24);
+    const { core, permissions, approval } = await fixture(true, { accounts: [acct] });
+    await permissions.save('example.com', 'nip44Encrypt', null, 'allow', acct.id);
+    const to = peer(acct.pubkey);
+    const opts = { scheme: 'pq', recipientKemKey: toBase64(derivePqKeys(randomBytes(64), 0).kem.publicKey) };
+    const ciphertext = (await core.handle(req('nip44Encrypt', { pubkey: to.pk, plaintext: 'x', opts }))) as string;
+    expect(isPqEnvelope(ciphertext)).toBe(true);
+    expect(approval.presented).toHaveLength(0);
+  });
+
+  describe('the options are validated at the boundary, as the extension validates them', () => {
+    const kem = toBase64(derivePqKeys(randomBytes(64), 0).kem.publicKey);
+    const cases: Array<[string, string, Record<string, unknown>]> = [
+      ['opts on nip04Encrypt', 'nip04Encrypt', { opts: { scheme: 'pq', recipientKemKey: kem } }],
+      ['a scheme that is not pq', 'nip44Encrypt', { opts: { scheme: 'classic', recipientKemKey: kem } }],
+      ['no scheme', 'nip44Encrypt', { opts: { recipientKemKey: kem } }],
+      ['opts that are not an object', 'nip44Encrypt', { opts: 'pq' }],
+      ['opts that are null', 'nip44Encrypt', { opts: null }],
+      ['a missing recipientKemKey', 'nip44Encrypt', { opts: { scheme: 'pq' } }],
+      ['a recipientKemKey that is not a string', 'nip44Encrypt', { opts: { scheme: 'pq', recipientKemKey: 42 } }],
+      ['a recipientKemKey of the wrong length', 'nip44Encrypt', { opts: { scheme: 'pq', recipientKemKey: kem.slice(0, 2088) } }],
+      ['a recipientKemKey that is not base64', 'nip44Encrypt', { opts: { scheme: 'pq', recipientKemKey: `${kem.slice(0, 2091)}!` } }],
+    ];
+    test.each(cases)('%s is invalid_request', async (_name, method, extra) => {
+      const acct = seededAccount('acct_seed', M24);
+      const { core, activity, approval } = await fixture(true, { accounts: [acct] });
+      const error = await core
+        .handle(req(method as 'nip44Encrypt', { pubkey: PUBKEY_2, plaintext: 'x', ...extra }))
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(SignerError);
+      expect((error as SignerError).code).toBe('invalid_request');
+      expect(approval.presented).toHaveLength(0);
+      expect(activity.entries).toHaveLength(0);
+    });
+  });
+});
+
+// ── The attestation ──
+
+describe('signPqAttestation is a signing request like any other', () => {
+  test('a derived account signs a kind:10203 that verifies, with origin derived and a 256-bit seed', async () => {
+    const acct = seededAccount('acct_seed', M24);
+    const { core, vault, activity, approval } = await fixture(true, { accounts: [acct] });
+    const event = (await core.handle(req('signPqAttestation'))) as Event;
+
+    expect(event.kind).toBe(PQC_KIND);
+    expect(event.pubkey).toBe(acct.pubkey);
+    expect(event.content).toBe('');
+    expect(event.created_at).toBe(Math.floor(vault.now() / 1000));
+    expect(verifyEvent(event)).toBe(true);
+    const tag = (name: string) => event.tags.find((t) => t[0] === name);
+    expect(tag('origin')).toEqual(['origin', 'derived']);
+    expect(tag('seed_strength')).toEqual(['seed_strength', '256']);
+    expect(tag('v')).toEqual(['v', 'nip-pqc/v1']);
+    const expected = expectedKeys(M24, 0);
+    expect(event.tags.find((t) => t[0] === 'alg' && t[1] === ALG_KEM)![2]).toBe(toBase64(expected.kem.publicKey));
+    expect(event.tags.find((t) => t[0] === 'alg' && t[1] === ALG_DSA)![2]).toBe(toBase64(expected.dsa.publicKey));
+    // The tags are exactly the extension's, in the extension's order.
+    expect(event.tags.map((t) => t[0])).toEqual(['alg', 'alg', 'origin', 'seed_strength', 'v', 'pop']);
+
+    const verified = verifyPqAttestation(JSON.parse(JSON.stringify(event)) as Event);
+    expect(verified.usable).toBe(true);
+    expect(verified.popValid).toBe(true);
+    expect(verified.kem).toEqual(expected.kem.publicKey);
+
+    expect(approval.presented[0]!.request.method).toBe('signPqAttestation');
+    expect(activity.entries.at(-1)).toMatchObject({ method: 'signPqAttestation', kind: PQC_KIND, decision: 'allow', pubkey: acct.pubkey });
+  });
+
+  test('an account with imported keys signs origin independent and claims no seed strength', async () => {
+    const { keys, stored } = importedPair();
+    const acct = account('acct_imp', PRIVKEY_2, { pqKeys: stored });
+    const { core } = await fixture(true, { accounts: [acct] });
+    const event = (await core.handle(req('signPqAttestation'))) as Event;
+    const tag = (name: string) => event.tags.find((t) => t[0] === name);
+    expect(tag('origin')).toEqual(['origin', 'independent']);
+    expect(tag('seed_strength')).toBeUndefined();
+    expect(event.tags.map((t) => t[0])).toEqual(['alg', 'alg', 'origin', 'v', 'pop']);
+    const verified = verifyPqAttestation(JSON.parse(JSON.stringify(event)) as Event);
+    expect(verified.usable).toBe(true);
+    expect(verified.kem).toEqual(keys.kem.publicKey);
+  });
+
+  test('a stored deny for signEvent kind 10203 refuses it without a prompt', async () => {
+    const acct = seededAccount('acct_seed', M24);
+    const { core, permissions, approval, activity } = await fixture(true, { accounts: [acct] });
+    await permissions.save('example.com', 'signEvent', PQC_KIND, 'deny', acct.id);
+    const error = await core.handle(req('signPqAttestation')).catch((e: unknown) => e);
+    expect((error as SignerError).code).toBe('permission_denied');
+    expect(approval.presented).toHaveLength(0);
+    expect(activity.entries.at(-1)).toMatchObject({ method: 'signPqAttestation', kind: PQC_KIND, decision: 'deny', code: 'permission_denied' });
+  });
+
+  test('a blanket signEvent deny refuses it too', async () => {
+    const acct = seededAccount('acct_seed', M24);
+    const { core, permissions } = await fixture(true, { accounts: [acct] });
+    await permissions.save('example.com', 'signEvent', null, 'deny', acct.id);
+    const error = await core.handle(req('signPqAttestation')).catch((e: unknown) => e);
+    expect((error as SignerError).code).toBe('permission_denied');
+  });
+
+  test('a stored allow for kind 10203 signs without a prompt; a remembered approval is stored under that rule', async () => {
+    const acct = seededAccount('acct_seed', M24);
+    const { core, permissions, approval } = await fixture(true, { accounts: [acct] });
+    approval.decide = async () => ({ allow: true, remember: true });
+    await core.handle(req('signPqAttestation'));
+    expect(approval.presented).toHaveLength(1);
+    expect(await permissions.check('example.com', 'signEvent', PQC_KIND, acct.id)).toBe('allow');
+    expect(await permissions.check('example.com', 'signEvent', 1, acct.id)).toBe('ask');
+    await core.handle(req('signPqAttestation'));
+    expect(approval.presented).toHaveLength(1);
+  });
+
+  test('a refusal at the prompt is the user\'s answer', async () => {
+    const acct = seededAccount('acct_seed', M24);
+    const { core } = await fixture(false, { accounts: [acct] });
+    const error = await core.handle(req('signPqAttestation')).catch((e: unknown) => e);
+    expect((error as SignerError).code).toBe('rejected');
+  });
+
+  test('an account that cannot hold post-quantum keys is refused after the gate, with the reason', async () => {
+    const { core, approval } = await fixture(true, { accounts: [account('acct_nsec', PRIVKEY_2)] });
+    const error = await core.handle(req('signPqAttestation')).catch((e: unknown) => e);
+    expect((error as SignerError).code).toBe('unsupported');
+    expect((error as SignerError).message).toBe('This account has no seed phrase, so it cannot use post-quantum keys');
+    expect(approval.presented).toHaveLength(1);
+  });
+
+  test('a watch-only account is refused as any key method is', async () => {
+    const { core } = await fixture(true, { accounts: [account('acct_watch', null)] });
+    const error = await core.handle(req('signPqAttestation')).catch((e: unknown) => e);
+    expect((error as SignerError).code).toBe('unsupported');
+    expect((error as SignerError).message).toBe('This account has no signing key');
+  });
+
+  test('a locked vault with no unlock port refuses it after the permission gate', async () => {
+    const acct = seededAccount('acct_seed', M24);
+    const { core, approval } = await fixture(true, { accounts: [acct], locked: true });
+    const error = await core.handle(req('signPqAttestation')).catch((e: unknown) => e);
+    expect((error as SignerError).code).toBe('vault_locked');
+    expect(approval.presented).toHaveLength(1);
+  });
+
+  test('the attestation can ride in a batch with the events that will follow it', async () => {
+    const acct = seededAccount('acct_seed', M24);
+    const { core } = await fixture(true, { accounts: [acct] });
+    const result = await core.handleBatch({
+      id: nextId('batch'),
+      origin: { kind: 'web', identifier: 'example.com' },
+      items: [
+        { id: 'a', method: 'signPqAttestation', params: {} },
+        { id: 'b', method: 'signEvent', params: { event: { kind: 1, content: 'now reachable post-quantum', tags: [] } } },
+      ],
+      receivedAt: Date.now(),
+    });
+    expect(result.items.map((item) => item.ok)).toEqual([true, true]);
+    const attestation = (result.items[0] as { result: Event }).result;
+    expect(verifyPqAttestation(JSON.parse(JSON.stringify(attestation)) as Event).usable).toBe(true);
+  });
+
+  test('takes no params: anything else is refused at the boundary', async () => {
+    const acct = seededAccount('acct_seed', M24);
+    const { core } = await fixture(true, { accounts: [acct] });
+    const error = await core.handle(req('signPqAttestation', { event: { kind: 1 } })).catch((e: unknown) => e);
+    expect((error as SignerError).code).toBe('invalid_request');
+  });
+});
+
+describe('verifyPqAttestation is the check for someone else\'s kind:10203', () => {
+  test('accepts a genuine one and refuses a forged, re-attributed or wrong-kind one', () => {
+    const sk = generateSecretKey();
+    const pubkey = getPublicKey(sk);
+    const keys = derivePqKeys(randomBytes(64), 0);
+    const tags = buildAttestationTags({ pubkey, kem: keys.kem.publicKey, dsa: keys.dsa.publicKey, origin: 'derived', dsaSecretKey: keys.dsa.secretKey });
+    const genuine = JSON.parse(JSON.stringify(finalizeEvent({ kind: PQC_KIND, created_at: 1, content: '', tags }, sk))) as Event;
+    expect(verifyPqAttestation(genuine).usable).toBe(true);
+    // parseAttestation alone would accept the re-attributed copy: it does not check the signature.
+    // Built from fresh JSON: `verifyEvent` marks the object it verified, and a spread would carry that.
+    const reattributed = { ...(JSON.parse(JSON.stringify(genuine)) as Event), pubkey: getPublicKey(generateSecretKey()) };
+    expect(parseAttestation(reattributed).problems.map((p) => p.code)).not.toContain('badSignature');
+    expect(verifyPqAttestation(reattributed).problems.map((p) => p.code)).toContain('badSignature');
+    expect(verifyPqAttestation({ ...genuine, kind: 1 }).problems.map((p) => p.code)).toContain('wrongKind');
+  });
+});
