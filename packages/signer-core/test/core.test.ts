@@ -1358,6 +1358,53 @@ describe('the permission cascade applies per item', () => {
   });
 });
 
+describe('a batch lets the host breathe between items', () => {
+  /**
+   * A self-rescheduling `setTimeout(0)`, which is the cheapest thing that can only run in a
+   * macrotask turn. `await Promise.resolve()` will not do: a microtask runs before the next
+   * timer, before layout and before a touch handler, so a pipeline that awaits only microtasks
+   * is one contiguous block of CPU however many awaits it contains. Counting these is counting
+   * the frames the host got.
+   */
+  function frameCounter(): { frames: () => number; stop: () => void } {
+    let frames = 0;
+    let running = true;
+    const tick = (): void => {
+      if (!running) return;
+      frames += 1;
+      setTimeout(tick, 0);
+    };
+    setTimeout(tick, 0);
+    return { frames: () => frames, stop: () => { running = false; } };
+  }
+
+  test('a timer fires between the items, not once after all of them', async () => {
+    // Batching exists because iOS charges the user a gesture per signature. Measured before
+    // this yield existed: a 64-item post-quantum batch was 1.4 s of unbroken CPU with a 1 ms
+    // timer firing exactly once, at the end — on Hermes, plausibly tens of seconds of frozen
+    // phone, which defeats the reason the batch was built.
+    const { core } = await fixture(true);
+    const items = Array.from({ length: 8 }, (_, i) => sign(1, { content: `item ${i}` }));
+    const clock = frameCounter();
+    const result = await core.handleBatch(batchReq(items));
+    const frames = clock.frames();
+    clock.stop();
+    expect(result.items.every((item) => item.ok)).toBe(true);
+    // One macrotask per gap between items. Not "at least one somewhere": the point is that no
+    // two signatures are computed back to back with nothing in between.
+    expect(frames).toBeGreaterThanOrEqual(items.length - 1);
+  });
+
+  test('a single request does not yield: nothing about handle changed', async () => {
+    const { core } = await fixture(true);
+    const clock = frameCounter();
+    await core.handle(req('signEvent', { kind: 1 }));
+    const frames = clock.frames();
+    clock.stop();
+    expect(frames).toBe(0);
+  });
+});
+
 describe('partial failure inside a batch', () => {
   test('eight of ten sign, the vault locks: eight are returned and two are reported locked, by id', async () => {
     const { core, vault, activity } = await fixture(true);

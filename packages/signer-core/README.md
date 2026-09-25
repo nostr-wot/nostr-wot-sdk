@@ -203,9 +203,32 @@ on the JavaScript thread. Measured on Node 24, Apple silicon, mean of 100:
 Fifteen of every post-quantum request's milliseconds are the per-request derivation the
 extension also pays. Hermes without a JIT is commonly 10 to 30 times slower than V8 on
 this kind of arithmetic, so a host on a phone should expect a few hundred milliseconds per
-post-quantum message and a second or more for the attestation, and a batch of N
-post-quantum decrypts blocks for N of those in a row. Measure on the device before
+post-quantum message and a second or more for the attestation. Measure on the device before
 deciding whether to move the work off the UI thread.
+
+A batch of N post-quantum items is N of those in a row, and it **yields between every one**,
+which is the only reason it is usable on a phone. Same harness, Node 24 on Apple silicon, one
+64-item batch per row, with a 1 ms timer running alongside it:
+
+| 64-item batch | Total | Longest unbroken block | Timer ticks during the batch |
+| --- | --- | --- | --- |
+| classic `nip44Decrypt` | 305 ms (was 233) | 6.5 ms (was 233) | 63 (was 0) |
+| post-quantum `nip44Decrypt` | 1426 ms (was 1361) | 25.8 ms (was 1361) | 63 (was 0) |
+| post-quantum `nip44Encrypt` | 1430 ms (was 1354) | 23.9 ms (was 1354) | 63 (was 0) |
+| `signPqAttestation` | 2847 ms (was 2778) | 70.5 ms (was 2778) | 63 + 63 (was 0) |
+
+The totals are ~1 ms per item worse, which is the clamped timer, and the longest stretch the
+thread is busy falls from the whole batch to one operation. Before this, a 1 ms timer running
+next to a 64-item batch did not fire at all until the batch was over: everything the pipeline
+awaits between items is a microtask, and a microtask runs before the next timer, before layout
+and before a touch handler. So the batch was one contiguous block — 1.4 s of it on Node, tens
+of seconds under Hermes, on a device the user could not interact with. Batching exists because
+iOS charges a gesture per signature, so a batch that freezes the phone defeats its own purpose.
+
+The work itself is unchanged: 64 post-quantum items still cost what 64 post-quantum items cost,
+and a host that wants a smaller unit sends a smaller batch. What changed is that the device
+stays alive through it, a host can show progress, and `revokeOrigin` is honoured in the same
+gap. Nothing is cancelled by the yield, and `handle` for a single request is untouched.
 
 ## Batches
 
@@ -253,6 +276,10 @@ in the same order. What differs is deliberate, and each rule is written on `#run
   as a whole (malformed, denied, rejected by the user, timed out, the account switched, the
   vault locked with no way to open it) rejects with a `SignerError` like `handle` does, and a
   switch anywhere between the prompt and the last item refuses every item, signed or not.
+- **The host gets a turn between items.** Each gap between two items is a real macrotask, not
+  an `await Promise.resolve()`, so a pending timer, a frame and a gesture can run in it. Without
+  it a 64-item post-quantum batch was 1.4 seconds of unbroken CPU during which a 1 ms timer did
+  not fire once; see the table under [Post-quantum](#post-quantum) for what it costs and buys.
 - **A batch is one queued request.** It counts once toward `MAX_PENDING_PER_ORIGIN`, because
   that cap bounds prompts and a batch is one prompt. Its size is bounded at the boundary
   instead: `MAX_BATCH_ITEMS` (64) and `MAX_BATCH_BYTES`, which equals `MAX_EVENT_BYTES` on

@@ -138,6 +138,32 @@ class ExecuteFailure extends Error {
   }
 }
 
+/**
+ * Give the host a turn. Used between the items of a batch, and nowhere else.
+ *
+ * `await Promise.resolve()` does not do this, and the difference is the whole reason this
+ * exists. A microtask runs before the next timer, before layout and before a touch handler, so
+ * a batch whose every await is a microtask is one contiguous block of CPU however many awaits
+ * it contains. Measured on the version without this: a 64-item post-quantum batch was 1.4 s of
+ * unbroken work on Node arm64, and a 1 ms timer running alongside it fired exactly once, after
+ * the whole batch; 64 attestations were 2.8 s. Hermes without a JIT is commonly 10 to 30 times
+ * slower on this arithmetic, which is tens of seconds of a phone that does not respond to
+ * anything — and batching exists precisely because iOS charges the user a gesture per
+ * signature, so a batch that freezes the device defeats the reason it was built.
+ *
+ * A macrotask is what lets a frame, a pending timer and a gesture in between two signatures.
+ * `setTimeout` is a declared host requirement of these packages and runs the queue's timeout
+ * and the vault's auto-lock already. It costs a clamped millisecond or so per item, which is
+ * the price of the device staying alive; the work itself is unchanged and nothing is cancelled
+ * here — a host that wants to stop a batch revokes the origin, which is checked in the same
+ * gap.
+ */
+function yieldToHost(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}
+
 /** The id for a log line, from an object whose every read is untrusted and may throw. */
 function requestIdForLog(request: unknown): string {
   try {
@@ -632,11 +658,14 @@ export class SignerCore {
     const prepared: PreparedParams[] = [];
     context.prepared = prepared;
     for (const item of items) {
-      prepared.push(
-        item.params.method === 'signPqAttestation'
-          ? { method: 'signPqAttestation', event: await this.#buildAttestation(account) }
-          : item.params,
-      );
+      if (item.params.method !== 'signPqAttestation') {
+        prepared.push(item.params);
+        continue;
+      }
+      // An ML-DSA proof of possession is the most expensive thing in this package (25 ms mean,
+      // 121 ms worst on Node arm64), so the build loop yields too, not only the signing one.
+      if (prepared.length > 0) await yieldToHost();
+      prepared.push({ method: 'signPqAttestation', event: await this.#buildAttestation(account) });
     }
 
     // 3. Ask once, showing the whole frozen batch. A host with no batch prompt cannot give
@@ -667,12 +696,17 @@ export class SignerCore {
     //    Between items the batch is re-checked the way the lock is: a switch, or a
     //    revocation of this origin, ends it there. No further cryptographic work is done
     //    with a key the user has moved away from or for a caller the host has cut off, and
-    //    what was already computed is discarded with the batch.
+    //    what was already computed is discarded with the batch. And then the thread is handed
+    //    back for a turn (`yieldToHost`), so the device stays alive through a long batch: the
+    //    checks above are all microtask awaits, which is not a frame. See `yieldToHost`.
     context.phase = 'execute';
     const revokedBefore = this.#revocationSerial;
     const runs: ItemRun[] = [];
     for (const [index, item] of items.entries()) {
-      if (index > 0) await this.#assertStillWanted(account, originKey, revokedBefore);
+      if (index > 0) {
+        await this.#assertStillWanted(account, originKey, revokedBefore);
+        await yieldToHost();
+      }
       try {
         runs.push({ id: item.id, ok: true, result: await this.#signLocally(account, prepared[index]!) });
       } catch (error) {
