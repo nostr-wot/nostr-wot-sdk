@@ -259,6 +259,53 @@ describe('a lock landing inside the signing step', () => {
   });
 });
 
+describe('a switch landing inside the signing step', () => {
+  test('a request is not answered once the user has moved on, even after execute', async () => {
+    // The extension asserts the account session after cryptoSignEvent too (signer.ts:184).
+    // Without the post-execute check, a switch inside withPrivkey lets the event, signed by
+    // the account the user was shown, be handed back and logged as allowed.
+    const one = account('acct_1', PRIVKEY_1);
+    const two = account('acct_2', PRIVKEY_2);
+    const { core, vault, activity } = await fixture(true, { accounts: [one, two] });
+    const original = vault.withPrivkey.bind(vault);
+    let computed: Event | undefined;
+    vi.spyOn(vault, 'withPrivkey').mockImplementation((accountId, fn) =>
+      original(accountId, async (key) => {
+        const result = (await fn(key)) as Event;
+        computed = result;
+        await vault.setActiveAccountId('acct_2');
+        return result;
+      }),
+    );
+    await expect(core.handle(req('signEvent', { kind: 1 }))).rejects.toMatchObject({ code: 'account_switched' });
+    expect(computed?.pubkey).toBe(PUBKEY_1);
+    expect(verifyEvent(computed!)).toBe(true);
+    expect(activity.entries.at(-1)).toMatchObject({ decision: 'deny', code: 'account_switched' });
+  });
+
+  test('the same holds for getPublicKey answered from the port', async () => {
+    const one = account('acct_1', PRIVKEY_1);
+    const two = account('acct_2', PRIVKEY_2);
+    // The switch lands during the pre-execute check itself (the port's third call: resolve,
+    // post-approval, pre-execute), after that check has read acct_1. Only the post-execute
+    // check can see it; without it acct_1's pubkey is handed out after the switch.
+    let target!: { vault: Vault; inner: IdentityPort };
+    let calls = 0;
+    const identity: IdentityPort = {
+      async getActiveAccount() {
+        calls += 1;
+        const answer = await target.inner.getActiveAccount();
+        if (calls === 3) await target.vault.setActiveAccountId('acct_2');
+        return answer;
+      },
+    };
+    const { core, vault } = await fixture(true, { accounts: [one, two], identity });
+    target = { vault, inner: vaultIdentity(vault, [one, two]) };
+    await expect(core.handle(req('getPublicKey'))).rejects.toMatchObject({ code: 'account_switched' });
+    expect(calls).toBe(4);
+  });
+});
+
 describe('the identity port and the vault agree', () => {
   test('the fixture\'s port names the account the vault holds active, with the pubkey of that key', async () => {
     // The test double itself has to be honest, or every test above proves less than it says.
@@ -681,21 +728,27 @@ describe('switching accounts', () => {
 
   test('getPublicKey answers the pubkey the user was shown, never a later one', async () => {
     // The identity port names acct_1 while the request is resolved, re-checked after the
-    // prompt and re-checked before execution, then flips. Nothing awaits between that last
-    // re-check and the answer, so the only way to see acct_2 here is to ask the port again at
-    // execution time instead of answering from the snapshot the user approved.
+    // prompt, re-checked before execution and re-checked after it. A port that flips only
+    // after all four reads never touches the answer, which is the snapshot the user approved;
+    // a port that flips at the fourth read is a switch inside the execute window, and the
+    // answer is refused rather than being either account's pubkey.
     const one = account('acct_1', PRIVKEY_1);
     const two = account('acct_2', PRIVKEY_2);
-    let calls = 0;
-    const identity: IdentityPort = {
-      async getActiveAccount() {
-        calls += 1;
-        return toSafeAccount(calls <= 3 ? one : two);
-      },
+    const flippingAfter = (reads: number): IdentityPort => {
+      let calls = 0;
+      return {
+        async getActiveAccount() {
+          calls += 1;
+          return toSafeAccount(calls <= reads ? one : two);
+        },
+      };
     };
-    const { core, approval } = await fixture(true, { accounts: [one, two], identity });
-    expect(await core.handle(req('getPublicKey'))).toBe(PUBKEY_1);
-    expect(approval.presented[0]!.account.pubkey).toBe(PUBKEY_1);
+    const steady = await fixture(true, { accounts: [one, two], identity: flippingAfter(4) });
+    expect(await steady.core.handle(req('getPublicKey'))).toBe(PUBKEY_1);
+    expect(steady.approval.presented[0]!.account.pubkey).toBe(PUBKEY_1);
+
+    const late = await fixture(true, { accounts: [one, two], identity: flippingAfter(3) });
+    await expect(late.core.handle(req('getPublicKey'))).rejects.toMatchObject({ code: 'account_switched' });
   });
 
   test('a cooldown earned by one account never answers for another, even when the host forgets to notify the switch', async () => {

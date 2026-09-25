@@ -282,6 +282,24 @@ export class SignerCore {
 
     // 5. Execute. 6. Zero: `withPrivkey` hands the backend a copy and zeroes it on every path.
     context.phase = 'execute';
+    const result = await this.#executeFor(account, remote, originKey, request, params);
+    // And once more after execute, as the extension asserts the session after signing. The
+    // execute window is real: a switch landing inside withPrivkey, or during a remote round
+    // trip, would otherwise hand back a result computed for an account the user has left.
+    // The key was pinned, so it is not the wrong key; it is an answer to a question the user
+    // is no longer asking, and it is refused rather than returned or logged as allowed.
+    await this.#assertStillActive(account);
+    return result;
+  }
+
+  /** The execute step, by method and by where the key lives. */
+  async #executeFor(
+    account: SafeAccount,
+    remote: boolean,
+    originKey: string,
+    request: SignerRequest,
+    params: ValidatedParams,
+  ): Promise<unknown> {
     switch (params.method) {
       case 'getPublicKey':
         return account.pubkey;
@@ -364,7 +382,11 @@ export class SignerCore {
     return true;
   }
 
-  /** The account a request was resolved for has to be the one that is still active. */
+  /**
+   * The account a request was resolved for has to be the one that is still active. Run after
+   * approval, before execute and after execute, so a switch landing anywhere in between
+   * refuses the request rather than answering it.
+   */
   async #assertStillActive(shown: SafeAccount): Promise<void> {
     const current = await this.#identity.getActiveAccount();
     if (!current || current.id !== shown.id || current.pubkey !== shown.pubkey) {
