@@ -23,6 +23,11 @@
  * port, a store, the vault or a cipher threw is given to the logger and to the activity
  * entry, and the caller gets a code and a sentence that names nothing on the device.
  *
+ * A batch ({@link SignerCore.handleBatch}) runs the same pipeline once for many items: one
+ * account, every item's permission, one prompt showing every item, one unlock, then each item
+ * signed in its own key scope. The judgement calls, partial permission and partial failure,
+ * are written down on `#runBatch`.
+ *
  * Nothing here externalizes anything. The signing backend runs inside the vault's
  * `withPrivkey`, which zeroes the key on every path and voids a result computed under a
  * session that was locked mid-callback; a callback that published would have already put
@@ -36,22 +41,26 @@ import type { Vault } from '@nostr-wot/vault';
 import { GET_PUBLIC_KEY_COOLDOWN_MS, KEY_METHODS } from './constants.js';
 import { SignerError, errorMessage } from './errors.js';
 import { ApprovalQueue } from './queue.js';
-import { validateRequest } from './schema.js';
+import { validateBatchRequest, validateRequest } from './schema.js';
 import type {
   ActivityEntry,
   ActivityPort,
   ApprovalDecision,
   ApprovalPort,
+  BatchItemOutcome,
+  BatchResult,
   IdentityPort,
   PendingEntry,
   RelayListPort,
   RemoteSignerPort,
   RequestOrigin,
+  SignerBatchRequest,
   SignerCoreDeps,
   SignerLogger,
   SignerMethod,
   SignerRequest,
   UnlockPort,
+  ValidatedBatch,
   ValidatedParams,
   ValidatedRequest,
 } from './types.js';
@@ -91,6 +100,25 @@ interface RunContext {
   account: SafeAccount | null;
   /** Which step a foreign error came out of, which decides the fixed text it becomes. */
   phase: 'pipeline' | 'execute';
+}
+
+/** What the activity log is told about: a request, or one item of a batch. */
+interface Recorded {
+  id: string;
+  origin: RequestOrigin;
+  params: ValidatedParams;
+  batchId?: string;
+}
+
+/** One item's run, before it is reported: the raw error is kept for the on-device log. */
+type ItemRun =
+  | { id: string; ok: true; result: unknown }
+  | { id: string; ok: false; error: unknown; refusal: SignerError };
+
+/** A permission rule a batch consulted and found unset: what `remember` persists. */
+interface Asked {
+  method: SignerMethod;
+  kind: number | undefined;
 }
 
 export class SignerCore {
@@ -192,18 +220,75 @@ export class SignerCore {
       throw this.#toSignerError(error, 'pipeline', requestIdForLog(request));
     }
     const context: RunContext = { account: null, phase: 'pipeline' };
+    const recorded: Recorded = { id: validated.request.id, origin: validated.request.origin, params: validated.params };
     try {
       const result = await this.#run(validated, context);
-      await this.#record(validated, context.account, { decision: 'allow' });
+      await this.#record(recorded, context.account, { decision: 'allow' });
       return result;
     } catch (error) {
       const refusal = this.#toSignerError(error, context.phase, validated.request.id);
-      await this.#record(validated, context.account, {
+      await this.#record(recorded, context.account, {
         decision: 'deny',
         // The original text, for the log on the device. The caller gets `refusal.message`.
         reason: errorMessage(error),
         code: refusal.code,
       });
+      throw refusal;
+    }
+  }
+
+  /**
+   * Run a batch through the pipeline: one approval, an outcome per item.
+   *
+   * Resolves with a {@link BatchResult} once the batch as a whole was allowed to execute,
+   * with every item's own result or refusal in it. Rejects with a {@link SignerError} when
+   * the batch as a whole was refused: malformed, no account, a denied item, refused by the
+   * user, timed out, the account switched, the vault locked and could not be opened. Either
+   * way every item is written to the activity log under the batch id. Single requests through
+   * {@link handle} are unchanged; this is an addition to the contract.
+   */
+  async handleBatch(batch: SignerBatchRequest): Promise<BatchResult> {
+    if (this.#disposed) throw new SignerError('shutdown', 'Signer shut down');
+    let validated: ValidatedBatch;
+    try {
+      validated = validateBatchRequest(batch);
+    } catch (error) {
+      throw this.#toSignerError(error, 'pipeline', requestIdForLog(batch));
+    }
+    const { request, items } = validated;
+    const view = (index: number): Recorded => ({
+      id: items[index]!.id,
+      origin: request.origin,
+      params: items[index]!.params,
+      batchId: request.id,
+    });
+    const context: RunContext = { account: null, phase: 'pipeline' };
+    try {
+      const runs = await this.#runBatch(validated, context);
+      const outcomes: BatchItemOutcome[] = [];
+      for (const [index, run] of runs.entries()) {
+        if (run.ok) {
+          await this.#record(view(index), context.account, { decision: 'allow' });
+          outcomes.push({ id: run.id, ok: true, result: run.result });
+        } else {
+          await this.#record(view(index), context.account, {
+            decision: 'deny',
+            reason: errorMessage(run.error),
+            code: run.refusal.code,
+          });
+          outcomes.push({ id: run.id, ok: false, code: run.refusal.code, message: run.refusal.message });
+        }
+      }
+      return { id: request.id, items: outcomes };
+    } catch (error) {
+      const refusal = this.#toSignerError(error, context.phase, request.id);
+      for (let index = 0; index < items.length; index++) {
+        await this.#record(view(index), context.account, {
+          decision: 'deny',
+          reason: errorMessage(error),
+          code: refusal.code,
+        });
+      }
       throw refusal;
     }
   }
@@ -292,6 +377,129 @@ export class SignerCore {
     return result;
   }
 
+
+  /**
+   * The batch pipeline. Same steps, same order, same reasons as {@link #run}; what differs
+   * is written here because each difference is a judgement call, not an accident.
+   *
+   * **Partial permission.** The cascade is consulted per item: a batch of kinds 1, 7 and
+   * 1059 reads the rule for each. A `deny` on any item refuses the whole batch, before any
+   * prompt, as `permission_denied`. Not "drop the denied item and ask about the rest": a
+   * stored deny is the user's standing answer to that origin and kind, and a prompt that
+   * shows the denied item would re-ask a question already answered while one that hides it
+   * would have the user approve a batch without knowing what was in it. Either is worse
+   * than telling the caller no. Everything decided before the prompt is decided about the
+   * batch as the caller composed it (a deny, an author mismatch, an account that cannot
+   * sign), and the caller recomposes; nothing the user is shown is later removed.
+   *
+   * An `allow` on an item means it needs no prompt of its own, not that it is hidden: the
+   * prompt shows every item, allowed ones included, because the user is approving what
+   * will be signed, and `remember` persists only the rules that were actually unset.
+   *
+   * **Partial failure.** After approval the batch is best-effort per item, and the result
+   * says which. Each item is signed in its own `withPrivkey` scope, so a lock landing
+   * mid-batch voids the item it landed in (the vault's own contract) and refuses the items
+   * after it, while the items already handed back, computed under a live session, are
+   * returned as signed. Eight of ten sign, the vault locks: the caller gets eight
+   * signatures and two `vault_locked` outcomes, by id, and retries two. An atomic batch
+   * would throw the eight away for no gain in safety, since a signature is not a side
+   * effect, and would turn one undecryptable message into a failed batch of ten. What is
+   * never partial is the account: a switch anywhere between the prompt and the end of the
+   * last item refuses the whole batch, items already signed included, because those are
+   * answers to a question the user is no longer asking, exactly as a single request is
+   * refused after execute.
+   *
+   * **The queue.** A batch is one entry, so it counts once toward the per-origin cap. The
+   * cap blunts prompt spam, and a batch is one prompt; its size is bounded on its own at
+   * the boundary. Counting items would make the cap of five refuse the twelve-event burst
+   * batching exists for.
+   */
+  async #runBatch(validated: ValidatedBatch, context: RunContext): Promise<ItemRun[]> {
+    const { request, items } = validated;
+    const originKey = permissionOrigin(request.origin);
+
+    // 1. Resolve the active account, locked or not.
+    const account = await this.#identity.getActiveAccount();
+    if (!account) throw new SignerError('no_account', 'No active account');
+    context.account = account;
+
+    // 2. Permissions, per item, before lock state, before anything. Each distinct rule is
+    //    read once; the first deny is the end, and the rules after it are not consulted.
+    const consulted = new Set<string>();
+    const asked: Asked[] = [];
+    for (const item of items) {
+      const method = item.params.method;
+      const kind = item.params.method === 'signEvent' ? item.params.event.kind : undefined;
+      const rule = `${method}\u0000${kind ?? ''}`;
+      if (consulted.has(rule)) continue;
+      consulted.add(rule);
+      const decision = await this.#permissions.check(originKey, method, kind, account.id);
+      if (decision === 'deny') throw new SignerError('permission_denied', 'Permission denied');
+      if (decision === 'ask') asked.push({ method, kind });
+    }
+
+    // Whether this account can sign a batch at all. After the gate, so a denied origin learns
+    // nothing about the account behind it. A remote account cannot: the remote port takes one
+    // request, and the bunker runs its own approval per request, so the one-gesture property
+    // a batch exists for does not survive the relay. The transport sends single requests.
+    if (account.type === 'nip46') {
+      throw new SignerError('unsupported', 'Batches are not available for a remote account');
+    }
+    if (account.readOnly) throw new SignerError('unsupported', 'This account has no signing key');
+    for (const item of items) {
+      if (item.params.method === 'signEvent' && item.params.event.pubkey !== undefined) {
+        if (item.params.event.pubkey !== account.pubkey) {
+          throw new SignerError('author_mismatch', 'Event author does not match the active account');
+        }
+      }
+    }
+
+    // 3. Ask once, showing the whole frozen batch. A host with no batch prompt cannot give
+    //    the user every item, and a prompt that cannot is a blind-signing button; refused.
+    if (asked.length > 0) {
+      const approval = this.#approval;
+      const presentBatch = approval.presentBatch;
+      if (!presentBatch) throw new SignerError('unsupported', 'This host cannot show a batch');
+      const outcome = await this.#queue.track(
+        { id: request.id, kind: 'approval', origin: originKey, accountId: account.id },
+        () => presentBatch.call(approval, request, account),
+      );
+      if (!outcome.allow) {
+        if (outcome.remember) await this.#rememberAll(originKey, asked, outcome, 'deny', account);
+        throw new SignerError('rejected', outcome.reason || 'Request rejected by user');
+      }
+      await this.#assertStillActive(account);
+      if (outcome.remember) await this.#rememberAll(originKey, asked, outcome, 'allow', account);
+    }
+
+    // 4. Unlock if required, once for the batch.
+    if (this.#vault.isLocked()) {
+      const unlock = this.#unlock;
+      const requestUnlockBatch = unlock?.requestUnlockBatch;
+      if (!unlock || !requestUnlockBatch) throw new SignerError('vault_locked', 'Vault is locked');
+      await this.#queue.track(
+        { id: request.id, kind: 'unlock', origin: originKey, accountId: account.id },
+        () => requestUnlockBatch.call(unlock, request, account),
+      );
+      if (this.#vault.isLocked()) throw new SignerError('vault_locked', 'Vault is locked');
+    }
+    await this.#assertStillActive(account);
+
+    // 5. Execute, each item in its own key scope. 6. Zero, on every path, per item.
+    context.phase = 'execute';
+    const runs: ItemRun[] = [];
+    for (const item of items) {
+      try {
+        runs.push({ id: item.id, ok: true, result: await this.#signLocally(account, item.params) });
+      } catch (error) {
+        runs.push({ id: item.id, ok: false, error, refusal: this.#toSignerError(error, 'execute', item.id) });
+      }
+    }
+    // Every item's outcome sits behind this check; none is returned unless it passes.
+    await this.#assertStillActive(account);
+    return runs;
+  }
+
   /** The execute step, by method and by where the key lives. */
   async #executeFor(
     account: SafeAccount,
@@ -315,6 +523,11 @@ export class SignerCore {
         (signal) => port.execute(account, request, params, signal),
       );
     }
+    return this.#signLocally(account, params);
+  }
+
+  /** One key scope: the key is copied in, checked against the identity, used, zeroed. */
+  async #signLocally(account: SafeAccount, params: ValidatedParams): Promise<unknown> {
     // Pinned to the account the user saw, never "whatever is active now".
     return this.#vault.withPrivkey(account.id, async (key) => {
       const signer = new PrivateKeySigner(key);
@@ -408,6 +621,27 @@ export class SignerCore {
   }
 
   /**
+   * Persist a batch prompt's decision for every rule the batch found unset, each once. Rules
+   * that were already `allow` were not asked and are not rewritten.
+   */
+  async #rememberAll(
+    originKey: string,
+    asked: readonly Asked[],
+    outcome: ApprovalDecision,
+    decision: 'allow' | 'deny',
+    account: SafeAccount,
+  ): Promise<void> {
+    const saved = new Set<string>();
+    for (const { method, kind } of asked) {
+      const rememberedKind = outcome.rememberKind !== false && kind !== undefined ? kind : null;
+      const rule = `${method}\u0000${rememberedKind ?? ''}`;
+      if (saved.has(rule)) continue;
+      saved.add(rule);
+      await this.#permissions.save(originKey, method, rememberedKind, decision, account.id);
+    }
+  }
+
+  /**
    * What the caller is told.
    *
    * A `SignerError` is ours and carries fixed text, so it passes. Anything else came out of a
@@ -431,20 +665,21 @@ export class SignerCore {
    * be silent either: the host hears about it through the logger, or not at all.
    */
   async #record(
-    validated: ValidatedRequest,
+    recorded: Recorded,
     account: SafeAccount | null,
     outcome: { decision: 'allow' | 'deny'; reason?: string; code?: SignerError['code'] },
   ): Promise<void> {
-    const { request, params } = validated;
+    const { params } = recorded;
     const entry: ActivityEntry = {
-      requestId: request.id,
+      requestId: recorded.id,
       timestamp: this.#now(),
-      origin: request.origin,
-      method: request.method,
+      origin: recorded.origin,
+      method: params.method,
       accountId: account?.id ?? null,
       pubkey: account?.pubkey ?? null,
       decision: outcome.decision,
     };
+    if (recorded.batchId !== undefined) entry.batchId = recorded.batchId;
     if (outcome.reason !== undefined) entry.reason = outcome.reason;
     if (outcome.code !== undefined) entry.code = outcome.code;
     switch (params.method) {
@@ -468,7 +703,7 @@ export class SignerCore {
       await this.#activity.record(entry);
     } catch (error) {
       this.#logger?.warn('activity entry not recorded', {
-        requestId: request.id,
+        requestId: recorded.id,
         error: errorMessage(error),
       });
     }

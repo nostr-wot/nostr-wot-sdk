@@ -95,11 +95,67 @@ let any connected page fill the user's storage. An opaque origin (`location.orig
 a sandboxed iframe, a `data:` page, Chrome's `file://`) is refused as a web identifier, because
 every such page reports the same string and one remembered allow would cover all of them.
 
+## Batches
+
+One request carrying many items, one approval, many signatures. On iOS every signature costs
+a user gesture that nothing can suppress, so ten reactions and two zaps are twelve prompts,
+roughly a minute of the user's attention; one batch is one prompt.
+
+```ts
+const result = await core.handleBatch({
+  id: 'batch_1',
+  origin: { kind: 'web', identifier: 'example.com' },
+  items: [
+    { id: 'a', method: 'signEvent', params: { event: { kind: 7, content: '+', tags: [['e', id]] } } },
+    { id: 'b', method: 'signEvent', params: { event: { kind: 9734, content: '', tags } } },
+    { id: 'c', method: 'nip44Encrypt', params: { pubkey, plaintext } },
+  ],
+  receivedAt: Date.now(),
+});
+for (const item of result.items) {
+  if (item.ok) publish(item.result);
+  else console.log(item.id, item.code, item.message);
+}
+```
+
+A batch is a first-class request, not a loop over single ones, and it runs the same pipeline
+in the same order. What differs is deliberate, and each rule is written on `#runBatch`:
+
+- **Every item is shown.** The `ApprovalPort` gets `presentBatch(batch, account)` with the
+  whole frozen batch: every item, full content, every tag. A host that does not implement it
+  cannot show a batch, so a batch that needs a prompt is refused as `unsupported`; a batch
+  every item of which is already allowed still signs. Same for `UnlockPort.requestUnlockBatch`.
+- **Permissions are per item.** A batch of kinds 1, 7 and 1059 reads the rule for each, before
+  lock state. A `deny` on any item refuses the whole batch as `permission_denied` before any
+  prompt: a stored deny is the user's standing answer, and neither re-asking it nor hiding it
+  from the prompt is acceptable. Allowed items are still shown; `remember` persists only the
+  rules that were unset.
+- **Partial failure is per item, and the result says which.** `handleBatch` resolves with a
+  `BatchResult` whose `items` carry `{ id, ok: true, result }` or `{ id, ok: false, code,
+  message }`, in order. Each item is signed in its own `withPrivkey` scope, so eight of ten
+  sign and the vault locks gives eight signatures and two `vault_locked` outcomes; one
+  undecryptable message is one `operation_failed`, not a failed batch. A refusal of the batch
+  as a whole (malformed, denied, rejected by the user, timed out, the account switched, the
+  vault locked with no way to open it) rejects with a `SignerError` like `handle` does, and a
+  switch anywhere between the prompt and the last item refuses every item, signed or not.
+- **A batch is one queued request.** It counts once toward `MAX_PENDING_PER_ORIGIN`, because
+  that cap bounds prompts and a batch is one prompt. Its size is bounded at the boundary
+  instead: `MAX_BATCH_ITEMS` (64) and `MAX_BATCH_BYTES`, which equals `MAX_EVENT_BYTES` on
+  purpose so a batch can hold no more than one request can. Both bite before any item is
+  walked or copied.
+- **Only key methods batch.** `getPublicKey` and `getRelays` have their own consent model and
+  are refused as items; a transport answers them through `handle`. A remote (NIP-46) account
+  cannot batch: the bunker runs its own approval per request.
+
+Every item lands in the activity log under its own id with `batchId` set, whatever happened.
+`onActiveAccountChanged` rejects a queued batch as it rejects a single request, and the
+port's `cancel` names the batch id.
+
 ## Optional ports
 
 | Port | Without it |
 | --- | --- |
-| `unlock` | A request that needs the key while the vault is locked is refused after the permission gate. |
+| `unlock` | A request that needs the key while the vault is locked is refused after the permission gate. Its `requestUnlockBatch` is optional; without it a batch that finds the vault locked is refused. |
 | `remote` | A NIP-46 account cannot sign or encrypt. |
 | `relays` | `getRelays` answers `{}`. |
 | `logger` | A failing activity log is silent. It never fails the request. |

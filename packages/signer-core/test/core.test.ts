@@ -29,6 +29,8 @@ import {
   type SignerLogger,
   type SignerMethod,
   type SignerRequest,
+  type SignerBatchRequest,
+  type SignerBatchItem,
   type UnlockPort,
 } from '../src/index.js';
 
@@ -65,22 +67,31 @@ type Mode = boolean | 'never';
 
 interface RecordingApproval extends ApprovalPort {
   presented: Array<{ request: SignerRequest; account: SafeAccount }>;
+  presentedBatches: Array<{ batch: SignerBatchRequest; account: SafeAccount }>;
   cancelled: Array<{ origin: string; id: string; reason: string }>;
   /** Replaceable per test, for a prompt that does something before it answers. */
   decide: (request: SignerRequest, account: SafeAccount) => Promise<ApprovalDecision>;
+  decideBatch: (batch: SignerBatchRequest, account: SafeAccount) => Promise<ApprovalDecision>;
 }
 
 function recordingApproval(mode: Mode): RecordingApproval {
+  const answer = async (): Promise<ApprovalDecision> => {
+    if (mode === 'never') return new Promise<ApprovalDecision>(() => {});
+    return { allow: mode };
+  };
   const port: RecordingApproval = {
     presented: [],
+    presentedBatches: [],
     cancelled: [],
-    decide: async () => {
-      if (mode === 'never') return new Promise<ApprovalDecision>(() => {});
-      return { allow: mode };
-    },
+    decide: answer,
+    decideBatch: answer,
     async present(request, account) {
       port.presented.push({ request, account });
       return port.decide(request, account);
+    },
+    async presentBatch(batch, account) {
+      port.presentedBatches.push({ batch, account });
+      return port.decideBatch(batch, account);
     },
     cancel(origin, id, reason) {
       port.cancelled.push({ origin, id, reason });
@@ -1249,5 +1260,410 @@ describe('disposal', () => {
     await expect(inflight).rejects.toThrow(/shut down/i);
     expect(approval.cancelled).toHaveLength(1);
     await expect(core.handle(req('signEvent', { kind: 1 }))).rejects.toThrow(/shut down/i);
+  });
+});
+
+// ── Batches: one request, one approval, many signatures ──
+
+/** A batch from `example.com` with a fresh id; item ids default to `i0`, `i1`, ... */
+function batchReq(items: Array<Partial<SignerBatchItem> & { method: SignerMethod }>): SignerBatchRequest {
+  return {
+    id: `batch_${++counter}`,
+    origin: { kind: 'web', identifier: 'example.com' },
+    items: items.map((item, index) => ({ id: item.id ?? `i${index}`, method: item.method, params: item.params ?? {} })),
+    receivedAt: Date.now(),
+  };
+}
+
+/** A `signEvent` item; content and tags defaulted so `sign(7)` is complete. */
+function sign(kind: number, template: Record<string, unknown> = {}): { method: SignerMethod; params: Record<string, unknown> } {
+  return { method: 'signEvent', params: { event: { content: `kind ${kind}`, tags: [['k', String(kind)]], ...template, kind } } };
+}
+
+describe('a batch is one approval for every item', () => {
+  test('one prompt shows every item, full content and every tag, and one approval signs them all', async () => {
+    const { core, approval, activity } = await fixture(true);
+    const long = 'x'.repeat(50_000);
+    const tags = Array.from({ length: 300 }, (_, i) => ['p', PUBKEY_2, `relay${i}`]);
+    const batch = batchReq([sign(1, { content: long }), sign(7, { tags }), sign(1059, { tags: [['p', PUBKEY_2]] })]);
+    const result = await core.handleBatch(batch);
+    expect(approval.presented).toHaveLength(0);
+    expect(approval.presentedBatches).toHaveLength(1);
+    const shown = approval.presentedBatches[0]!.batch;
+    // Every item, the whole content, every tag, frozen: the prompt renders what is signed.
+    expect(shown.items.map((item) => item.id)).toEqual(['i0', 'i1', 'i2']);
+    expect((shown.items[0]!.params['event'] as { content: string }).content).toBe(long);
+    expect((shown.items[1]!.params['event'] as { tags: string[][] }).tags).toEqual(tags);
+    expect(Object.isFrozen(shown)).toBe(true);
+    expect(Object.isFrozen((shown.items[1]!.params['event'] as { tags: string[][] }).tags[299])).toBe(true);
+    expect(approval.presentedBatches[0]!.account.id).toBe('acct_1');
+    expect(result.id).toBe(batch.id);
+    expect(result.items.map((item) => item.id)).toEqual(['i0', 'i1', 'i2']);
+    for (const [index, outcome] of result.items.entries()) {
+      expect(outcome.ok).toBe(true);
+      const signed = (outcome as { result: Event }).result;
+      expect(verifyEvent(signed)).toBe(true);
+      expect(signed.pubkey).toBe(PUBKEY_1);
+      expect(signed.kind).toBe([1, 7, 1059][index]);
+    }
+    expect((result.items[1] as { result: Event }).result.tags).toEqual(tags);
+    expect(activity.entries).toHaveLength(3);
+    expect(activity.entries.map((entry) => [entry.requestId, entry.batchId, entry.decision, entry.kind])).toEqual([
+      ['i0', batch.id, 'allow', 1],
+      ['i1', batch.id, 'allow', 7],
+      ['i2', batch.id, 'allow', 1059],
+    ]);
+  });
+
+  test('a caller mutating its templates after the prompt does not change what is signed', async () => {
+    const { core, approval } = await fixture(true);
+    const batch = batchReq([sign(1, { content: 'shown' }), sign(7, { content: 'also shown' })]);
+    approval.decideBatch = async () => {
+      for (const item of batch.items) (item.params['event'] as { content: string }).content = 'swapped';
+      (batch.items as SignerBatchItem[]).push({ id: 'late', method: 'signEvent', params: { event: { kind: 1, content: 'smuggled', tags: [] } } });
+      return { allow: true };
+    };
+    const result = await core.handleBatch(batch);
+    expect(result.items.map((item) => (item as { result: Event }).result.content)).toEqual(['shown', 'also shown']);
+  });
+
+  test('a refusal refuses every item, and every item is logged as denied', async () => {
+    const { core, approval, activity } = await fixture(false);
+    approval.decideBatch = async () => ({ allow: false, reason: 'Not today' });
+    const batch = batchReq([sign(1), sign(7)]);
+    await expect(core.handleBatch(batch)).rejects.toMatchObject({ code: 'rejected', message: 'Not today' });
+    expect(activity.entries.map((entry) => [entry.requestId, entry.decision, entry.code, entry.reason])).toEqual([
+      ['i0', 'deny', 'rejected', 'Not today'],
+      ['i1', 'deny', 'rejected', 'Not today'],
+    ]);
+  });
+
+  test('a batch nobody answers times out, and the prompt is cancelled under the batch id', async () => {
+    vi.useFakeTimers();
+    const { core, approval } = await fixture('never');
+    const batch = batchReq([sign(1), sign(7)]);
+    const outcome = core.handleBatch(batch).then(() => 'resolved', (error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS);
+    expect(await outcome).toMatchObject({ code: 'timeout' });
+    expect(approval.cancelled).toEqual([{ origin: 'example.com', id: batch.id, reason: expect.stringMatching(/timed out/i) }]);
+    expect(core.pending()).toHaveLength(0);
+  });
+
+  test('a disposed core refuses a batch', async () => {
+    const { core } = await fixture(true);
+    core.dispose();
+    await expect(core.handleBatch(batchReq([sign(1)]))).rejects.toMatchObject({ code: 'shutdown' });
+  });
+});
+
+describe('the permission cascade applies per item', () => {
+  test('every item\'s rule is consulted, and one denied item refuses the batch before any prompt', async () => {
+    const { core, approval, activity, permissions, vault } = await fixture(true);
+    await permissions.save('example.com', 'signEvent', 1, 'allow', 'acct_1');
+    await permissions.save('example.com', 'signEvent', 7, 'deny', 'acct_1');
+    const check = vi.spyOn(permissions, 'check');
+    const withPrivkey = vi.spyOn(vault, 'withPrivkey');
+    const batch = batchReq([sign(1), sign(7), sign(1059)]);
+    await expect(core.handleBatch(batch)).rejects.toMatchObject({ code: 'permission_denied' });
+    // A deny is the end: the rule after it is not consulted, as for a single request.
+    expect(check.mock.calls.map((call) => call[2])).toEqual([1, 7]);
+    expect(approval.presentedBatches).toHaveLength(0);
+    expect(withPrivkey).not.toHaveBeenCalled();
+    // Nothing was signed, and the log says so for every item, the allowed one included.
+    expect(activity.entries.map((entry) => [entry.requestId, entry.decision, entry.code])).toEqual([
+      ['i0', 'deny', 'permission_denied'],
+      ['i1', 'deny', 'permission_denied'],
+      ['i2', 'deny', 'permission_denied'],
+    ]);
+  });
+
+  test('a deny holds while the vault is locked, before the lock is consulted', async () => {
+    const { core, permissions } = await fixture(true, { locked: true });
+    await permissions.save('example.com', 'signEvent', 7, 'deny', 'acct_1');
+    await expect(core.handleBatch(batchReq([sign(1), sign(7)]))).rejects.toMatchObject({ code: 'permission_denied' });
+  });
+
+  test('items already allowed are still shown; the prompt decides the batch, not only the asked items', async () => {
+    const { core, approval, permissions } = await fixture(true);
+    await permissions.save('example.com', 'signEvent', 1, 'allow', 'acct_1');
+    const result = await core.handleBatch(batchReq([sign(1), sign(1059)]));
+    expect(approval.presentedBatches).toHaveLength(1);
+    expect(approval.presentedBatches[0]!.batch.items.map((item) => item.id)).toEqual(['i0', 'i1']);
+    expect(result.items.every((item) => item.ok)).toBe(true);
+  });
+
+  test('a batch of only allowed items signs without a prompt', async () => {
+    const { core, approval, permissions } = await fixture('never');
+    await permissions.save('example.com', 'signEvent', 1, 'allow', 'acct_1');
+    await permissions.save('example.com', 'signEvent', 7, 'allow', 'acct_1');
+    const result = await core.handleBatch(batchReq([sign(1), sign(7), sign(1)]));
+    expect(approval.presentedBatches).toHaveLength(0);
+    expect(result.items).toHaveLength(3);
+    expect(result.items.every((item) => item.ok)).toBe(true);
+  });
+
+  test('a repeated kind consults the store once', async () => {
+    const { core, permissions } = await fixture(true);
+    const check = vi.spyOn(permissions, 'check');
+    await core.handleBatch(batchReq([sign(7), sign(7), sign(7), sign(1)]));
+    expect(check.mock.calls.map((call) => call[2])).toEqual([7, 1]);
+  });
+
+  test('remember persists the decision for each kind that was asked, and only those', async () => {
+    const { core, approval, permissions } = await fixture(true);
+    await permissions.save('example.com', 'signEvent', 1, 'allow', 'acct_1');
+    const save = vi.spyOn(permissions, 'save');
+    approval.decideBatch = async () => ({ allow: true, remember: true });
+    await core.handleBatch(batchReq([sign(1), sign(7), sign(1059), sign(7)]));
+    expect(save.mock.calls.map((call) => [call[1], call[2], call[3]])).toEqual([
+      ['signEvent', 7, 'allow'],
+      ['signEvent', 1059, 'allow'],
+    ]);
+    expect(await permissions.check('example.com', 'signEvent', 7, 'acct_1')).toBe('allow');
+    expect(await permissions.check('example.com', 'signEvent', 1059, 'acct_1')).toBe('allow');
+    // 1059 and 4 share the `sendMessages` rule in @nostr-wot/permissions; 30023 shares nothing.
+    expect(await permissions.check('example.com', 'signEvent', 30023, 'acct_1')).toBe('ask');
+    await core.handleBatch(batchReq([sign(1), sign(7), sign(1059)]));
+    expect(approval.presentedBatches).toHaveLength(1);
+  });
+
+  test('a remembered refusal persists a deny for each kind that was asked', async () => {
+    const { core, approval, permissions } = await fixture(false);
+    approval.decideBatch = async () => ({ allow: false, remember: true });
+    await expect(core.handleBatch(batchReq([sign(1), sign(7)]))).rejects.toMatchObject({ code: 'rejected' });
+    expect(await permissions.check('example.com', 'signEvent', 1, 'acct_1')).toBe('deny');
+    expect(await permissions.check('example.com', 'signEvent', 7, 'acct_1')).toBe('deny');
+    await expect(core.handleBatch(batchReq([sign(7)]))).rejects.toMatchObject({ code: 'permission_denied' });
+    expect(approval.presentedBatches).toHaveLength(1);
+  });
+
+  test('rememberKind false persists the method for every kind, once', async () => {
+    const { core, approval, permissions } = await fixture(true);
+    const save = vi.spyOn(permissions, 'save');
+    approval.decideBatch = async () => ({ allow: true, remember: true, rememberKind: false });
+    await core.handleBatch(batchReq([sign(1), sign(7), { method: 'nip44Encrypt', params: { pubkey: PUBKEY_2, plaintext: 'x' } }]));
+    expect(save.mock.calls.map((call) => [call[1], call[2], call[3]])).toEqual([
+      ['signEvent', null, 'allow'],
+      ['nip44Encrypt', null, 'allow'],
+    ]);
+    expect(await permissions.check('example.com', 'signEvent', 30023, 'acct_1')).toBe('allow');
+  });
+
+  test('an item authored by another key refuses the batch before anyone is asked', async () => {
+    const { core, approval } = await fixture(true);
+    const batch = batchReq([sign(1), sign(7, { pubkey: PUBKEY_2 })]);
+    await expect(core.handleBatch(batch)).rejects.toMatchObject({ code: 'author_mismatch' });
+    expect(approval.presentedBatches).toHaveLength(0);
+  });
+
+  test('a read-only account is refused before anyone is asked', async () => {
+    const { core, approval } = await fixture(true, { accounts: [account('ro', null)] });
+    await expect(core.handleBatch(batchReq([sign(1)]))).rejects.toMatchObject({ code: 'unsupported' });
+    expect(approval.presentedBatches).toHaveLength(0);
+  });
+
+  test('a remote account cannot batch: the remote port takes one request and the bunker approves each', async () => {
+    const execute = vi.fn(async () => 'never');
+    const remote: RemoteSignerPort = { execute };
+    const acct = account('bunker', null, { type: 'nip46', pubkey: PUBKEY_2, readOnly: false });
+    const { core, approval } = await fixture(true, { accounts: [acct], remote });
+    await expect(core.handleBatch(batchReq([sign(1)]))).rejects.toMatchObject({ code: 'unsupported' });
+    expect(execute).not.toHaveBeenCalled();
+    expect(approval.presentedBatches).toHaveLength(0);
+  });
+
+  test('a host that cannot show a batch is refused when a prompt is needed, and signs under remembered rules without one', async () => {
+    const { core, approval, permissions, activity } = await fixture(true);
+    delete (approval as Partial<ApprovalPort>).presentBatch;
+    await expect(core.handleBatch(batchReq([sign(1)]))).rejects.toMatchObject({ code: 'unsupported' });
+    expect(activity.entries.at(-1)).toMatchObject({ decision: 'deny', code: 'unsupported' });
+    await permissions.save('example.com', 'signEvent', 1, 'allow', 'acct_1');
+    const result = await core.handleBatch(batchReq([sign(1), sign(1)]));
+    expect(result.items.every((item) => item.ok)).toBe(true);
+  });
+});
+
+describe('partial failure inside a batch', () => {
+  test('eight of ten sign, the vault locks: eight are returned and two are reported locked, by id', async () => {
+    const { core, vault, activity } = await fixture(true);
+    const original = vault.withPrivkey.bind(vault);
+    let calls = 0;
+    vi.spyOn(vault, 'withPrivkey').mockImplementation((accountId, fn) =>
+      original(accountId, async (key) => {
+        const result = await fn(key);
+        // The ninth item has been computed with the real key; the lock lands before the
+        // vault hands it back, so the vault voids it. The tenth finds the vault locked.
+        if (++calls === 9) vault.lock();
+        return result;
+      }),
+    );
+    const batch = batchReq(Array.from({ length: 10 }, (_, i) => sign(7, { content: `item ${i}` })));
+    const result = await core.handleBatch(batch);
+    expect(result.items).toHaveLength(10);
+    const ok = result.items.filter((item) => item.ok);
+    expect(ok.map((item) => item.id)).toEqual(['i0', 'i1', 'i2', 'i3', 'i4', 'i5', 'i6', 'i7']);
+    for (const item of ok) {
+      const signed = (item as { result: Event }).result;
+      expect(verifyEvent(signed)).toBe(true);
+      expect(signed.pubkey).toBe(PUBKEY_1);
+    }
+    expect(result.items.slice(8)).toEqual([
+      { id: 'i8', ok: false, code: 'vault_locked', message: 'Vault is locked' },
+      { id: 'i9', ok: false, code: 'vault_locked', message: 'Vault is locked' },
+    ]);
+    expect(activity.entries.map((entry) => entry.decision)).toEqual([...Array<string>(8).fill('allow'), 'deny', 'deny']);
+    expect(activity.entries[8]).toMatchObject({ requestId: 'i8', code: 'vault_locked', batchId: batch.id });
+  });
+
+  test('a cipher failure on one item is that item\'s failure, with fixed text, and the rest sign', async () => {
+    const warn = vi.fn();
+    const { core, activity } = await fixture(true, { logger: { warn } });
+    const result = await core.handleBatch(
+      batchReq([
+        sign(1),
+        { method: 'nip44Encrypt', params: { pubkey: PUBKEY_2, plaintext: 'secret' } },
+        { method: 'nip04Decrypt', params: { pubkey: PUBKEY_2, ciphertext: 'not-a-ciphertext' } },
+      ]),
+    );
+    expect(result.items[0]!.ok).toBe(true);
+    expect(verifyEvent((result.items[0] as { result: Event }).result)).toBe(true);
+    expect(result.items[1]!.ok).toBe(true);
+    const recipient = new PrivateKeySigner(hexToBytes(PRIVKEY_2));
+    expect(await recipient.nip44Decrypt(PUBKEY_1, (result.items[1] as { result: string }).result)).toBe('secret');
+    expect(result.items[2]).toEqual({ id: 'i2', ok: false, code: 'operation_failed', message: 'Operation failed' });
+    // The original text went to the logger and the on-device log, not to the caller.
+    expect(warn).toHaveBeenCalledWith('request failed', expect.objectContaining({ requestId: 'i2', phase: 'execute' }));
+    expect(activity.entries[2]).toMatchObject({ requestId: 'i2', decision: 'deny', code: 'operation_failed', theirPubkey: PUBKEY_2, ciphertext: 'not-a-ciphertext' });
+    expect(activity.entries[2]!.reason).not.toBe('Operation failed');
+    expect(activity.entries[1]).not.toHaveProperty('ciphertext');
+  });
+
+  test('a switch landing mid-batch refuses the whole batch, items already signed included', async () => {
+    const one = account('acct_1', PRIVKEY_1);
+    const two = account('acct_2', PRIVKEY_2);
+    const { core, vault, activity } = await fixture(true, { accounts: [one, two] });
+    const original = vault.withPrivkey.bind(vault);
+    const computed: Event[] = [];
+    let calls = 0;
+    vi.spyOn(vault, 'withPrivkey').mockImplementation((accountId, fn) =>
+      original(accountId, async (key) => {
+        const result = (await fn(key)) as Event;
+        computed.push(result);
+        if (++calls === 5) await vault.setActiveAccountId('acct_2');
+        return result;
+      }),
+    );
+    const batch = batchReq(Array.from({ length: 10 }, () => sign(7)));
+    await expect(core.handleBatch(batch)).rejects.toMatchObject({ code: 'account_switched' });
+    // Every item was signed, by the right key: the refusal is the whole property.
+    expect(computed).toHaveLength(10);
+    expect(computed.every((event) => event.pubkey === PUBKEY_1 && verifyEvent(event))).toBe(true);
+    expect(activity.entries).toHaveLength(10);
+    expect(activity.entries.every((entry) => entry.decision === 'deny' && entry.code === 'account_switched')).toBe(true);
+  });
+
+  test('a switch landing while the prompt is open refuses the batch, and nothing is remembered', async () => {
+    const one = account('acct_1', PRIVKEY_1);
+    const two = account('acct_2', PRIVKEY_2);
+    const { core, vault, approval, permissions } = await fixture(true, { accounts: [one, two] });
+    approval.decideBatch = async () => {
+      await vault.setActiveAccountId('acct_2');
+      return { allow: true, remember: true };
+    };
+    await expect(core.handleBatch(batchReq([sign(1), sign(7)]))).rejects.toMatchObject({ code: 'account_switched' });
+    expect(await permissions.check('example.com', 'signEvent', 1, 'acct_1')).toBe('ask');
+    expect(await permissions.check('example.com', 'signEvent', 1, 'acct_2')).toBe('ask');
+  });
+});
+
+describe('a batch in the queue', () => {
+  test('a queued batch is rejected when the account changes, and its prompt is cancelled by the batch id', async () => {
+    const { core, approval } = await fixture('never');
+    const batch = batchReq([sign(1), sign(7)]);
+    const promise = core.handleBatch(batch);
+    promise.catch(() => {});
+    await settle();
+    expect(core.pending()).toEqual([expect.objectContaining({ id: batch.id, kind: 'approval', origin: 'example.com', accountId: 'acct_1' })]);
+    await core.onActiveAccountChanged('acct_1', 'acct_2');
+    await expect(promise).rejects.toMatchObject({ code: 'account_switched' });
+    expect(approval.cancelled).toEqual([{ origin: 'example.com', id: batch.id, reason: 'Account switched' }]);
+    expect(core.pending()).toHaveLength(0);
+  });
+
+  test('a batch is one queued request: the per-origin cap counts prompts, not items', async () => {
+    // The cap blunts prompt spam, and a batch is one prompt: the user's attention is spent
+    // once whatever the item count, which is bounded on its own by MAX_BATCH_ITEMS and
+    // MAX_BATCH_BYTES. Counting items would make the cap of five refuse a twelve-event
+    // burst, the exact case batching exists for.
+    const { core, approval } = await fixture('never');
+    for (let i = 0; i < MAX_PENDING_PER_ORIGIN; i++) {
+      core.handleBatch(batchReq([sign(1), sign(7), sign(1059)])).catch(() => {});
+    }
+    await settle();
+    expect(approval.presentedBatches).toHaveLength(MAX_PENDING_PER_ORIGIN);
+    expect(core.pending()).toHaveLength(MAX_PENDING_PER_ORIGIN);
+    await expect(core.handle(req('signEvent', { kind: 1 }))).rejects.toMatchObject({ code: 'too_many_pending' });
+    await expect(core.handleBatch(batchReq([sign(1)]))).rejects.toMatchObject({ code: 'too_many_pending' });
+    expect(approval.presentedBatches).toHaveLength(MAX_PENDING_PER_ORIGIN);
+  });
+
+  test('host-side cancel settles a batch by its id, scoped to the origin', async () => {
+    const { core } = await fixture('never');
+    const batch = batchReq([sign(1)]);
+    const promise = core.handleBatch(batch);
+    promise.catch(() => {});
+    await settle();
+    expect(core.cancel('other.example', batch.id)).toBe(false);
+    expect(core.cancel('example.com', batch.id)).toBe(true);
+    await expect(promise).rejects.toMatchObject({ code: 'rejected' });
+  });
+
+  test('a locked vault asks the batch unlock port once, and signs every item once open', async () => {
+    const asked: string[] = [];
+    let vaultRef: Vault | null = null;
+    const unlock: UnlockPort = {
+      async requestUnlock() {
+        throw new Error('the single-request port must not be asked for a batch');
+      },
+      async requestUnlockBatch(batch) {
+        asked.push(batch.id);
+        await vaultRef!.unlock(PASSWORD);
+      },
+    };
+    const { core, permissions, vault } = await fixture(true, { locked: true, unlock });
+    vaultRef = vault;
+    await permissions.save('example.com', 'signEvent', 1, 'allow', 'acct_1');
+    const batch = batchReq([sign(1), sign(1)]);
+    const result = await core.handleBatch(batch);
+    expect(asked).toEqual([batch.id]);
+    expect(result.items.every((item) => item.ok)).toBe(true);
+    expect(core.pending()).toHaveLength(0);
+  });
+
+  test('a locked vault and no batch unlock port is a locked vault, after the permission gate', async () => {
+    const unlock: UnlockPort = { async requestUnlock() {} };
+    const { core, permissions } = await fixture(true, { locked: true, unlock });
+    await permissions.save('example.com', 'signEvent', 1, 'allow', 'acct_1');
+    await expect(core.handleBatch(batchReq([sign(1)]))).rejects.toMatchObject({ code: 'vault_locked' });
+    await permissions.save('example.com', 'signEvent', 1, 'deny', 'acct_1');
+    await expect(core.handleBatch(batchReq([sign(1)]))).rejects.toMatchObject({ code: 'permission_denied' });
+  });
+
+  test('a malformed batch never reaches the store, the vault, the prompt or the log', async () => {
+    const { core, approval, vault, activity, permissions } = await fixture(true);
+    const withPrivkey = vi.spyOn(vault, 'withPrivkey');
+    const check = vi.spyOn(permissions, 'check');
+    for (const batch of [
+      batchReq([{ method: 'getPublicKey' }]),
+      batchReq([]),
+      batchReq([sign(1), { id: 'i0', method: 'signEvent', params: { event: { kind: 1, content: '', tags: [] } } }]),
+      null as unknown as SignerBatchRequest,
+    ]) {
+      await expect(core.handleBatch(batch)).rejects.toMatchObject({ code: 'invalid_request' });
+    }
+    expect(withPrivkey).not.toHaveBeenCalled();
+    expect(check).not.toHaveBeenCalled();
+    expect(approval.presentedBatches).toHaveLength(0);
+    expect(activity.entries).toHaveLength(0);
   });
 });
