@@ -5,7 +5,7 @@ import { v2 as nip44 } from "nostr-tools/nip44";
 import { NostrConnect } from "nostr-tools/kinds";
 import { BunkerSigner, parseBunkerInput } from "nostr-tools/nip46";
 import { Nip46Signer, PrivateKeySigner } from "@nostr-wot/signers";
-import { BunkerError, BunkerServer, type BunkerHandler, type BunkerRequest } from "../src";
+import { BunkerError, BunkerServer, type BunkerHandler, type BunkerRequest, type BunkerState } from "../src";
 import { TestRelay } from "./relay";
 
 /**
@@ -1228,6 +1228,146 @@ describe("BunkerServer loopback", () => {
       await wait(500);
       expect(releasing.listeningRelays).toEqual([relay.url]);
       expect(slow.subscriptionCount).toBe(0);
+    });
+  });
+
+  describe("persistence across restarts", () => {
+    /** The app's restart: same connection key, a fresh process, whatever the host persisted handed back. */
+    async function restart(previous: BunkerServer, state: BunkerState, handler = signerHandler(user)): Promise<BunkerServer> {
+      await previous.stop();
+      const next = new BunkerServer({ connectionSecretKey: connectionSk, relays: [relay.url], handler });
+      await next.restore(state);
+      await next.start();
+      cleanups.push(() => next.stop());
+      return next;
+    }
+
+    it("a restored secret keeps its binding: after a restart a different client presenting it is refused", async () => {
+      const { uri, secret } = server.createBunkerUri();
+      const a = await connectWithNostrTools(uri);
+      expect(await a.getPublicKey()).toBe(userPubkey);
+      const state = server.exportState();
+      expect(state.secrets).toEqual([
+        { secret, origin: "bunker", relays: [relay.url], clientPubkey: expect.any(String), confirmed: true },
+      ]);
+
+      const next = await restart(server, state);
+      next.createBunkerUri({ secret }); // the app re-mints the stored secret for display; that must not unbind it
+      const bp = (await parseBunkerInput(uri))!;
+      const pool = new SimplePool();
+      cleanups.push(() => pool.close([relay.url]));
+      const intruder = BunkerSigner.fromBunker(generateSecretKey(), bp, { pool });
+      await expect(intruder.connect()).rejects.toBe("secret already used by another client");
+      await intruder.close();
+      expect(next.connectedClients).toEqual([state.clients[0]!.clientPubkey]);
+    });
+
+    it("restored clients keep working after a restart without re-pairing, on their own relays", async () => {
+      const clientRelay = await TestRelay.start();
+      cleanups.push(() => clientRelay.close());
+      const aSk = generateSecretKey();
+      const aPubkey = getPublicKey(aSk);
+      const aPool = new SimplePool();
+      const uri = `nostrconnect://${aPubkey}?relay=${encodeURIComponent(clientRelay.url)}&secret=persist-me`;
+      const abort = new AbortController();
+      const ready = BunkerSigner.fromURI(aSk, uri, { pool: aPool }, abort.signal);
+      cleanups.push(async () => {
+        abort.abort();
+        await ready.then((s) => s.close()).catch(() => {});
+        aPool.close([clientRelay.url]);
+      });
+      await clientRelay.waitForSubscriber(aPubkey);
+      await server.acceptNostrConnect(uri);
+      const a = await ready;
+      expect(await a.getPublicKey()).toBe(userPubkey);
+
+      const state = server.exportState();
+      expect(state.clients).toEqual([{ clientPubkey: aPubkey, relays: [clientRelay.url], secret: "persist-me", connectedAt: expect.any(Number) }]);
+      expect(state.secrets).toEqual([{ secret: "persist-me", origin: "nostrconnect", relays: [clientRelay.url], clientPubkey: aPubkey, confirmed: true }]);
+
+      const next = await restart(server, state);
+      expect(next.connectedClients).toEqual([aPubkey]);
+      expect(next.relaysFor(aPubkey)).toEqual([clientRelay.url]);
+      expect(next.listeningRelays.sort()).toEqual([relay.url, clientRelay.url].sort());
+      // No connect, no re-pair: the client just carries on, and is answered on its own relay.
+      const signed = await a.signEvent({ kind: 1, content: "after restart", tags: [], created_at: 1 });
+      expect(signed.pubkey).toBe(userPubkey);
+      expect(relay.received.filter((e) => e.tags.some((t) => t[0] === "p" && t[1] === aPubkey))).toEqual([]);
+      expect(next.exportState()).toEqual(state);
+    });
+
+    it("onStateChange fires on every change and what it hands out restores cleanly", async () => {
+      const snapshots: BunkerState[] = [];
+      const watched = new BunkerServer({
+        connectionSecretKey: generateSecretKey(),
+        relays: [relay.url],
+        handler: signerHandler(user),
+        onStateChange: (state) => snapshots.push(state),
+      });
+      await watched.start();
+      cleanups.push(() => watched.stop());
+      const { uri, secret } = watched.createBunkerUri();
+      expect(snapshots).toHaveLength(1);
+      expect(snapshots[0]!.secrets[0]).toMatchObject({ secret, confirmed: false });
+      const a = await connectWithNostrTools(uri);
+      const last = snapshots[snapshots.length - 1]!;
+      expect(last.clients).toHaveLength(1);
+      expect(last.secrets[0]).toMatchObject({ secret, confirmed: true, clientPubkey: last.clients[0]!.clientPubkey });
+      await a.logout();
+      expect(snapshots[snapshots.length - 1]!.clients).toEqual([]);
+      expect(snapshots[snapshots.length - 1]!.secrets[0]).toMatchObject({ secret, confirmed: true }); // the binding outlives the session
+      const n = snapshots.length;
+      expect(watched.revokeSecret(secret)).toBe(true);
+      expect(snapshots).toHaveLength(n + 1);
+      expect(snapshots[n]!.secrets).toEqual([]);
+    });
+
+    it("a revoked secret is refused, an unclaimed secret lapses at its TTL, a confirmed binding never does", async () => {
+      const { uri, secret } = server.createBunkerUri();
+      expect(server.revokeSecret(secret)).toBe(true);
+      expect(server.revokeSecret(secret)).toBe(false);
+      const bp = (await parseBunkerInput(uri))!;
+      const pool = new SimplePool();
+      cleanups.push(() => pool.close([relay.url]));
+      const late = BunkerSigner.fromBunker(generateSecretKey(), bp, { pool });
+      await expect(late.connect()).rejects.toBe("invalid secret");
+      await late.close();
+
+      const shortLived = server.createBunkerUri({ ttlMs: 150 });
+      expect(server.exportState().secrets.find((r) => r.secret === shortLived.secret)?.expiresAt).toEqual(expect.any(Number));
+      await wait(200);
+      const tooLate = BunkerSigner.fromBunker(generateSecretKey(), (await parseBunkerInput(shortLived.uri))!, { pool });
+      await expect(tooLate.connect()).rejects.toBe("invalid secret");
+      await tooLate.close();
+      expect(server.exportState().secrets.find((r) => r.secret === shortLived.secret)).toBeUndefined(); // swept
+
+      const claimed = server.createBunkerUri({ ttlMs: 150 });
+      const clientSk = generateSecretKey();
+      const first = BunkerSigner.fromBunker(clientSk, (await parseBunkerInput(claimed.uri))!, { pool });
+      await first.connect();
+      await first.close();
+      await wait(200);
+      const again = BunkerSigner.fromBunker(clientSk, (await parseBunkerInput(claimed.uri))!, { pool });
+      await again.connect(); // confirmed: the TTL no longer applies
+      expect(await again.getPublicKey()).toBe(userPubkey);
+      await again.close();
+      expect(server.exportState().secrets.find((r) => r.secret === claimed.secret)).toMatchObject({ confirmed: true });
+    });
+
+    it("the server-level secretTtlMs applies to every mint, and 0 disables it", async () => {
+      const ttl = new BunkerServer({ connectionSecretKey: generateSecretKey(), relays: [relay.url], secretTtlMs: 100, handler: signerHandler(user) });
+      await ttl.start();
+      cleanups.push(() => ttl.stop());
+      const minted = ttl.createBunkerUri();
+      await wait(150);
+      ttl.createBunkerUri(); // any mint sweeps lapsed, unclaimed secrets
+      expect(ttl.exportState().secrets.map((r) => r.secret)).not.toContain(minted.secret);
+
+      const forever = new BunkerServer({ connectionSecretKey: generateSecretKey(), relays: [relay.url], secretTtlMs: 0, handler: signerHandler(user) });
+      await forever.start();
+      cleanups.push(() => forever.stop());
+      const kept = forever.createBunkerUri();
+      expect(forever.exportState().secrets[0]).toEqual({ secret: kept.secret, origin: "bunker", relays: [relay.url], confirmed: false });
     });
   });
 
