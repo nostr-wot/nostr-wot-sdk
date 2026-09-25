@@ -754,6 +754,14 @@ export class Vault {
     return this.#mutate((payload) => {
       const account = this.#findAccount(payload, accountId);
       if (!account) throw new Error('Account not found');
+      // The public halves first: encoding is the last thing that can throw, and a throw
+      // after the secret copies exist would leave two un-zeroed buffers nothing holds.
+      const pqPublic = {
+        profile,
+        kem: bytesToBase64(keys.kem.publicKey),
+        dsa: bytesToBase64(keys.dsa.publicKey),
+        importedAt,
+      };
       const kemSecret = new Uint8Array(keys.kem.secretKey);
       const dsaSecret = new Uint8Array(keys.dsa.secretKey);
       const previous = {
@@ -761,12 +769,7 @@ export class Vault {
         kem: account.pqKemSecretBytes,
         dsa: account.pqDsaSecretBytes,
       };
-      account.pqPublic = {
-        profile,
-        kem: bytesToBase64(keys.kem.publicKey),
-        dsa: bytesToBase64(keys.dsa.publicKey),
-        importedAt,
-      };
+      account.pqPublic = pqPublic;
       account.pqKemSecretBytes = kemSecret;
       account.pqDsaSecretBytes = dsaSecret;
       return {

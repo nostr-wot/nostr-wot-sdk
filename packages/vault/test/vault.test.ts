@@ -1189,6 +1189,17 @@ describe('a write that fails after the session has died', () => {
     await vault.setImportedPqKeys('acct_1', accepted.keys, 'nip-pqc/v1');
     expect(accepted.reads()).toBeGreaterThan(0);
   });
+
+  test('setImportedPqKeys with a public half that cannot be encoded copies no secret first', async () => {
+    // The public halves are encoded before the secrets are copied: a bad public half throws
+    // with nothing allocated, rather than after two un-zeroed copies exist that nothing holds.
+    const { vault } = await openVault([account]);
+    const probe = observedKeys();
+    const bad: PqKeyPair = { ...probe.keys, kem: { ...probe.keys.kem, publicKey: 'nope' as unknown as Uint8Array } };
+    await expect(vault.setImportedPqKeys('acct_1', bad, 'nip-pqc/v1')).rejects.toThrow();
+    expect(probe.reads()).toBe(0);
+    expect(vault.hasImportedPqKeys('acct_1')).toBe(false);
+  });
 });
 
 describe('create and addAccount agree', () => {
