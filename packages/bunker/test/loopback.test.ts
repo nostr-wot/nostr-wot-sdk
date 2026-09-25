@@ -1859,6 +1859,104 @@ describe("BunkerServer loopback", () => {
       expect(capped.connectedClients).toEqual([aPubkey]);
     });
 
+    it("what closes the legacy path is the host's generation, not anything in the blob", async () => {
+      const a = await connectWithNostrTools();
+      const good = server.exportState();
+      const { mac: _mac, version: _version, ...bare } = good;
+      const versionOne = { ...good, version: 1 as unknown as 2 }; // mac kept, version edited
+      const mk = (opts: { generation?: number } = {}) => {
+        const s = new BunkerServer({ connectionSecretKey: connectionSk, relays: [relay.url], handler: signerHandler(user), ...opts });
+        cleanups.push(() => s.stop());
+        return s;
+      };
+      // Without an explicit generation from the host, the legacy path is not something it lands on by omission.
+      await expect(mk().restore(bare as unknown as BunkerState, { allowUnsigned: true })).rejects.toThrow(/explicit generation/);
+      await expect(mk().restore(versionOne, { allowUnsigned: true })).rejects.toThrow(/explicit generation/);
+      // A host that has ever revoked (generation 1 or more) can never be walked back to an unsigned state.
+      await expect(mk({ generation: 1 }).restore(bare as unknown as BunkerState, { allowUnsigned: true })).rejects.toThrow(/generation 0 .*behind/);
+      await expect(mk({ generation: 1 }).restore(versionOne, { allowUnsigned: true })).rejects.toThrow(/generation 0 .*behind/);
+      // A host that asserts generation 0 and passes the flag is trusting its storage, and gets exactly that.
+      const trusting = mk({ generation: 0 });
+      await trusting.start();
+      await trusting.restore(bare as unknown as BunkerState, { allowUnsigned: true });
+      expect(trusting.connectedClients).toEqual(good.clients.map((c) => c.clientPubkey));
+      expect(await a.getPublicKey()).toBe(userPubkey);
+    });
+
+    it("the generation option throws on anything but a non-negative integer, and a BigInt in a state is a failed authentication", async () => {
+      for (const bad of [null, -1, "1", 1.5, Number.NaN, 1n, Number.POSITIVE_INFINITY]) {
+        expect(
+          () => new BunkerServer({ connectionSecretKey: connectionSk, relays: [relay.url], handler: signerHandler(user), generation: bad as unknown as number }),
+          `generation ${String(bad)}`,
+        ).toThrow(/generation must be a non-negative integer/);
+      }
+      const good = server.exportState();
+      const fresh = new BunkerServer({ connectionSecretKey: connectionSk, relays: [relay.url], handler: signerHandler(user) });
+      cleanups.push(() => fresh.stop());
+      await expect(fresh.restore({ ...good, generation: 1n as unknown as number })).rejects.toThrow(/authentication/);
+      await expect(fresh.restore({ ...good, secrets: [{ ...good.secrets[0]!, expiresAt: 1n as unknown as number }] } as BunkerState)).rejects.toThrow(/authentication/);
+    });
+
+    it("a snapshot taken inside onGenerationChange is consistent and restores", async () => {
+      const guardedSk = generateSecretKey();
+      let inside: BunkerState | null = null;
+      const guarded = new BunkerServer({
+        connectionSecretKey: guardedSk,
+        relays: [relay.url],
+        handler: signerHandler(user),
+        onGenerationChange: () => {
+          inside = guarded.exportState(); // what the app does: persist the counter and the state together
+        },
+      });
+      await guarded.start();
+      cleanups.push(() => guarded.stop());
+      const { uri, secret } = guarded.createBunkerUri();
+      const a = await connectWithNostrTools(uri);
+      expect(await a.getPublicKey()).toBe(userPubkey);
+      guarded.revokeSecret(secret);
+      expect(inside).not.toBeNull();
+      expect(inside!.generation).toBe(1);
+      expect(inside!.clients).toEqual([]); // the revoked client is already gone
+      expect(inside!.secrets).toEqual([]);
+      const next = new BunkerServer({ connectionSecretKey: guardedSk, relays: [relay.url], handler: signerHandler(user), generation: 1 });
+      cleanups.push(() => next.stop());
+      await next.restore(inside!); // restorable, not a client referencing a deleted secret
+      expect(next.connectedClients).toEqual([]);
+    });
+
+    it("a connected client re-sending connect does not occupy an admission slot", async () => {
+      const gate = deferred<string>();
+      const aSk = generateSecretKey();
+      const aPubkey = getPublicKey(aSk);
+      let aConnects = 0;
+      const capped = new BunkerServer({
+        connectionSecretKey: generateSecretKey(),
+        relays: [relay.url],
+        maxClients: 2,
+        handler: async (req, ctx) => {
+          if (req.method !== "connect") return signerHandler(user)(req, ctx);
+          if (req.clientPubkey === aPubkey && ++aConnects === 2) return gate.promise; // A's re-connect waits on the user
+          return "ack";
+        },
+      });
+      await capped.start();
+      cleanups.push(() => capped.stop());
+      const { secret } = capped.createBunkerUri();
+      const A = new RawClient([relay.url], capped.connectionPubkey, aSk);
+      const B = new RawClient([relay.url], capped.connectionPubkey);
+      cleanups.push(() => A.close(), () => B.close());
+      await Promise.all([A.listen(), B.listen()]);
+      await A.send("a1", "connect", [capped.connectionPubkey, secret]);
+      expect(await A.waitFor("a1")).toEqual({ id: "a1", result: "ack" });
+      await A.send("a2", "connect", [capped.connectionPubkey, secret]); // what nostr-tools does on every app start
+      await wait(100); // pending
+      await B.send("b1", "connect", [capped.connectionPubkey, capped.createBunkerUri().secret]);
+      expect(await B.waitFor("b1")).toEqual({ id: "b1", result: "ack" }); // one connected, one pending re-connect: room for one more
+      gate.resolve("ack");
+      expect(await A.waitFor("a2")).toEqual({ id: "a2", result: "ack" });
+      expect(capped.connectedClients.sort()).toEqual([aPubkey, B.pubkey].sort());
+    });
+
     it("the server-level secretTtlMs applies to every mint, and 0 disables it", async () => {
       const ttl = new BunkerServer({ connectionSecretKey: generateSecretKey(), relays: [relay.url], secretTtlMs: 100, handler: signerHandler(user) });
       await ttl.start();
