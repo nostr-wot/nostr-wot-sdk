@@ -1129,6 +1129,41 @@ describe('a write that fails after the session has died', () => {
       restore();
     }
   });
+
+  test('a mutation refused before it runs allocates no secret copy to drop', async () => {
+    const spy = vi.spyOn(serialization, 'bytesToHexBytes');
+    try {
+      const { vault } = await openVault([account, bunker]);
+      vault.lock();
+      await expect(vault.updateAccountNip46Keys('acct_bunker', new Uint8Array(32).fill(1), '01'.repeat(32))).rejects.toThrow(
+        /locked/i,
+      );
+      expect(spy).not.toHaveBeenCalled();
+      await vault.unlock('hunter22');
+      await expect(vault.updateAccountNip46Keys('acct_1', new Uint8Array(32).fill(1), '01'.repeat(32))).rejects.toThrow(
+        /nip-46/i,
+      );
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test('setImportedPqKeys refused before it runs copies nothing', async () => {
+    const spy = vi.spyOn(serialization, 'bytesToBase64');
+    try {
+      const { vault } = await openVault([account]);
+      vault.lock();
+      await expect(vault.setImportedPqKeys('acct_1', pqKeys, 'nip-pqc/v1')).rejects.toThrow(/locked/i);
+      await vault.unlock('hunter22');
+      spy.mockClear();
+      await expect(vault.setImportedPqKeys('acct_nope', pqKeys, 'nip-pqc/v1')).rejects.toThrow(/not found/i);
+      // The public halves are encoded in the same block that copies the secrets; neither ran.
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });
 
 describe('imported post-quantum keys', () => {

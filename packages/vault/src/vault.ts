@@ -698,13 +698,15 @@ export class Vault {
     if (localPrivkey.length !== VAULT_KEY_BYTES) {
       throw new Error(`A NIP-46 local private key is ${VAULT_KEY_BYTES} bytes`);
     }
-    const encoded = bytesToHexBytes(localPrivkey);
+    // The copy is made inside `apply`, after every refusal (locked, session moved, wrong
+    // account) has had its chance: a copy made out here would be dropped un-zeroed by any of
+    // them. The caller's buffer stays theirs and must outlive this call.
     return this.#mutate((payload) => {
       const account = this.#findAccount(payload, accountId);
       if (!account || account.type !== 'nip46' || !account.nip46) {
-        encoded.fill(0);
         throw new Error('This account is not a NIP-46 account');
       }
+      const encoded = bytesToHexBytes(localPrivkey);
       const config = account.nip46;
       const previous = { key: config.localPrivkeyBytes, pubkey: config.localPubkey };
       config.localPrivkeyBytes = encoded;
@@ -734,16 +736,14 @@ export class Vault {
    * @throws if the vault is locked or there is no such account
    */
   async setImportedPqKeys(accountId: string, keys: PqKeyPair, profile: string): Promise<void> {
-    const kemSecret = new Uint8Array(keys.kem.secretKey);
-    const dsaSecret = new Uint8Array(keys.dsa.secretKey);
     const importedAt = this.#now();
+    // Copies are made inside `apply`, after every refusal has had its chance; see
+    // `updateAccountNip46Keys`. The caller's buffers stay theirs and must outlive this call.
     return this.#mutate((payload) => {
       const account = this.#findAccount(payload, accountId);
-      if (!account) {
-        kemSecret.fill(0);
-        dsaSecret.fill(0);
-        throw new Error('Account not found');
-      }
+      if (!account) throw new Error('Account not found');
+      const kemSecret = new Uint8Array(keys.kem.secretKey);
+      const dsaSecret = new Uint8Array(keys.dsa.secretKey);
       const previous = {
         pqPublic: account.pqPublic,
         kem: account.pqKemSecretBytes,
