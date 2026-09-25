@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes } from '@noble/ciphers/utils.js';
 import type { Account } from '@nostr-wot/accounts';
 import { MemoryStore, type KeyValueStore } from '@nostr-wot/storage';
-import { Vault } from '../src/vault.js';
+import { Vault, type PqKeyPair } from '../src/vault.js';
 import * as serialization from '../src/serialization.js';
 import { openRecord } from '../src/record.js';
 import { encrypt, noblePbkdf2, type Pbkdf2Port } from '../src/crypto.js';
@@ -1149,20 +1149,45 @@ describe('a write that fails after the session has died', () => {
     }
   });
 
-  test('setImportedPqKeys refused before it runs copies nothing', async () => {
-    const spy = vi.spyOn(serialization, 'bytesToBase64');
-    try {
-      const { vault } = await openVault([account]);
-      vault.lock();
-      await expect(vault.setImportedPqKeys('acct_1', pqKeys, 'nip-pqc/v1')).rejects.toThrow(/locked/i);
-      await vault.unlock('hunter22');
-      spy.mockClear();
-      await expect(vault.setImportedPqKeys('acct_nope', pqKeys, 'nip-pqc/v1')).rejects.toThrow(/not found/i);
-      // The public halves are encoded in the same block that copies the secrets; neither ran.
-      expect(spy).not.toHaveBeenCalled();
-    } finally {
-      spy.mockRestore();
-    }
+  /**
+   * A copy is `new Uint8Array(source)`, which nothing outside can see. A Proxy around the
+   * source can: without an iterator the constructor takes the array-like path and reads
+   * `length` and every index off it, so a source that was never read was never copied.
+   */
+  function observedKeys(): { keys: PqKeyPair; reads: () => number } {
+    let reads = 0;
+    const observe = (bytes: Uint8Array): Uint8Array =>
+      new Proxy(bytes, {
+        get(target, property, receiver) {
+          if (property === Symbol.iterator) return undefined;
+          reads += 1;
+          void receiver;
+          return Reflect.get(target, property, target) as unknown;
+        },
+      });
+    return {
+      keys: {
+        kem: { publicKey: new Uint8Array(8).fill(1), secretKey: observe(new Uint8Array(8).fill(2)) },
+        dsa: { publicKey: new Uint8Array(8).fill(3), secretKey: observe(new Uint8Array(8).fill(4)) },
+      },
+      reads: () => reads,
+    };
+  }
+
+  test('setImportedPqKeys refused before it runs never reads the secret keys, so nothing was copied', async () => {
+    const { vault } = await openVault([account]);
+    vault.lock();
+    const locked = observedKeys();
+    await expect(vault.setImportedPqKeys('acct_1', locked.keys, 'nip-pqc/v1')).rejects.toThrow(/locked/i);
+    expect(locked.reads()).toBe(0);
+    await vault.unlock('hunter22');
+    const missing = observedKeys();
+    await expect(vault.setImportedPqKeys('acct_nope', missing.keys, 'nip-pqc/v1')).rejects.toThrow(/not found/i);
+    expect(missing.reads()).toBe(0);
+    // And the same source IS read when the call goes through, or the probe proves nothing.
+    const accepted = observedKeys();
+    await vault.setImportedPqKeys('acct_1', accepted.keys, 'nip-pqc/v1');
+    expect(accepted.reads()).toBeGreaterThan(0);
   });
 });
 
