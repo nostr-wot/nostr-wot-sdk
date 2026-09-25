@@ -63,9 +63,17 @@ export class TestRelay {
     });
   }
 
-  static start(port = 0): Promise<TestRelay> {
+  /** `acceptDelayMs` holds the WebSocket handshake open that long before accepting, to widen connect windows. */
+  static start(port = 0, opts: { acceptDelayMs?: number } = {}): Promise<TestRelay> {
     return new Promise((resolve, reject) => {
-      const wss = new WebSocketServer({ host: "127.0.0.1", port });
+      const delay = opts.acceptDelayMs ?? 0;
+      const wss = new WebSocketServer({
+        host: "127.0.0.1",
+        port,
+        ...(delay > 0
+          ? { verifyClient: (_info: unknown, cb: (ok: boolean) => void) => setTimeout(() => cb(true), delay) }
+          : {}),
+      });
       wss.once("listening", () => resolve(new TestRelay(wss, (wss.address() as AddressInfo).port)));
       wss.once("error", reject);
     });
@@ -74,6 +82,13 @@ export class TestRelay {
   /** Number of currently open client sockets. */
   get connections(): number {
     return this.#wss.clients.size;
+  }
+
+  /** Open REQ subscriptions across every socket. */
+  get subscriptionCount(): number {
+    let n = 0;
+    for (const subs of this.#subs.values()) n += subs.size;
+    return n;
   }
 
   /** Resolves once some socket holds a subscription addressed (`#p`) to `pubkey`. */

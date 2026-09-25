@@ -985,6 +985,43 @@ describe("BunkerServer loopback", () => {
       expect(await raw2.waitFor("v2", 1500)).toEqual({ id: "v2", result: userPubkey });
     });
 
+    it("with an injected pool that does not verify, #onEvent's own check still gates both dispatch and dedup", async () => {
+      // SimplePool spreads its options over verifyEvent, so a non-verifying pool is a supported
+      // configuration. Through such a pool the relay-level check at abstract-relay.js:480 passes
+      // everything, and #onEvent's verifyEvent is the only thing between a forgery and the handler.
+      const pool = new SimplePool({ verifyEvent: () => true });
+      cleanups.push(() => pool.close([relay.url]));
+      const calls: BunkerRequest[] = [];
+      const lax = new BunkerServer({
+        connectionSecretKey: generateSecretKey(),
+        relays: [relay.url],
+        pool,
+        handler: async (req, ctx) => {
+          calls.push(req);
+          return signerHandler(user)(req, ctx);
+        },
+      });
+      await lax.start();
+      cleanups.push(() => lax.stop());
+      const raw = new RawClient([relay.url], lax.connectionPubkey);
+      cleanups.push(() => raw.close());
+      await raw.listen();
+      await raw.send("c1", "connect", [lax.connectionPubkey, lax.createBunkerUri().secret]);
+      await raw.waitFor("c1");
+
+      const genuine = raw.build("v1", "get_public_key", []);
+      const forged = { ...genuine, sig: genuine.sig.slice(0, -2) + (genuine.sig.endsWith("00") ? "11" : "00") };
+      await raw.publish(forged as typeof genuine);
+      await wait(150);
+      // Not dispatched: a broken signature must never reach the handler.
+      expect(raw.responses.find((r) => r.id === "v1")).toBeUndefined();
+      expect(calls.filter((c) => c.method === "get_public_key")).toHaveLength(0);
+      // Not remembered either: the genuine event must still be answered.
+      await raw.publish(genuine);
+      expect(await raw.waitFor("v1", 1500)).toEqual({ id: "v1", result: userPubkey });
+      expect(calls.filter((c) => c.method === "get_public_key")).toHaveLength(1);
+    });
+
     it("a signature-corrupted copy from a malicious relay cannot suppress the genuine request from an honest one", async () => {
       // Two relays in the client's set: the server holds one subscription per relay, so a
       // corrupted copy on one and the genuine event on the other both reach the server.
@@ -1144,6 +1181,53 @@ describe("BunkerServer loopback", () => {
       const intruder = `nostrconnect://${getPublicKey(generateSecretKey())}?relay=${encodeURIComponent(relay.url)}&secret=${secret}`;
       await expect(server.acceptNostrConnect(intruder)).rejects.toThrow("secret already in use");
       expect(handlerCalls.filter((c) => c.method === "connect")).toHaveLength(1);
+    });
+  });
+
+  describe("subscription lifecycle", () => {
+    it("a relay asked for again while it is still connecting gets one REQ, not one per request", async () => {
+      const slow = await TestRelay.start(0, { acceptDelayMs: 300 });
+      cleanups.push(() => slow.close());
+      const one = new BunkerServer({ connectionSecretKey: generateSecretKey(), relays: [slow.url], handler: signerHandler(user) });
+      cleanups.push(() => one.stop());
+      const starting = one.start();
+      one.addRelay(slow.url); // same relay, different call, while the handshake is still pending
+      one.addRelay(`WS://127.0.0.1:${slow.port}`); // and a different spelling of it
+      await starting;
+      await wait(100);
+      expect(slow.connections).toBe(1);
+      expect(slow.subscriptionCount).toBe(1);
+    });
+
+    it("a relay released or stopped while it is still connecting opens no REQ once it connects", async () => {
+      // An injected pool: the server does not close its sockets, so the connect completes
+      // after the server lost interest and the guard after ensureRelay is what stops the REQ.
+      const slow = await TestRelay.start(0, { acceptDelayMs: 300 });
+      cleanups.push(() => slow.close());
+      const pool = new SimplePool();
+      cleanups.push(() => pool.close([slow.url, relay.url]));
+
+      const stopped = new BunkerServer({ connectionSecretKey: generateSecretKey(), relays: [slow.url], pool, handler: signerHandler(user) });
+      const starting = stopped.start();
+      await wait(50);
+      await stopped.stop();
+      await starting;
+      await wait(500);
+      expect(slow.connections).toBe(1); // the pool kept its socket
+      expect(slow.subscriptionCount).toBe(0); // but nothing subscribed on it
+
+      const releasing = new BunkerServer({ connectionSecretKey: generateSecretKey(), relays: [relay.url], pool, handler: signerHandler(user) });
+      await releasing.start();
+      cleanups.push(() => releasing.stop());
+      const clientPubkey = getPublicKey(generateSecretKey());
+      const uri = `nostrconnect://${clientPubkey}?relay=${encodeURIComponent(slow.url)}&secret=slow-scan`;
+      const accepting = releasing.acceptNostrConnect(uri).catch(() => null);
+      await wait(50); // the handler has approved; #admit is waiting on the slow relay
+      releasing.disconnectClient(clientPubkey);
+      await accepting;
+      await wait(500);
+      expect(releasing.listeningRelays).toEqual([relay.url]);
+      expect(slow.subscriptionCount).toBe(0);
     });
   });
 
