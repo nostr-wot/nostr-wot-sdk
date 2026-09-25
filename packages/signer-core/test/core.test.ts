@@ -1687,3 +1687,88 @@ describe('a batch in the queue', () => {
     expect(activity.entries).toHaveLength(0);
   });
 });
+
+// ── Revoking an origin ──
+
+describe('revoking an origin', () => {
+  test('clears its getPublicKey cooldown, so a revoked client that reconnects is prompted again', async () => {
+    // The cooldown was cleared only by an account switch or disposal. A host that revokes a
+    // remote client and sees it re-send `connect` inside the window admitted it with no
+    // prompt at all; the host reimplemented the window against a shared clock to refuse it,
+    // which is a window the pipeline owns and the two drift. Revocation now clears it here.
+    const { core, approval } = await fixture(true);
+    await core.handle(req('getPublicKey'));
+    await core.handle(req('getPublicKey'));
+    expect(approval.presented).toHaveLength(1);
+    core.revokeOrigin('example.com');
+    await core.handle(req('getPublicKey'));
+    expect(approval.presented).toHaveLength(2);
+  });
+
+  test('leaves another origin\'s cooldown alone', async () => {
+    const { core, approval } = await fixture(true);
+    const other = { ...req('getPublicKey'), origin: { kind: 'web' as const, identifier: 'other.example' } };
+    await core.handle(req('getPublicKey'));
+    await core.handle(other);
+    expect(approval.presented).toHaveLength(2);
+    core.revokeOrigin('example.com');
+    await core.handle({ ...other, id: 'other_again' });
+    expect(approval.presented).toHaveLength(2);
+  });
+
+  test('rejects everything it has queued, single requests and batches, with the reason, and cancels their prompts', async () => {
+    const { core, approval } = await fixture('never');
+    const single = req('signEvent', { kind: 1 });
+    const batch = batchReq([sign(1), sign(7)]);
+    const other = { ...req('signEvent', { kind: 1 }), origin: { kind: 'web' as const, identifier: 'other.example' } };
+    const a = core.handle(single);
+    const b = core.handleBatch(batch);
+    const c = core.handle(other);
+    for (const promise of [a, b, c]) promise.catch(() => {});
+    await settle();
+    expect(core.pending()).toHaveLength(3);
+    expect(core.revokeOrigin('example.com', 'Client revoked')).toBe(2);
+    await expect(a).rejects.toMatchObject({ code: 'rejected', message: 'Client revoked' });
+    await expect(b).rejects.toMatchObject({ code: 'rejected', message: 'Client revoked' });
+    expect(approval.cancelled.map((entry) => entry.id).sort()).toEqual([single.id, batch.id].sort());
+    expect(approval.cancelled.every((entry) => entry.origin === 'example.com' && entry.reason === 'Client revoked')).toBe(true);
+    expect(core.pending().map((entry) => entry.origin)).toEqual(['other.example']);
+    core.cancel('other.example', other.id);
+    await expect(c).rejects.toMatchObject({ code: 'rejected' });
+  });
+
+  test('is keyed like everything else: a nip46 client is revoked by its permission key', async () => {
+    const { core, approval } = await fixture(true);
+    const client = { ...req('getPublicKey'), origin: { kind: 'nip46' as const, identifier: 'AB'.repeat(32) } };
+    await core.handle(client);
+    await core.handle({ ...client, id: 'again' });
+    expect(approval.presented).toHaveLength(1);
+    core.revokeOrigin(`nip46:${'ab'.repeat(32)}`);
+    await core.handle({ ...client, id: 'after' });
+    expect(approval.presented).toHaveLength(2);
+  });
+
+  test('clearCooldown forgets the auto-approve alone and touches nothing queued', async () => {
+    const { core, approval } = await fixture(true);
+    approval.decide = async (request) =>
+      request.method === 'getPublicKey' ? { allow: true } : new Promise<ApprovalDecision>(() => {});
+    await core.handle(req('getPublicKey'));
+    const pending = core.handle(req('signEvent', { kind: 1 }));
+    pending.catch(() => {});
+    await settle();
+    expect(core.pending()).toHaveLength(1);
+    core.clearCooldown('example.com');
+    expect(core.pending()).toHaveLength(1);
+    expect(approval.cancelled).toHaveLength(0);
+    await core.handle(req('getPublicKey'));
+    expect(approval.presented.filter((entry) => entry.request.method === 'getPublicKey')).toHaveLength(2);
+  });
+
+  test('a revoked origin can be prompted again afterwards: revocation is not a deny', async () => {
+    const { core, approval } = await fixture(true);
+    core.revokeOrigin('example.com');
+    const signed = (await core.handle(req('signEvent', { kind: 1 }))) as Event;
+    expect(verifyEvent(signed)).toBe(true);
+    expect(approval.presented).toHaveLength(1);
+  });
+});

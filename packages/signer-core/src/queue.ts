@@ -168,6 +168,16 @@ export class ApprovalQueue {
     return this.#rejectWhere((entry) => entry.accountId === accountId, 'account_switched', reason);
   }
 
+  /**
+   * Reject everything queued for an origin, whatever kind and whatever account. Called when
+   * the host revokes a client, so a prompt already on screen for it cannot be approved into an
+   * answer for a caller the host has cut off. Returns how many were rejected.
+   */
+  rejectPendingForOrigin(origin: string, reason: string): number {
+    if (!origin) return 0;
+    return this.#rejectWhere((entry) => entry.origin === origin, 'rejected', reason);
+  }
+
   /** Reject everything and refuse further work. */
   dispose(): void {
     this.#disposed = true;

@@ -218,3 +218,27 @@ describe('external rejection', () => {
     queue.dispose();
   });
 });
+
+describe('rejecting an origin', () => {
+  test('rejectPendingForOrigin rejects only that origin, every kind, with the reason given', async () => {
+    const { queue, cancelled } = build();
+    const mine = entry('approval', 'example.com');
+    const marker = entry('unlock', 'example.com');
+    const remote = entry('remote', 'example.com');
+    const theirs = entry('approval', 'other.example');
+    const a = queue.track(mine, never);
+    const b = queue.track(marker, never);
+    const c = queue.track(remote, never);
+    const d = queue.track(theirs, never);
+    for (const promise of [a, b, c, d]) promise.catch(() => {});
+    expect(queue.rejectPendingForOrigin('example.com', 'Client revoked')).toBe(3);
+    await expect(a).rejects.toMatchObject({ code: 'rejected', message: 'Client revoked' });
+    await expect(b).rejects.toMatchObject({ code: 'rejected', message: 'Client revoked' });
+    await expect(c).rejects.toMatchObject({ code: 'rejected', message: 'Client revoked' });
+    expect(queue.pending().map((e) => e.id)).toEqual([theirs.id]);
+    expect(cancelled.map((c) => c.id).sort()).toEqual([mine.id, marker.id, remote.id].sort());
+    expect(queue.rejectPendingForOrigin('example.com', 'again')).toBe(0);
+    expect(queue.rejectPendingForOrigin('', 'nothing')).toBe(0);
+    queue.dispose();
+  });
+});

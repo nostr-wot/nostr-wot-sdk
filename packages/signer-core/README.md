@@ -63,6 +63,14 @@ It rejects everything queued for the previous account and clears the `getPublicK
 cooldown, so a caller cannot receive the new account's identity from a prompt shown for the
 old one.
 
+When the host stops trusting a caller (a remote client revoked, a paired device removed, a
+site forgotten), call `core.revokeOrigin(originKey, reason?)`. It clears that origin's
+`getPublicKey` cooldown, which would otherwise admit a revoked client's next `connect`
+without a prompt for up to a minute, and rejects everything the origin has queued, prompts
+on screen included. It is `onActiveAccountChanged` scoped to an origin. It is not a deny:
+store a permission for that. `core.clearCooldown(originKey)` is the narrow form, for
+re-asking without cutting the caller off.
+
 ## Params per method
 
 | Method | `params` |

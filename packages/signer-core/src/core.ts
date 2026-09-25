@@ -202,6 +202,39 @@ export class SignerCore {
   }
 
   /**
+   * Forget the `getPublicKey` auto-approve an origin earned, so its next call prompts again.
+   *
+   * `origin` is the permission key as {@link pending} reports it and {@link cancel} takes it.
+   * Nothing queued is touched; this is the narrow tool, for a host that wants to re-ask
+   * without cutting the caller off. Revocation wants {@link revokeOrigin}.
+   */
+  clearCooldown(origin: string): void {
+    this.#cooldowns.delete(origin);
+  }
+
+  /**
+   * The one entry point for "this caller is no longer trusted": revoking a remote client,
+   * disconnecting a paired device, forgetting a site.
+   *
+   * Two things assume an origin is still welcome, and both are undone here. The cooldown
+   * would otherwise admit a revoked client's next `connect` with no prompt for up to a
+   * minute after the host cut it off, which the host cannot fix from outside without
+   * reimplementing a window this pipeline owns. And anything the origin has queued, a
+   * prompt on screen included, would otherwise still be answerable in its favour; it is
+   * rejected with `reason`, single requests and batches alike, and the approval port is
+   * told to close each prompt. This is {@link onActiveAccountChanged} scoped to an origin
+   * instead of an account.
+   *
+   * Not a deny: nothing is persisted, and the origin's next request runs the cascade as
+   * usual. A host that wants it refused stores a permission. Returns how many pending
+   * requests were rejected.
+   */
+  revokeOrigin(origin: string, reason = 'Origin revoked'): number {
+    this.clearCooldown(origin);
+    return this.#queue.rejectPendingForOrigin(origin, reason);
+  }
+
+  /**
    * Run one request through the pipeline and answer it.
    *
    * Resolves with the method's result: a hex pubkey, a signed event, a relay map, a
