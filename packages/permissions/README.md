@@ -132,10 +132,16 @@ run on one rule: nothing platform-specific is reached for, and what a host must 
 injected or declared. Two globals are declared requirements of the family rather than
 avoided, because `@noble/hashes` and `@noble/ciphers` use them internally and the vault and
 accounts packages use them for the same UTF-8 conversions: **`TextEncoder`** and
-**`TextDecoder`**. Node, browsers and Hermes all have them; a host that somehow lacks one
-polyfills it before importing. Everything else these packages need beyond ES2022 is injected
-as a port. `structuredClone`, WebCrypto, the DOM and the WebExtension namespaces are never
-used, and `packages/vault/test/boundaries.test.ts` plus the ESLint config enforce that.
+**`TextDecoder`**. Two more are required and easy to miss because nothing in these packages'
+own source names them: **`crypto.getRandomValues`** on `globalThis`, which `@noble`'s
+`randomBytes` reaches for (the vault's salt, IV and cache key; the ncryptsec salt and nonce)
+and THROWS without — on Hermes that means importing `react-native-get-random-values` before
+anything else — and timers, **`setTimeout`** / `clearTimeout`, which run the vault's auto-lock
+and the queue's request timeout. Node and browsers have all four; a React Native host
+polyfills the random source. Storage, the clock and password stretching are injected as
+ports. `structuredClone`, `URL`, WebCrypto's `subtle`, the DOM and the WebExtension namespaces
+are never used, and `packages/vault/test/boundaries.test.ts` plus the ESLint config enforce
+that.
 
 This package itself uses neither `TextEncoder` nor `TextDecoder`, and clones the permission
 tree with a JSON round trip. Its origin parsing is its own and never consults the host's `URL`.
