@@ -67,7 +67,8 @@ When the host stops trusting a caller (a remote client revoked, a paired device 
 site forgotten), call `core.revokeOrigin(originKey, reason?)`. It clears that origin's
 `getPublicKey` cooldown, which would otherwise admit a revoked client's next `connect`
 without a prompt for up to a minute, and rejects everything the origin has queued, prompts
-on screen included, and stops a batch already executing between items. The key is
+on screen included, and stops a batch already executing between items — the items it had
+already signed come back signed, the rest as `rejected` carrying the reason. The key is
 canonicalised as the boundary canonicalises it, and every spelling of a site is covered:
 `example.com` revokes `https://example.com` and `http://example.com:8080`, and the other way
 round. It is `onActiveAccountChanged` scoped to an origin. It is not a deny: store a
@@ -291,9 +292,21 @@ in the same order. What differs is deliberate, and each rule is written on `#run
   message }`, in order. Each item is signed in its own `withPrivkey` scope, so eight of ten
   sign and the vault locks gives eight signatures and two `vault_locked` outcomes; one
   undecryptable message is one `operation_failed`, not a failed batch. A refusal of the batch
-  as a whole (malformed, denied, rejected by the user, timed out, the account switched, the
-  vault locked with no way to open it) rejects with a `SignerError` like `handle` does, and a
-  switch anywhere between the prompt and the last item refuses every item, signed or not.
+  as a whole rejects with a `SignerError` like `handle` does, but only when it is decided
+  *before* execution begins: malformed, denied, rejected by the user, timed out, the account
+  switched while the prompt was open, the vault locked with no way to open it. Nothing had
+  been computed then, so there is nothing to report per item.
+- **A switch or a revocation partway through is reported per item too.** Once the first item
+  has been attempted the answer is always a `BatchResult`. A revocation after item 8 of 10
+  gives eight signatures and two `{ ok: false, code: 'rejected' }` outcomes carrying the
+  host's revocation reason; an account switch gives eight and two `account_switched`. The
+  eight were computed under an account and a permission valid at the moment each ran, with
+  the key pinned to the account the prompt showed, and withholding them would not un-sign
+  them — it would only tell the caller that nothing happened when eight things did, and write
+  ten denials into the activity log that never occurred. The distinct codes are what let a
+  caller tell a batch cut off from outside apart from items that failed on their own, and
+  tell it not to retry a revoked origin. No further signature is computed after the stop; the
+  reasoning, and the defensible opposite, are written out on `#runBatch` in `core.ts`.
 - **The host gets a turn between items.** Each gap between two items is a real macrotask, not
   an `await Promise.resolve()`, so a pending timer, a frame and a gesture can run in it. Without
   it a 64-item post-quantum batch was 1.4 seconds of unbroken CPU during which a 1 ms timer did

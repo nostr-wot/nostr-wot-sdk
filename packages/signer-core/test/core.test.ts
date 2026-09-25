@@ -1460,12 +1460,12 @@ describe('partial failure inside a batch', () => {
     expect(activity.entries[1]).not.toHaveProperty('ciphertext');
   });
 
-  test('a switch landing mid-batch refuses the whole batch, stops signing, and discards what was signed', async () => {
-    // The account is checked between items, as the lock is: a switch at item 5 of 10 ends
-    // the batch there. Items 6 to 10 are never signed (no cryptographic work with a key the
-    // user has just moved away from), and items 1 to 5, signed by the right key, are
-    // discarded rather than returned, because they answer a question the user is no
-    // longer asking.
+  test('a switch after item 8 of 10 returns the eight signed and refuses the last two as account_switched', async () => {
+    // The account is checked between items, as the lock is: a switch at item 8 of 10 ends
+    // the batch there. Items 9 and 10 are never signed (no cryptographic work with a key the
+    // user has just moved away from), and items 1 to 8, computed under the account the
+    // prompt showed, are reported as signed. Per-item fidelity, not a collapsed batch:
+    // see the 'Partial failure' note on `#runBatch`.
     const one = account('acct_1', PRIVKEY_1);
     const two = account('acct_2', PRIVKEY_2);
     const { core, vault, activity } = await fixture(true, { accounts: [one, two] });
@@ -1475,16 +1475,31 @@ describe('partial failure inside a batch', () => {
       original(accountId, async (key) => {
         const result = (await fn(key)) as Event;
         computed.push(result);
-        if (computed.length === 5) await vault.setActiveAccountId('acct_2');
+        if (computed.length === 8) await vault.setActiveAccountId('acct_2');
         return result;
       }),
     );
     const batch = batchReq(Array.from({ length: 10 }, () => sign(7)));
-    await expect(core.handleBatch(batch)).rejects.toMatchObject({ code: 'account_switched' });
-    expect(computed).toHaveLength(5);
+    const result = await core.handleBatch(batch);
+    expect(computed).toHaveLength(8);
     expect(computed.every((event) => event.pubkey === PUBKEY_1 && verifyEvent(event))).toBe(true);
-    expect(activity.entries).toHaveLength(10);
-    expect(activity.entries.every((entry) => entry.decision === 'deny' && entry.code === 'account_switched')).toBe(true);
+    expect(result.items.map((item) => item.ok)).toEqual([...Array<boolean>(8).fill(true), false, false]);
+    for (const item of result.items.slice(0, 8)) {
+      const signed = (item as { result: Event }).result;
+      expect(verifyEvent(signed)).toBe(true);
+      expect(signed.pubkey).toBe(PUBKEY_1);
+    }
+    expect(result.items.slice(8)).toEqual([
+      { id: 'i8', ok: false, code: 'account_switched', message: 'Account switched' },
+      { id: 'i9', ok: false, code: 'account_switched', message: 'Account switched' },
+    ]);
+    // The log says eight signatures happened, because they did, and two did not.
+    expect(activity.entries.map((entry) => [entry.requestId, entry.decision, entry.code])).toEqual([
+      ...Array.from({ length: 8 }, (_, index) => [`i${index}`, 'allow', undefined]),
+      ['i8', 'deny', 'account_switched'],
+      ['i9', 'deny', 'account_switched'],
+    ]);
+    expect(activity.entries.every((entry) => entry.batchId === batch.id && entry.pubkey === PUBKEY_1)).toBe(true);
   });
 
   test('a lock then a reopen inside an item voids that item as vault_locked, and the items after it sign', async () => {
@@ -1780,26 +1795,43 @@ describe('revoking an origin', () => {
     expect(fresh.approval.presented).toHaveLength(5);
   });
 
-  test('a revoke landing while an approved batch executes stops it between items, and nothing is returned', async () => {
+  test('a revoke after item 8 of 10 returns the eight signed and refuses the last two, naming the revocation', async () => {
     // Approval was given, but the host has cut the caller off since: no further signatures
-    // are computed for it, and the ones already computed are discarded with the batch.
+    // are computed for it, and the eight already computed are reported as signed, because
+    // they were, under a permission that was valid when each one ran. The two that never
+    // ran carry the host's own revocation reason. See the 'Partial failure' note on
+    // `#runBatch` for why the signed items are returned rather than withheld.
     const { core, vault, activity } = await fixture(true);
     const original = vault.withPrivkey.bind(vault);
     let calls = 0;
     vi.spyOn(vault, 'withPrivkey').mockImplementation((accountId, fn) =>
       original(accountId, async (key) => {
         const result = await fn(key);
-        if (++calls === 3) core.revokeOrigin('example.com', 'Client revoked');
+        if (++calls === 8) core.revokeOrigin('example.com', 'Client revoked');
         return result;
       }),
     );
-    await expect(core.handleBatch(batchReq(Array.from({ length: 10 }, () => sign(7))))).rejects.toMatchObject({
-      code: 'rejected',
-      message: 'Client revoked',
-    });
-    expect(calls).toBe(3);
-    expect(activity.entries).toHaveLength(10);
-    expect(activity.entries.every((entry) => entry.decision === 'deny' && entry.code === 'rejected')).toBe(true);
+    const batch = batchReq(Array.from({ length: 10 }, () => sign(7)));
+    const result = await core.handleBatch(batch);
+    expect(calls).toBe(8);
+    expect(result.id).toBe(batch.id);
+    expect(result.items.map((item) => item.ok)).toEqual([...Array<boolean>(8).fill(true), false, false]);
+    for (const item of result.items.slice(0, 8)) {
+      const signed = (item as { result: Event }).result;
+      expect(verifyEvent(signed)).toBe(true);
+      expect(signed.pubkey).toBe(PUBKEY_1);
+    }
+    expect(result.items.slice(8)).toEqual([
+      { id: 'i8', ok: false, code: 'rejected', message: 'Client revoked' },
+      { id: 'i9', ok: false, code: 'rejected', message: 'Client revoked' },
+    ]);
+    // The log records eight signatures and two refusals, not ten denials that never happened.
+    expect(activity.entries.map((entry) => [entry.requestId, entry.decision, entry.code, entry.reason])).toEqual([
+      ...Array.from({ length: 8 }, (_, index) => [`i${index}`, 'allow', undefined, undefined]),
+      ['i8', 'deny', 'rejected', 'Client revoked'],
+      ['i9', 'deny', 'rejected', 'Client revoked'],
+    ]);
+    expect(activity.entries.every((entry) => entry.batchId === batch.id)).toBe(true);
   });
 
   test('a revoked origin can be prompted again afterwards: revocation is not a deny', async () => {

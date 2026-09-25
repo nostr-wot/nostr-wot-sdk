@@ -352,11 +352,14 @@ export class SignerCore {
    * once, by whatever spelling it holds.
    *
    * A batch already approved and executing is stopped too, between items: no further
-   * signature is computed for a caller the host has cut off, and the ones already computed
-   * are discarded with the batch, exactly as a switch mid-batch discards them. A single
-   * request inside `withPrivkey` cannot be interrupted and completes; it is milliseconds
-   * of pure computation, and the host, having revoked the client, is the one that no
-   * longer delivers the answer.
+   * signature is computed for a caller the host has cut off. The items that had already been
+   * signed are reported as signed and the rest carry `reason` as a `rejected` outcome, so the
+   * host and the caller both learn exactly where the revocation landed; the reasoning, and
+   * the opposite choice, are written on `#runBatch`. A single request inside `withPrivkey`
+   * cannot be interrupted and completes; it is milliseconds of pure computation, and the
+   * host, having revoked the client, is the one that no longer delivers the answer. Either
+   * way the host holds the result and can drop it — what it cannot reconstruct on its own is
+   * which items ran.
    *
    * Not a deny: nothing is persisted, and the origin's next request runs the cascade as
    * usual. A host that wants it refused stores a permission. Returns how many pending
@@ -418,9 +421,14 @@ export class SignerCore {
    *
    * Resolves with a {@link BatchResult} once the batch as a whole was allowed to execute,
    * with every item's own result or refusal in it. Rejects with a {@link SignerError} when
-   * the batch as a whole was refused: malformed, no account, a denied item, refused by the
-   * user, timed out, the account switched, the vault locked and could not be opened. Either
-   * way every item is written to the activity log under the batch id. Single requests through
+   * the batch as a whole was refused *before* execution began: malformed, no account, a
+   * denied item, refused by the user, timed out, the account switched while the prompt was
+   * open, the vault locked and could not be opened. That is the whole line: nothing had been
+   * computed yet, so there is nothing to report per item. Once the first item has been
+   * attempted the answer is always a `BatchResult`, including when an account switch or a
+   * revocation cuts the batch off partway — those items come back refused by name rather
+   * than as a thrown batch-wide failure. Either way every item is written to the activity
+   * log under the batch id, with the outcome it actually had. Single requests through
    * {@link handle} are unchanged; this is an addition to the contract.
    */
   async handleBatch(batch: SignerBatchRequest): Promise<BatchResult> {
@@ -623,11 +631,44 @@ export class SignerCore {
    * returned as signed. Eight of ten sign, the vault locks: the caller gets eight
    * signatures and two `vault_locked` outcomes, by id, and retries two. An atomic batch
    * would throw the eight away for no gain in safety, since a signature is not a side
-   * effect, and would turn one undecryptable message into a failed batch of ten. What is
-   * never partial is the account: a switch anywhere between the prompt and the end of the
-   * last item refuses the whole batch, items already signed included, because those are
-   * answers to a question the user is no longer asking, exactly as a single request is
-   * refused after execute.
+   * effect, and would turn one undecryptable message into a failed batch of ten.
+   *
+   * **An account switch or a revocation mid-batch is reported the same way, per item.**
+   * This is a deliberate reversal of the first design, which refused the whole batch with
+   * the items already signed included, on the grounds that those answer a question the user
+   * is no longer asking. That reasoning does not survive the batch contract, whose entire
+   * point is that a caller can tell exactly what was signed:
+   *
+   * - The eight signatures exist. Each was computed under an account and a permission that
+   *   were valid at the moment it ran, over exactly the item the prompt showed, with the key
+   *   pinned to `account.id` and its pubkey re-checked inside the scope — so none of them can
+   *   be the next account's. Withholding them does not un-sign them; it makes the report
+   *   false.
+   * - A caller told only "the batch failed" either re-sends all ten, publishing eight
+   *   near-duplicate events, or believes nothing happened when eight things did. Neither is
+   *   safer than the truth.
+   * - The activity log is the one place a user looks to find out what their key did.
+   *   Recording ten denials when eight signatures were produced is a false record there, and
+   *   that is worse than anything the collapse was protecting against.
+   * - It is already what the single-request path does under revocation: a request inside
+   *   `withPrivkey` completes and is answered, and the host, having cut the client off, is
+   *   the one that stops delivering (see {@link revokeOrigin}). The batch path was the only
+   *   place that discarded completed work.
+   *
+   * The opposite choice is defensible, and is recorded here so the next reader knows this one
+   * was made and not missed: withhold everything, on the theory that a revoked origin should
+   * get nothing further from this signer, and that handing a caller eight signatures after
+   * the host stopped trusting it hands it publishable material. That is a real argument, and
+   * it is the host's to act on — it can drop the result it was given — whereas only this core
+   * can say which eight. The core reports the truth; the host decides delivery.
+   *
+   * What the stop may never be is silent or indistinguishable. The items that did not run
+   * carry `account_switched`, or `rejected` with the host's own revocation reason, so a
+   * caller can tell a batch cut off from outside apart from items that failed on their own,
+   * and knows not to retry against a revoked origin. And no further cryptographic work is
+   * done for it: the check runs between items, before the next signature, never after the
+   * fact. A single request is still refused outright after execute, because there is no
+   * per-item truth to report about one item — the batch is the only shape that has one.
    *
    * **The queue.** A batch is one entry, so it counts once toward the per-origin cap. The
    * cap blunts prompt spam, and a batch is one prompt; its size is bounded on its own at
@@ -723,17 +764,30 @@ export class SignerCore {
     // 5. Execute, each item in its own key scope. 6. Zero, on every path, per item.
     //    Between items the batch is re-checked the way the lock is: a switch, or a
     //    revocation of this origin, ends it there. No further cryptographic work is done
-    //    with a key the user has moved away from or for a caller the host has cut off, and
-    //    what was already computed is discarded with the batch. And then the thread is handed
-    //    back for a turn (`yieldToHost`), so the device stays alive through a long batch: the
-    //    checks above are all microtask awaits, which is not a frame. See `yieldToHost`.
+    //    with a key the user has moved away from or for a caller the host has cut off; the
+    //    items that already ran keep their real outcome and the rest are refused by name,
+    //    for the reasons written on this method. And then the thread is handed back for a
+    //    turn (`yieldToHost`), so the device stays alive through a long batch: the checks
+    //    above are all microtask awaits, which is not a frame. See `yieldToHost`.
+    //
+    //    There is no check after the last item any more, and its absence is the fix. It used
+    //    to be what discarded the whole batch; with per-item truth there is no outcome left
+    //    for it to change (every item has either run or been refused), and keeping it would
+    //    mean a revocation landing during the last signature threw away the other nine.
     context.phase = 'execute';
     const revokedBefore = this.#revocationSerial;
     const runs: ItemRun[] = [];
+    // The one refusal that ends the batch instead of one item. Set at most once: from there
+    // on every remaining item is refused with it and nothing is computed.
+    let stopped: SignerError | null = null;
     for (const [index, item] of items.entries()) {
-      if (index > 0) {
-        await this.#assertStillWanted(account, originKey, revokedBefore);
-        await yieldToHost();
+      if (index > 0 && !stopped) {
+        stopped = await this.#stillWanted(account, originKey, revokedBefore);
+        if (!stopped) await yieldToHost();
+      }
+      if (stopped) {
+        runs.push({ id: item.id, ok: false, error: stopped, refusal: stopped });
+        continue;
       }
       try {
         runs.push({ id: item.id, ok: true, result: await this.#signLocally(account, prepared[index]!) });
@@ -741,8 +795,6 @@ export class SignerCore {
         runs.push({ id: item.id, ok: false, error, refusal: this.#toSignerError(error, 'execute', item.id) });
       }
     }
-    // Every item's outcome sits behind this check; none is returned unless it passes.
-    await this.#assertStillWanted(account, originKey, revokedBefore);
     return runs;
   }
 
@@ -979,15 +1031,25 @@ export class SignerCore {
   }
 
   /**
-   * Between the items of a batch, and after the last: the account is still the one shown,
-   * and the origin has not been revoked since execution began.
+   * Between the items of a batch: is the account still the one shown, and has the origin
+   * survived since execution began? Answers with the refusal instead of throwing it, because
+   * the caller has to keep the outcomes of the items that already ran and refuse only the
+   * ones that have not — a throw from here is what used to collapse the whole batch into ten
+   * denials of which eight were false. See the 'Partial failure' note on `#runBatch`.
+   *
+   * `null` means carry on.
    */
-  async #assertStillWanted(shown: SafeAccount, originKey: string, revokedBefore: number): Promise<void> {
-    await this.#assertStillActive(shown);
-    if (this.#revocationSerial === revokedBefore) return;
-    for (const [key, { serial, reason }] of this.#revocations) {
-      if (serial > revokedBefore && sameSite(key, originKey)) throw new SignerError('rejected', reason);
+  async #stillWanted(shown: SafeAccount, originKey: string, revokedBefore: number): Promise<SignerError | null> {
+    const current = await this.#identity.getActiveAccount();
+    if (!current || current.id !== shown.id || current.pubkey !== shown.pubkey) {
+      return new SignerError('account_switched', 'Account switched');
     }
+    if (this.#revocationSerial !== revokedBefore) {
+      for (const [key, { serial, reason }] of this.#revocations) {
+        if (serial > revokedBefore && sameSite(key, originKey)) return new SignerError('rejected', reason);
+      }
+    }
+    return null;
   }
 
   /** Persist a prompt's decision, scoped to the event kind unless the host said otherwise. */
