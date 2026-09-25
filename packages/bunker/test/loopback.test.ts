@@ -1354,6 +1354,203 @@ describe("BunkerServer loopback", () => {
       expect(server.exportState().secrets.find((r) => r.secret === claimed.secret)).toMatchObject({ confirmed: true });
     });
 
+    it("restore treats its input as untrusted: the whole state is validated first, and nothing lands otherwise", async () => {
+      const a = await connectWithNostrTools();
+      const good = server.exportState();
+      expect(good.connectionPubkey).toBe(connectionPubkey);
+      const empty = { connectionPubkey, secrets: [], clients: [] };
+      const forgedSk = generateSecretKey();
+      const forgedPubkey = getPublicKey(forgedSk);
+      const rec = good.secrets[0]!;
+      const cases: Array<[RegExp, BunkerState]> = [
+        // a client that never completed a handshake, written straight into storage
+        [/secret/, { ...good, clients: [{ clientPubkey: forgedPubkey, relays: [relay.url], connectedAt: 1 }] }],
+        // a client whose secret is not bound to it
+        [/secret/, { ...good, clients: [{ ...good.clients[0]!, clientPubkey: forgedPubkey }] }],
+        // confirmed with nobody bound: the first presenter would own it for life
+        [/clientPubkey/, { ...good, secrets: [{ secret: "orphan", origin: "bunker", relays: [relay.url], confirmed: true }], clients: [] }],
+        [/duplicate/, { ...good, secrets: [rec, { ...rec, clientPubkey: undefined, confirmed: false }] }],
+        [/relay/, { ...good, clients: [{ ...good.clients[0]!, relays: [] }] }],
+        [/relay/, { ...good, secrets: [{ ...rec, relays: ["not a url"] }] }],
+        [/connection key/, { ...good, connectionPubkey: getPublicKey(generateSecretKey()) }],
+        [/connectedAt/, { ...good, clients: [{ ...good.clients[0]!, connectedAt: Number.NaN }] }],
+      ];
+      for (const [reason, state] of cases) {
+        const fresh = new BunkerServer({ connectionSecretKey: connectionSk, relays: [relay.url], handler: signerHandler(user) });
+        await fresh.start();
+        cleanups.push(() => fresh.stop());
+        await expect(fresh.restore(state), JSON.stringify(state)).rejects.toThrow(reason);
+        expect(fresh.exportState()).toEqual(empty); // atomic: nothing of a rejected state is applied
+        expect(fresh.connectedClients).toEqual([]);
+      }
+      // The forged client cannot sign through any of those servers, nor through this one.
+      const raw = new RawClient([relay.url], connectionPubkey);
+      cleanups.push(() => raw.close());
+      await raw.listen();
+      await raw.send("f1", "get_public_key", []);
+      expect(await raw.waitFor("f1")).toEqual({ id: "f1", error: "unauthorized: connect first" });
+      expect(await a.getPublicKey()).toBe(userPubkey);
+    });
+
+    it("restore is refused while an approval is pending, and the approval completes untouched", async () => {
+      const gate = deferred<string>();
+      const gated = new BunkerServer({
+        connectionSecretKey: generateSecretKey(),
+        relays: [relay.url],
+        handler: async (req, ctx) => (req.method === "connect" ? gate.promise : signerHandler(user)(req, ctx)),
+      });
+      await gated.start();
+      cleanups.push(() => gated.stop());
+      const before = gated.exportState();
+      const { uri, secret } = gated.createBunkerUri();
+      const bp = (await parseBunkerInput(uri))!;
+      const pool = new SimplePool();
+      cleanups.push(() => pool.close([relay.url]));
+      const a = BunkerSigner.fromBunker(generateSecretKey(), bp, { pool });
+      const connecting = a.connect();
+      await wait(100); // pending inside the handler
+      await expect(gated.restore({ ...before, secrets: [{ secret, origin: "bunker", relays: [relay.url], confirmed: false }] })).rejects.toThrow(/pending/);
+      gate.resolve("ack");
+      await connecting;
+      expect(await a.getPublicKey()).toBe(userPubkey);
+      expect(gated.exportState().secrets[0]).toMatchObject({ secret, confirmed: true });
+      await a.close();
+    });
+
+    it("revoking a secret cancels its pending approval and ends its bound client's session", async () => {
+      const gate = deferred<string>();
+      const gated = new BunkerServer({
+        connectionSecretKey: generateSecretKey(),
+        relays: [relay.url],
+        handler: async (req, ctx) => (req.method === "connect" && req.params[3]?.includes("slow") ? gate.promise : signerHandler(user)(req, ctx)),
+      });
+      await gated.start();
+      cleanups.push(() => gated.stop());
+      const pool = new SimplePool();
+      cleanups.push(() => pool.close([relay.url]));
+
+      const pendingMint = gated.createBunkerUri();
+      const slow = BunkerSigner.fromBunker(generateSecretKey(), (await parseBunkerInput(pendingMint.uri))!, { pool });
+      const connecting = slow.connect({ name: "slow app" });
+      await wait(100);
+      expect(gated.revokeSecret(pendingMint.secret)).toBe(true);
+      gate.resolve("ack"); // the user approves, but the secret is gone
+      await expect(connecting).rejects.toBe("secret revoked");
+      expect(gated.connectedClients).toEqual([]);
+      expect(gated.exportState().secrets).toEqual([]);
+      await slow.close();
+
+      const liveMint = gated.createBunkerUri();
+      const live = BunkerSigner.fromBunker(generateSecretKey(), (await parseBunkerInput(liveMint.uri))!, { pool });
+      await live.connect();
+      expect(gated.connectedClients).toHaveLength(1);
+      expect(gated.revokeSecret(liveMint.secret)).toBe(true);
+      expect(gated.connectedClients).toEqual([]);
+      await expect(live.getPublicKey()).rejects.toBe("unauthorized: connect first");
+      await live.close();
+    });
+
+    it("secrets, clients and relays per client are all bounded", async () => {
+      const capped = new BunkerServer({
+        connectionSecretKey: generateSecretKey(),
+        relays: [relay.url],
+        maxSecrets: 2,
+        maxClients: 1,
+        maxRelaysPerClient: 2,
+        handler: signerHandler(user),
+      });
+      await capped.start();
+      cleanups.push(() => capped.stop());
+      const first = capped.createBunkerUri();
+      const second = capped.createBunkerUri();
+      expect(() => capped.createBunkerUri()).toThrow(/too many secrets/);
+      expect(capped.revokeSecret(second.secret)).toBe(true);
+      const third = capped.createBunkerUri(); // room again after the revoke
+
+      const pool = new SimplePool();
+      cleanups.push(() => pool.close([relay.url]));
+      const a = BunkerSigner.fromBunker(generateSecretKey(), (await parseBunkerInput(first.uri))!, { pool });
+      await a.connect();
+      const b = BunkerSigner.fromBunker(generateSecretKey(), (await parseBunkerInput(third.uri))!, { pool });
+      await expect(b.connect()).rejects.toBe("too many clients");
+      await b.close();
+      await a.close();
+
+      const many = ["ws://127.0.0.1:1", "ws://127.0.0.1:2", "ws://127.0.0.1:3"].map((u) => `relay=${encodeURIComponent(u)}`).join("&");
+      await expect(capped.acceptNostrConnect(`nostrconnect://${getPublicKey(generateSecretKey())}?${many}&secret=x`)).rejects.toThrow(/too many relays/);
+      const state = capped.exportState();
+      await expect(capped.restore({ ...state, clients: [{ ...state.clients[0]!, relays: ["ws://127.0.0.1:1/", "ws://127.0.0.1:2/", "ws://127.0.0.1:3/"] }] })).rejects.toThrow(/relays/);
+    });
+
+    it("a restored unclaimed secret keeps its expiry", async () => {
+      const minted = server.createBunkerUri({ ttlMs: 200 });
+      const state = server.exportState();
+      expect(state.secrets[0]!.expiresAt).toEqual(expect.any(Number));
+      const next = await restart(server, state);
+      await wait(250);
+      const pool = new SimplePool();
+      cleanups.push(() => pool.close([relay.url]));
+      const late = BunkerSigner.fromBunker(generateSecretKey(), (await parseBunkerInput(minted.uri))!, { pool });
+      await expect(late.connect()).rejects.toBe("invalid secret");
+      await late.close();
+      expect(next.exportState().secrets).toEqual([]);
+    });
+
+    it("a pending binding is in the persisted state before approval, and gone again after rejection", async () => {
+      // A process that dies during approval must come back knowing which client holds the secret.
+      const snapshots: BunkerState[] = [];
+      const gate = deferred<string>();
+      const watched = new BunkerServer({
+        connectionSecretKey: generateSecretKey(),
+        relays: [relay.url],
+        onStateChange: (state) => snapshots.push(state),
+        handler: async (req, ctx) => (req.method === "connect" ? gate.promise : signerHandler(user)(req, ctx)),
+      });
+      await watched.start();
+      cleanups.push(() => watched.stop());
+      const { uri, secret } = watched.createBunkerUri();
+      const pool = new SimplePool();
+      cleanups.push(() => pool.close([relay.url]));
+      const clientSk = generateSecretKey();
+      const a = BunkerSigner.fromBunker(clientSk, (await parseBunkerInput(uri))!, { pool });
+      const connecting = a.connect();
+      await wait(100);
+      expect(snapshots[snapshots.length - 1]!.secrets[0]).toEqual({ secret, origin: "bunker", relays: [relay.url], clientPubkey: getPublicKey(clientSk), confirmed: false, expiresAt: expect.any(Number) });
+      gate.reject(new BunkerError("user declined"));
+      await expect(connecting).rejects.toBe("user declined");
+      expect(snapshots[snapshots.length - 1]!.secrets[0]).toEqual({ secret, origin: "bunker", relays: [relay.url], confirmed: false, expiresAt: expect.any(Number) });
+      await a.close();
+    });
+
+    it("a secret whose approval is pending does not lapse under it", async () => {
+      const gate = deferred<string>();
+      const gated = new BunkerServer({
+        connectionSecretKey: generateSecretKey(),
+        relays: [relay.url],
+        handler: async (req, ctx) => (req.method === "connect" ? gate.promise : signerHandler(user)(req, ctx)),
+      });
+      await gated.start();
+      cleanups.push(() => gated.stop());
+      const { uri, secret } = gated.createBunkerUri({ ttlMs: 100 });
+      const pool = new SimplePool();
+      cleanups.push(() => pool.close([relay.url]));
+      const a = BunkerSigner.fromBunker(generateSecretKey(), (await parseBunkerInput(uri))!, { pool });
+      const connecting = a.connect();
+      await wait(200); // well past the TTL, still pending
+      gated.createBunkerUri(); // a mint would sweep anything lapsed
+      gate.resolve("ack");
+      await connecting;
+      expect(await a.getPublicKey()).toBe(userPubkey);
+      expect(gated.exportState().secrets.find((r) => r.secret === secret)).toMatchObject({ confirmed: true });
+      await a.close();
+    });
+
+    it("exportState on its own sweeps lapsed unclaimed secrets", async () => {
+      const minted = server.createBunkerUri({ ttlMs: 50 });
+      await wait(100);
+      expect(server.exportState().secrets.map((r) => r.secret)).not.toContain(minted.secret);
+    });
+
     it("the server-level secretTtlMs applies to every mint, and 0 disables it", async () => {
       const ttl = new BunkerServer({ connectionSecretKey: generateSecretKey(), relays: [relay.url], secretTtlMs: 100, handler: signerHandler(user) });
       await ttl.start();
