@@ -1545,28 +1545,80 @@ describe('partial failure inside a batch', () => {
     expect(activity.entries[1]).not.toHaveProperty('ciphertext');
   });
 
-  test('a switch landing mid-batch refuses the whole batch, items already signed included', async () => {
+  test('a switch landing mid-batch refuses the whole batch, stops signing, and discards what was signed', async () => {
+    // The account is checked between items, as the lock is: a switch at item 5 of 10 ends
+    // the batch there. Items 6 to 10 are never signed (no cryptographic work with a key the
+    // user has just moved away from), and items 1 to 5, signed by the right key, are
+    // discarded rather than returned, because they answer a question the user is no
+    // longer asking.
     const one = account('acct_1', PRIVKEY_1);
     const two = account('acct_2', PRIVKEY_2);
     const { core, vault, activity } = await fixture(true, { accounts: [one, two] });
     const original = vault.withPrivkey.bind(vault);
     const computed: Event[] = [];
-    let calls = 0;
     vi.spyOn(vault, 'withPrivkey').mockImplementation((accountId, fn) =>
       original(accountId, async (key) => {
         const result = (await fn(key)) as Event;
         computed.push(result);
-        if (++calls === 5) await vault.setActiveAccountId('acct_2');
+        if (computed.length === 5) await vault.setActiveAccountId('acct_2');
         return result;
       }),
     );
     const batch = batchReq(Array.from({ length: 10 }, () => sign(7)));
     await expect(core.handleBatch(batch)).rejects.toMatchObject({ code: 'account_switched' });
-    // Every item was signed, by the right key: the refusal is the whole property.
-    expect(computed).toHaveLength(10);
+    expect(computed).toHaveLength(5);
     expect(computed.every((event) => event.pubkey === PUBKEY_1 && verifyEvent(event))).toBe(true);
     expect(activity.entries).toHaveLength(10);
     expect(activity.entries.every((entry) => entry.decision === 'deny' && entry.code === 'account_switched')).toBe(true);
+  });
+
+  test('a lock then a reopen inside an item voids that item as vault_locked, and the items after it sign', async () => {
+    // The item's failure is attributed by where the error came from, not by whether the
+    // vault happens to be locked when the pipeline looks. The vault voided this result
+    // because its session moved; that is the lock, whatever the vault's state now.
+    const { core, vault, activity } = await fixture(true);
+    const original = vault.withPrivkey.bind(vault);
+    let calls = 0;
+    vi.spyOn(vault, 'withPrivkey').mockImplementation((accountId, fn) =>
+      original(accountId, async (key) => {
+        const result = await fn(key);
+        if (++calls === 5) {
+          vault.lock();
+          await vault.unlock(PASSWORD);
+        }
+        return result;
+      }),
+    );
+    const result = await core.handleBatch(batchReq(Array.from({ length: 7 }, () => sign(7))));
+    expect(vault.isLocked()).toBe(false);
+    expect(result.items.map((item) => item.ok)).toEqual([true, true, true, true, false, true, true]);
+    expect(result.items[4]).toEqual({ id: 'i4', ok: false, code: 'vault_locked', message: 'Vault is locked' });
+    expect(activity.entries[4]).toMatchObject({ requestId: 'i4', code: 'vault_locked' });
+  });
+
+  test('a cipher failure followed by a lock is still a cipher failure', async () => {
+    // The mirror image: the throw came from the signing step, and the lock landed after
+    // it. Reported as what it was, so the activity log the user reads does not blame the
+    // lock for an undecryptable message.
+    const { core, vault, activity } = await fixture(true);
+    const original = vault.withPrivkey.bind(vault);
+    vi.spyOn(vault, 'withPrivkey').mockImplementation((accountId, fn) =>
+      original(accountId, async (key) => {
+        try {
+          return await fn(key);
+        } catch (error) {
+          vault.lock();
+          throw error;
+        }
+      }),
+    );
+    const result = await core.handleBatch(
+      batchReq([{ method: 'nip04Decrypt', params: { pubkey: PUBKEY_2, ciphertext: 'not-a-ciphertext' } }, sign(1)]),
+    );
+    expect(vault.isLocked()).toBe(true);
+    expect(result.items[0]).toEqual({ id: 'i0', ok: false, code: 'operation_failed', message: 'Operation failed' });
+    expect(result.items[1]).toEqual({ id: 'i1', ok: false, code: 'vault_locked', message: 'Vault is locked' });
+    expect(activity.entries[0]).toMatchObject({ code: 'operation_failed' });
   });
 
   test('a switch landing while the prompt is open refuses the batch, and nothing is remembered', async () => {
@@ -1762,6 +1814,77 @@ describe('revoking an origin', () => {
     expect(approval.cancelled).toHaveLength(0);
     await core.handle(req('getPublicKey'));
     expect(approval.presented.filter((entry) => entry.request.method === 'getPublicKey')).toHaveLength(2);
+  });
+
+  test('the argument is canonicalised as the boundary canonicalises an origin', async () => {
+    // A host revokes by whatever spelling it holds. `EXAMPLE.COM.` is `example.com`, an
+    // http(s) origin is folded the same way, and a nip46 client's hex is lowercased.
+    const { core, approval } = await fixture(true);
+    await core.handle(req('getPublicKey'));
+    await core.handle(req('getPublicKey'));
+    expect(approval.presented).toHaveLength(1);
+    core.revokeOrigin('EXAMPLE.COM.');
+    await core.handle(req('getPublicKey'));
+    expect(approval.presented).toHaveLength(2);
+    const client = { ...req('getPublicKey'), origin: { kind: 'nip46' as const, identifier: 'ab'.repeat(32) } };
+    await core.handle(client);
+    await core.handle({ ...client, id: 'again' });
+    expect(approval.presented).toHaveLength(3);
+    core.revokeOrigin(`nip46:${'AB'.repeat(32)}`);
+    await core.handle({ ...client, id: 'after' });
+    expect(approval.presented).toHaveLength(4);
+  });
+
+  test('one revocation covers every spelling of a site: the origin form and the bare hostname, both ways', async () => {
+    // The cascade reads both forms for one site, so a host had to revoke both to revoke
+    // one. Revocation is about the site, and every key that names its host is covered:
+    // `example.com` revokes `https://example.com` and `http://example.com:8080`, and
+    // `https://example.com` revokes `example.com`. Another host is untouched.
+    const { core, approval } = await fixture('never');
+    const at = (identifier: string) => ({ ...req('signEvent', { kind: 1 }), origin: { kind: 'web' as const, identifier } });
+    const queued = [at('https://example.com'), at('http://example.com:8080'), at('example.com'), at('https://other.example')];
+    const promises = queued.map((request) => core.handle(request));
+    for (const promise of promises) promise.catch(() => {});
+    await settle();
+    expect(core.pending()).toHaveLength(4);
+    expect(core.revokeOrigin('EXAMPLE.COM')).toBe(3);
+    for (const promise of promises.slice(0, 3)) await expect(promise).rejects.toMatchObject({ code: 'rejected' });
+    expect(core.pending().map((entry) => entry.origin)).toEqual(['https://other.example']);
+    expect(approval.cancelled.map((entry) => entry.origin).sort()).toEqual(['example.com', 'http://example.com:8080', 'https://example.com']);
+
+    // And the other way: cooldowns earned under the bare and the origin form, revoked by the origin form.
+    const fresh = await fixture(true);
+    await fresh.core.handle({ ...req('getPublicKey'), origin: { kind: 'web', identifier: 'example.com' } });
+    await fresh.core.handle({ ...req('getPublicKey'), origin: { kind: 'web', identifier: 'https://example.com' } });
+    await fresh.core.handle({ ...req('getPublicKey'), origin: { kind: 'web', identifier: 'https://other.example' } });
+    expect(fresh.approval.presented).toHaveLength(3);
+    fresh.core.revokeOrigin('https://example.com');
+    await fresh.core.handle({ ...req('getPublicKey'), origin: { kind: 'web', identifier: 'example.com' } });
+    await fresh.core.handle({ ...req('getPublicKey'), origin: { kind: 'web', identifier: 'https://example.com' } });
+    await fresh.core.handle({ ...req('getPublicKey'), origin: { kind: 'web', identifier: 'https://other.example' } });
+    expect(fresh.approval.presented).toHaveLength(5);
+  });
+
+  test('a revoke landing while an approved batch executes stops it between items, and nothing is returned', async () => {
+    // Approval was given, but the host has cut the caller off since: no further signatures
+    // are computed for it, and the ones already computed are discarded with the batch.
+    const { core, vault, activity } = await fixture(true);
+    const original = vault.withPrivkey.bind(vault);
+    let calls = 0;
+    vi.spyOn(vault, 'withPrivkey').mockImplementation((accountId, fn) =>
+      original(accountId, async (key) => {
+        const result = await fn(key);
+        if (++calls === 3) core.revokeOrigin('example.com', 'Client revoked');
+        return result;
+      }),
+    );
+    await expect(core.handleBatch(batchReq(Array.from({ length: 10 }, () => sign(7))))).rejects.toMatchObject({
+      code: 'rejected',
+      message: 'Client revoked',
+    });
+    expect(calls).toBe(3);
+    expect(activity.entries).toHaveLength(10);
+    expect(activity.entries.every((entry) => entry.decision === 'deny' && entry.code === 'rejected')).toBe(true);
   });
 
   test('a revoked origin can be prompted again afterwards: revocation is not a deny', async () => {

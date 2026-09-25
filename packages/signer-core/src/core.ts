@@ -37,8 +37,9 @@
 import type { SafeAccount } from '@nostr-wot/accounts';
 import type { Permissions } from '@nostr-wot/permissions';
 import { PrivateKeySigner } from '@nostr-wot/signers';
+import { canonicalHostname, canonicalHttpOrigin, siteScopes } from '@nostr-wot/permissions';
 import type { Vault } from '@nostr-wot/vault';
-import { GET_PUBLIC_KEY_COOLDOWN_MS, KEY_METHODS } from './constants.js';
+import { GET_PUBLIC_KEY_COOLDOWN_MS, KEY_METHODS, ORIGIN_KINDS } from './constants.js';
 import { SignerError, errorMessage } from './errors.js';
 import { ApprovalQueue } from './queue.js';
 import { validateBatchRequest, validateRequest } from './schema.js';
@@ -77,6 +78,52 @@ import type {
  */
 export function permissionOrigin(origin: RequestOrigin): string {
   return origin.kind === 'web' ? origin.identifier : `${origin.kind}:${origin.identifier}`;
+}
+
+/**
+ * A permission key spelled as the boundary spells it, for a host that revokes by whatever
+ * spelling it holds: `EXAMPLE.COM.` is `example.com`, an http(s) origin is folded the same
+ * way `validateRequest` folds it, a nip46 client's hex is lowercased. Anything else is
+ * returned as given.
+ */
+export function canonicalOriginKey(key: string): string {
+  const colon = key.indexOf(':');
+  const prefix = colon === -1 ? '' : key.slice(0, colon);
+  if (prefix !== 'web' && (ORIGIN_KINDS as readonly string[]).includes(prefix)) {
+    return prefix === 'nip46' ? `nip46:${key.slice(colon + 1).toLowerCase()}` : key;
+  }
+  return canonicalHttpOrigin(key) ?? canonicalHostname(key) ?? key;
+}
+
+/**
+ * Whether two canonical keys name the same site. The cascade reads both the origin form
+ * and the bare hostname for one site, so revoking a site has to reach every key that
+ * names its host: `example.com` covers `https://example.com` and `http://example.com:8080`,
+ * and each of those covers `example.com`. A key with no host (`nip55:…`) is only itself.
+ */
+function sameSite(a: string, b: string): boolean {
+  if (a === b) return true;
+  const scopes = siteScopes(b);
+  return siteScopes(a).some((scope) => scopes.includes(scope));
+}
+
+/**
+ * A failure inside the signing step, tagged with where it came from, so the code the
+ * caller sees is attributed by provenance and not by whether the vault happens to be
+ * locked when the pipeline looks. `vault`: `withPrivkey` itself refused or voided the
+ * result (locked, or the session moved mid-callback), which is the lock whatever the
+ * vault's state now. `callback`: the signing backend threw, and `lockedAtThrow` was read
+ * synchronously in its catch, before anything else could run.
+ */
+class ExecuteFailure extends Error {
+  constructor(
+    readonly cause: unknown,
+    readonly source: 'vault' | 'callback',
+    readonly lockedAtThrow: boolean,
+  ) {
+    super(errorMessage(cause));
+    this.name = 'ExecuteFailure';
+  }
 }
 
 /** The id for a log line, from an object whose every read is untrusted and may throw. */
@@ -135,6 +182,9 @@ export class SignerCore {
   readonly #queue: ApprovalQueue;
   /** Per origin key: the `getPublicKey` auto-approve period and the account it was earned for. */
   readonly #cooldowns = new Map<string, Cooldown>();
+  /** Per canonical key, its latest revocation and the host's reason; what a running batch checks. */
+  readonly #revocations = new Map<string, { serial: number; reason: string }>();
+  #revocationSerial = 0;
   #disposed = false;
 
   constructor(deps: SignerCoreDeps) {
@@ -182,6 +232,7 @@ export class SignerCore {
   dispose(): void {
     this.#disposed = true;
     this.#cooldowns.clear();
+    this.#revocations.clear();
     this.#queue.dispose();
   }
 
@@ -209,7 +260,8 @@ export class SignerCore {
    * without cutting the caller off. Revocation wants {@link revokeOrigin}.
    */
   clearCooldown(origin: string): void {
-    this.#cooldowns.delete(origin);
+    const target = canonicalOriginKey(origin);
+    for (const key of this.#cooldowns.keys()) if (sameSite(key, target)) this.#cooldowns.delete(key);
   }
 
   /**
@@ -225,13 +277,30 @@ export class SignerCore {
    * told to close each prompt. This is {@link onActiveAccountChanged} scoped to an origin
    * instead of an account.
    *
+   * `origin` is canonicalised as the boundary canonicalises it, and every key naming the
+   * same site is covered (see {@link canonicalOriginKey} and `sameSite`), so a host revokes
+   * once, by whatever spelling it holds.
+   *
+   * A batch already approved and executing is stopped too, between items: no further
+   * signature is computed for a caller the host has cut off, and the ones already computed
+   * are discarded with the batch, exactly as a switch mid-batch discards them. A single
+   * request inside `withPrivkey` cannot be interrupted and completes; it is milliseconds
+   * of pure computation, and the host, having revoked the client, is the one that no
+   * longer delivers the answer.
+   *
    * Not a deny: nothing is persisted, and the origin's next request runs the cascade as
    * usual. A host that wants it refused stores a permission. Returns how many pending
    * requests were rejected.
    */
   revokeOrigin(origin: string, reason = 'Origin revoked'): number {
-    this.clearCooldown(origin);
-    return this.#queue.rejectPendingForOrigin(origin, reason);
+    const target = canonicalOriginKey(origin);
+    this.clearCooldown(target);
+    this.#revocations.set(target, { serial: ++this.#revocationSerial, reason });
+    let rejected = 0;
+    for (const key of new Set(this.#queue.pending().map((entry) => entry.origin))) {
+      if (sameSite(key, target)) rejected += this.#queue.rejectPendingForOrigin(key, reason);
+    }
+    return rejected;
   }
 
   /**
@@ -519,9 +588,15 @@ export class SignerCore {
     await this.#assertStillActive(account);
 
     // 5. Execute, each item in its own key scope. 6. Zero, on every path, per item.
+    //    Between items the batch is re-checked the way the lock is: a switch, or a
+    //    revocation of this origin, ends it there. No further cryptographic work is done
+    //    with a key the user has moved away from or for a caller the host has cut off, and
+    //    what was already computed is discarded with the batch.
     context.phase = 'execute';
+    const revokedBefore = this.#revocationSerial;
     const runs: ItemRun[] = [];
-    for (const item of items) {
+    for (const [index, item] of items.entries()) {
+      if (index > 0) await this.#assertStillWanted(account, originKey, revokedBefore);
       try {
         runs.push({ id: item.id, ok: true, result: await this.#signLocally(account, item.params) });
       } catch (error) {
@@ -529,7 +604,7 @@ export class SignerCore {
       }
     }
     // Every item's outcome sits behind this check; none is returned unless it passes.
-    await this.#assertStillActive(account);
+    await this.#assertStillWanted(account, originKey, revokedBefore);
     return runs;
   }
 
@@ -559,20 +634,34 @@ export class SignerCore {
     return this.#signLocally(account, params);
   }
 
-  /** One key scope: the key is copied in, checked against the identity, used, zeroed. */
+  /**
+   * One key scope: the key is copied in, checked against the identity, used, zeroed. A
+   * failure comes out as an {@link ExecuteFailure} that says whether the vault or the
+   * signing backend threw; a `SignerError` passes through as itself.
+   */
   async #signLocally(account: SafeAccount, params: ValidatedParams): Promise<unknown> {
-    // Pinned to the account the user saw, never "whatever is active now".
-    return this.#vault.withPrivkey(account.id, async (key) => {
-      const signer = new PrivateKeySigner(key);
-      // The identity port is the host's, and it is what the user was shown and what
-      // `getPublicKey` answers. Nothing else in the chain checks that its pubkey is the one
-      // this key derives to under this id. If it is not, the user approved as one identity
-      // and the signature would be another's, so the key is not used at all.
-      if ((await signer.getPublicKey()) !== account.pubkey) {
-        throw new SignerError('author_mismatch', 'Event author does not match the active account');
-      }
-      return this.#execute(params, signer);
-    });
+    try {
+      // Pinned to the account the user saw, never "whatever is active now".
+      return await this.#vault.withPrivkey(account.id, async (key) => {
+        const signer = new PrivateKeySigner(key);
+        // The identity port is the host's, and it is what the user was shown and what
+        // `getPublicKey` answers. Nothing else in the chain checks that its pubkey is the one
+        // this key derives to under this id. If it is not, the user approved as one identity
+        // and the signature would be another's, so the key is not used at all.
+        if ((await signer.getPublicKey()) !== account.pubkey) {
+          throw new SignerError('author_mismatch', 'Event author does not match the active account');
+        }
+        try {
+          return await this.#execute(params, signer);
+        } catch (error) {
+          if (error instanceof SignerError) throw error;
+          throw new ExecuteFailure(error, 'callback', this.#vault.isLocked());
+        }
+      });
+    } catch (error) {
+      if (error instanceof SignerError || error instanceof ExecuteFailure) throw error;
+      throw new ExecuteFailure(error, 'vault', true);
+    }
   }
 
   /**
@@ -640,6 +729,18 @@ export class SignerCore {
     }
   }
 
+  /**
+   * Between the items of a batch, and after the last: the account is still the one shown,
+   * and the origin has not been revoked since execution began.
+   */
+  async #assertStillWanted(shown: SafeAccount, originKey: string, revokedBefore: number): Promise<void> {
+    await this.#assertStillActive(shown);
+    if (this.#revocationSerial === revokedBefore) return;
+    for (const [key, { serial, reason }] of this.#revocations) {
+      if (serial > revokedBefore && sameSite(key, originKey)) throw new SignerError('rejected', reason);
+    }
+  }
+
   /** Persist a prompt's decision, scoped to the event kind unless the host said otherwise. */
   async #remember(
     originKey: string,
@@ -686,7 +787,14 @@ export class SignerCore {
   #toSignerError(error: unknown, phase: RunContext['phase'], requestId: string): SignerError {
     if (error instanceof SignerError) return error;
     this.#logger?.warn('request failed', { requestId, phase, error: errorMessage(error) });
+    if (error instanceof ExecuteFailure) {
+      // Attributed by where it came from, not by the vault's state now. See the class.
+      if (error.source === 'vault' || error.lockedAtThrow) return new SignerError('vault_locked', 'Vault is locked');
+      return new SignerError('operation_failed', 'Operation failed');
+    }
     if (phase === 'execute') {
+      // A remote port's failure, or anything else not from the key scope: the lock is the
+      // best explanation available when the vault is locked, and fixed text either way.
       if (this.#vault.isLocked()) return new SignerError('vault_locked', 'Vault is locked');
       return new SignerError('operation_failed', 'Operation failed');
     }

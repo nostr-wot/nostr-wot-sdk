@@ -67,9 +67,12 @@ When the host stops trusting a caller (a remote client revoked, a paired device 
 site forgotten), call `core.revokeOrigin(originKey, reason?)`. It clears that origin's
 `getPublicKey` cooldown, which would otherwise admit a revoked client's next `connect`
 without a prompt for up to a minute, and rejects everything the origin has queued, prompts
-on screen included. It is `onActiveAccountChanged` scoped to an origin. It is not a deny:
-store a permission for that. `core.clearCooldown(originKey)` is the narrow form, for
-re-asking without cutting the caller off.
+on screen included, and stops a batch already executing between items. The key is
+canonicalised as the boundary canonicalises it, and every spelling of a site is covered:
+`example.com` revokes `https://example.com` and `http://example.com:8080`, and the other way
+round. It is `onActiveAccountChanged` scoped to an origin. It is not a deny: store a
+permission for that. `core.clearCooldown(originKey)` is the narrow form, for re-asking
+without cutting the caller off.
 
 ## Params per method
 
