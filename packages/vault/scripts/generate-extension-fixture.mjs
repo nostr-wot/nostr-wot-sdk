@@ -98,10 +98,13 @@ async function createRecord(password, payload, { legacy = false } = {}) {
 const PASSWORD = 'correct horse battery staple';
 
 /**
- * Two accounts on purpose: one seeded (mnemonic present, the interesting case for
- * `mnemonicBytes`) and one imported from an nsec with no mnemonic at all. The second one
- * also carries `walletConfig`, a field the extension stores and this package deliberately
- * does not model — it has to survive untouched or real vaults get corrupted on save.
+ * Three accounts on purpose: one seeded (mnemonic present, the interesting case for
+ * `mnemonicBytes`), one imported from an nsec with no mnemonic at all, and one NIP-46
+ * remote-signer account carrying a stored local keypair AND imported post-quantum keys. The
+ * second also carries `walletConfig`, a field the extension stores and this package
+ * deliberately does not model — it has to survive untouched or real vaults get corrupted on
+ * save. The third is what makes the vector cover every secret-bearing field the memory
+ * projection converts: `nip46Config.secret`, `nip46Config.localPrivkey`, `pqKeys.*.secret`.
  */
 const PAYLOAD = {
   cacheKey: arrayToBase64(new Uint8Array(32).fill(0x2b)),
@@ -131,6 +134,29 @@ const PAYLOAD = {
       readOnly: false,
       createdAt: 1727136500000,
       walletConfig: { provider: 'nwc', connectionString: 'nostr+walletconnect://deadbeef' },
+    },
+    {
+      id: 'acct_bunker',
+      name: 'Bunker',
+      type: 'nip46',
+      pubkey: '12'.repeat(32),
+      privkey: null,
+      mnemonic: null,
+      nip46Config: {
+        bunkerUrl: `bunker://${'12'.repeat(32)}?relay=wss%3A%2F%2Frelay.example`,
+        relay: 'wss://relay.example',
+        secret: 'topsecret-token',
+        localPrivkey: '5a'.repeat(32),
+        localPubkey: '6b'.repeat(32),
+      },
+      readOnly: false,
+      createdAt: 1727137000000,
+      pqKeys: {
+        profile: 'nip-pqc/v1',
+        kem: { public: arrayToBase64(new Uint8Array(8).fill(1)), secret: arrayToBase64(new Uint8Array(8).fill(2)) },
+        dsa: { public: arrayToBase64(new Uint8Array(8).fill(3)), secret: arrayToBase64(new Uint8Array(8).fill(4)) },
+        importedAt: 1727137000000,
+      },
     },
   ],
   activeAccountId: 'acct_seeded',

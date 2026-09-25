@@ -111,14 +111,25 @@ function toStorageNip46(config: MemoryNip46Config | null): Nip46Config | null {
  * unknown fields are carried, never filtered.
  */
 export function toMemoryAccount(acct: Account): MemoryAccount {
-  const { privkey, mnemonic, pqKeys, nip46Config, ...rest } = acct;
+  const { privkey, mnemonic, pqKeys } = acct;
+  // Walked key by key rather than spread, so that `nip46Config` keeps its position: the
+  // extension's own writer spreads the non-secret rest first and appends `privkey`,
+  // `mnemonic` and `pqKeys`, and `toStorageAccount` has to produce that order byte for byte.
+  const rest: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(acct)) {
+    if (key === 'privkey' || key === 'mnemonic' || key === 'pqKeys') continue;
+    // The NIP-46 connect token and local private key get the same treatment as the nsec.
+    // `undefined` means the stored account had no `nip46Config` field, and stays absent.
+    if (key === 'nip46Config') {
+      if (value !== undefined) rest['nip46'] = toMemoryNip46(value as Nip46Config | null);
+      continue;
+    }
+    rest[key] = value;
+  }
   return {
-    ...rest,
+    ...(rest as Omit<MemoryAccount, 'privkeyBytes' | 'mnemonicBytes' | 'pqKemSecretBytes' | 'pqDsaSecretBytes'>),
     privkeyBytes: privkey ? hexToBytes(privkey) : null,
     mnemonicBytes: mnemonic ? new TextEncoder().encode(mnemonic) : null,
-    // The NIP-46 connect token and local private key get the same treatment. `undefined`
-    // means the stored account had no `nip46Config` field, and stays absent on the way back.
-    ...(nip46Config !== undefined ? { nip46: toMemoryNip46(nip46Config) } : {}),
     // Imported post-quantum secrets get the same treatment as the nsec: held as bytes so
     // lock() can zero them, rather than as strings that linger until GC.
     //
@@ -144,16 +155,36 @@ export function toMemoryAccount(acct: Account): MemoryAccount {
   };
 }
 
-/** In-memory account -> stored account. Inverse of {@link toMemoryAccount}, losslessly. */
+/**
+ * In-memory account -> stored account. Inverse of {@link toMemoryAccount}, losslessly, and in
+ * the order the extension's `toStorageAccount` writes: the non-secret fields in their stored
+ * order (`nip46Config` among them), then `privkey`, `mnemonic`, `pqKeys`.
+ */
 export function toStorageAccount(acct: MemoryAccount): Account {
-  const { privkeyBytes, mnemonicBytes, pqPublic, pqKemSecretBytes, pqDsaSecretBytes, nip46, ...rest } = acct;
+  const { privkeyBytes, mnemonicBytes, pqPublic, pqKemSecretBytes, pqDsaSecretBytes } = acct;
+  const rest: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(acct)) {
+    if (
+      key === 'privkeyBytes' ||
+      key === 'mnemonicBytes' ||
+      key === 'pqPublic' ||
+      key === 'pqKemSecretBytes' ||
+      key === 'pqDsaSecretBytes'
+    ) {
+      continue;
+    }
+    if (key === 'nip46') {
+      if (value !== undefined) rest['nip46Config'] = toStorageNip46(value as MemoryNip46Config | null);
+      continue;
+    }
+    rest[key] = value;
+  }
   // Cast because `nip46Config` is required on `Account` and optional here, for the same
   // lossless reason as `pqKeys`: an account stored without the field stays without it.
   return {
     ...rest,
     privkey: privkeyBytes ? bytesToHex(privkeyBytes) : null,
     mnemonic: mnemonicBytes ? new TextDecoder().decode(mnemonicBytes) : null,
-    ...(nip46 !== undefined ? { nip46Config: toStorageNip46(nip46) } : {}),
     // See the note in toMemoryAccount: `undefined` means absent, and `Object.hasOwn` would call
     // a hand-built `{ pqPublic: undefined }` present and write back an explicit `pqKeys: null`.
     ...(acct.pqPublic !== undefined

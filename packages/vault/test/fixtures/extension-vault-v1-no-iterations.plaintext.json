@@ -30,6 +30,35 @@
           "provider": "nwc",
           "connectionString": "nostr+walletconnect://deadbeef"
         }
+      },
+      {
+        "id": "acct_bunker",
+        "name": "Bunker",
+        "type": "nip46",
+        "pubkey": "1212121212121212121212121212121212121212121212121212121212121212",
+        "privkey": null,
+        "mnemonic": null,
+        "nip46Config": {
+          "bunkerUrl": "bunker://1212121212121212121212121212121212121212121212121212121212121212?relay=wss%3A%2F%2Frelay.example",
+          "relay": "wss://relay.example",
+          "secret": "topsecret-token",
+          "localPrivkey": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+          "localPubkey": "6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b"
+        },
+        "readOnly": false,
+        "createdAt": 1727137000000,
+        "pqKeys": {
+          "profile": "nip-pqc/v1",
+          "kem": {
+            "public": "AQEBAQEBAQE=",
+            "secret": "AgICAgICAgI="
+          },
+          "dsa": {
+            "public": "AwMDAwMDAwM=",
+            "secret": "BAQEBAQEBAQ="
+          },
+          "importedAt": 1727137000000
+        }
       }
     ],
     "activeAccountId": "acct_seeded"

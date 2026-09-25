@@ -87,6 +87,32 @@ describe('a vault the extension wrote opens here', () => {
   }, 60_000);
 
   /**
+   * The account that carries every secret-bearing field the memory projection converts. The
+   * round trip has to be lossless, and the JSON it writes has to be byte for byte what the
+   * extension's own `toStorageAccount` writes — reproduced here verbatim, `{ ...rest,
+   * privkey, mnemonic, pqKeys }` — so a record saved by either side reads the same to both.
+   */
+  test('the NIP-46 account with imported post-quantum keys round trips in the order the extension writes', async () => {
+    const { payload } = await openRecord(record, expected.password, noblePbkdf2);
+    const bunker = payload.accounts.find((account) => account.id === 'acct_bunker')!;
+    expect(bunker.type).toBe('nip46');
+    expect(bunker.pqKeys).not.toBeNull();
+    const mem = toMemoryAccount(bunker);
+    const strings: string[] = [];
+    JSON.stringify(mem, (_key, value: unknown) => {
+      if (typeof value === 'string') strings.push(value);
+      return value instanceof Uint8Array ? '<bytes>' : value;
+    });
+    for (const secret of ['topsecret-token', '5a'.repeat(32), bunker.pqKeys!.kem.secret, bunker.pqKeys!.dsa.secret]) {
+      expect(strings.some((text) => text.includes(secret)), `no string holds ${secret}`).toBe(false);
+    }
+    const back = toStorageAccount(mem);
+    expect(back).toEqual(bunker);
+    const { privkey, mnemonic, pqKeys, ...rest } = bunker;
+    expect(JSON.stringify(back)).toBe(JSON.stringify({ ...rest, privkey, mnemonic, pqKeys }));
+  }, 60_000);
+
+  /**
    * The oldest vaults in the field. They predate the `iterations` field entirely and were all
    * written at 210000, so the reader has to fall back to that count rather than recompute from
    * the password — recomputing derives at 600000 and refuses to open them.
