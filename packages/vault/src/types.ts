@@ -117,3 +117,26 @@ export interface MemoryVaultPayload {
   accounts: MemoryAccount[];
   activeAccountId: string | null;
 }
+
+/**
+ * A host-owned field the vault stores, round trips and never interprets.
+ *
+ * The browser extension keeps a `walletConfig` on each account. This layer deliberately does
+ * not model it: typing it would mean importing `@nostr-wot/wallet`, and the wallet builds ON
+ * the vault, so the dependency would run the wrong way. `Account` therefore has no
+ * `walletConfig`, and it does not need one — `toMemoryAccount` and `toStorageAccount` walk an
+ * account's keys generically, so the field round trips losslessly through a seal and an unseal
+ * whether or not this package has a name for it.
+ *
+ * What was missing was not a type but the ACCESSORS: a host that stores the field had no way to
+ * read it back or to change it, so it kept its own vault. Hence `Vault.getActiveAccountWithWallet`
+ * and `Vault.updateAccountWalletConfig`, typed against this: JSON, because that is what survives
+ * being sealed into the record, and opaque, because the vault has no business knowing what a
+ * wallet connection looks like. The host casts it to its own type at its own boundary.
+ *
+ * **It is not zeroable.** An NWC URI carries a secret in its query string, and this field is
+ * plain JSON, so `lock()` cannot overwrite it the way it overwrites an nsec. That is the price
+ * of a generic passthrough and it is the host's to weigh; a secret that needs zeroing belongs in
+ * a modelled field with a `Uint8Array` behind it, next to `privkeyBytes`.
+ */
+export type OpaqueWalletConfig = Readonly<Record<string, unknown>>;

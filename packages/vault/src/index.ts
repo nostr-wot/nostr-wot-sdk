@@ -25,6 +25,7 @@ export { iterationsFor, noblePbkdf2, encrypt, decrypt } from './crypto.js';
 export type {
   MemoryAccount,
   MemoryNip46Config,
+  OpaqueWalletConfig,
   OpenedRecord,
   MemoryVaultPayload,
   VaultPayload,
@@ -61,8 +62,10 @@ export { AUTO_LOCK_OPTIONS, shouldAutoLock } from './autolock.js';
 export type {
   ImportedPqKeys,
   PqKeyPair,
+  RemoteSignerAccount,
   RemoteSignerCredentials,
   VaultAccount,
+  VaultAccountWithWallet,
   VaultOptions,
 } from './vault.js';
 export { Vault, VaultLockedOutError } from './vault.js';

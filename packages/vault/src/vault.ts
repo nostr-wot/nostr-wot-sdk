@@ -16,8 +16,15 @@
  *   - {@link Vault.lock} zeroes those arrays rather than dropping the references;
  *   - {@link Vault.withPrivkey} hands out a copy and zeroes it in a `finally`, so a caller
  *     cannot forget to and cannot reach the vault's own buffer;
- *   - nothing here ever returns the decrypted payload, and {@link Vault.listAccounts} goes
- *     through `toSafeAccount` so a new private field cannot start riding along by accident.
+ *   - {@link Vault.listAccounts} and every other public projection go through `toSafeAccount`,
+ *     which copies an allowlist rather than deleting known secrets, so a field added to
+ *     `Account` later is private until someone says otherwise.
+ *
+ * There are exactly TWO members that hand out secrets outside a scoped callback, and they are
+ * named here so the list above cannot be read as covering them: {@link Vault.getDecryptedPayload}
+ * and {@link Vault.getAccountForRemoteSigning}. Each carries, where it is defined, what it costs
+ * and the narrow reason it exists. Every other accessor either projects public metadata or takes
+ * a callback.
  *
  * The one secret held as anything other than a zeroable array is the derived vault key, which
  * is a `Uint8Array` too — the extension holds a non-extractable `CryptoKey`, which is strictly
@@ -25,7 +32,7 @@
  * everything else. The password itself is never retained.
  */
 import { randomBytes } from '@noble/ciphers/utils.js';
-import type { Account, SafeAccount } from '@nostr-wot/accounts';
+import type { Account, Nip46Config, SafeAccount } from '@nostr-wot/accounts';
 import { toSafeAccount } from '@nostr-wot/accounts';
 import type { KeyValueStore } from '@nostr-wot/storage';
 import { shouldAutoLock } from './autolock.js';
@@ -54,11 +61,18 @@ import {
   hexBytesToBytes,
   toMemoryAccount,
   toMemoryPayload,
+  toStorageAccount,
   toStoragePayload,
   zeroMemoryAccount,
   zeroMemoryPayload,
 } from './serialization.js';
-import type { MemoryAccount, MemoryVaultPayload, VaultPayload, VaultRecord } from './types.js';
+import type {
+  MemoryAccount,
+  MemoryVaultPayload,
+  OpaqueWalletConfig,
+  VaultPayload,
+  VaultRecord,
+} from './types.js';
 
 /** What a {@link Vault} needs from its host. */
 export interface VaultOptions {
@@ -90,6 +104,23 @@ interface HeldKey {
 export type VaultAccount = SafeAccount & {
   nip46?: { bunkerPubkey: string | null; relay: string | null; localPubkey?: string };
 };
+
+/**
+ * {@link VaultAccount} plus the host-owned wallet configuration the record carried.
+ *
+ * `walletConfig` is {@link OpaqueWalletConfig}: JSON this package stores, round trips and does
+ * not interpret. See that type for why it is not modelled here.
+ */
+export type VaultAccountWithWallet = SafeAccount & { walletConfig?: OpaqueWalletConfig };
+
+/**
+ * What {@link Vault.getAccountForRemoteSigning} hands back: public metadata plus a NIP-46
+ * account's full configuration, credentials included, as strings.
+ *
+ * One of the two members that hand out secrets outside a scoped callback. See that method for
+ * why, and for what it costs.
+ */
+export type RemoteSignerAccount = SafeAccount & { nip46Config: Nip46Config };
 
 /** What {@link Vault.withRemoteSignerCredentials} hands its callback. Every byte array is zeroed on return. */
 export interface RemoteSignerCredentials {
@@ -143,6 +174,20 @@ export class VaultLockedOutError extends Error {
   }
 }
 
+/**
+ * A detached deep copy, through JSON.
+ *
+ * Everything cloned here — a payload, a NIP-46 config, a host's `walletConfig` — is JSON by
+ * construction, because it came out of (or is going into) the sealed record, which is
+ * `JSON.stringify`d. A JSON round trip is therefore an exact clone of it and needs nothing from
+ * the host: `structuredClone` is a global this package cannot assume, and it is what the
+ * extension used. Values the vault holds as `Uint8Array` never reach here; they go through the
+ * scoped accessors instead.
+ */
+function cloneJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
 function assertPassword(password: string, what: string): void {
   if (password.length > 0 && password.length < MIN_PASSWORD_LENGTH) {
     throw new Error(`${what} must be at least ${MIN_PASSWORD_LENGTH} characters`);
@@ -190,6 +235,25 @@ export class Vault {
    * corrupt the vault.
    */
   readonly #liveKeys = new Set<Uint8Array>();
+
+  /**
+   * The host's subscriptions. Ported from the extension's module-level sets, because a host's
+   * private cache, wallet client and social-graph layer all have state that is only valid while
+   * one vault session is, and polling `isLocked()` is not a substitute: the moment that matters
+   * is the transition, and an auto-lock fires on a timer nobody is watching.
+   *
+   * `#lockListeners` and `#sessionListeners` are synchronous, because `lock()` is and must stay
+   * so. `#unlockListeners` and `#destroyListeners` are awaited, because both have real work to
+   * finish before the host proceeds — re-encrypting a cache under a key that only exists while
+   * unlocked, and deleting derived data that must not outlive the vault.
+   */
+  readonly #lockListeners = new Set<() => void>();
+  readonly #sessionListeners = new Set<() => void>();
+  readonly #unlockListeners = new Set<() => Promise<void>>();
+  readonly #destroyListeners = new Set<() => Promise<void>>();
+
+  /** The in-flight startup auto-unlock, if any. See {@link beginStartupUnlock}. */
+  #startupUnlock: Promise<void> | null = null;
 
   constructor(options: VaultOptions) {
     this.#store = options.store;
@@ -261,6 +325,7 @@ export class Vault {
         this.#adoptKey(capture.take());
         await this.#restoreAutoLockSetting();
         this.#noteLockStateChanged();
+        await this.#notifyUnlocked();
       } finally {
         // Nothing below take() can throw, but everything above it can, and a derived vault key
         // dropped un-zeroed on an error path is exactly the leak this class exists to avoid.
@@ -354,6 +419,7 @@ export class Vault {
         if (revision !== this.#sessionRevision) return false;
 
         this.#noteLockStateChanged();
+        await this.#notifyUnlocked();
         return true;
       } finally {
         capture.discard();
@@ -374,6 +440,13 @@ export class Vault {
     this.#invalidateSession();
     this.#lockNow();
     this.#noteLockStateChanged();
+    for (const listener of this.#lockListeners) {
+      try {
+        listener();
+      } catch {
+        /* One cleanup must not prevent another, and a lock cannot be allowed to fail. */
+      }
+    }
   }
 
   /**
@@ -387,6 +460,16 @@ export class Vault {
     await this.#run(async () => {
       await this.#store.remove(VAULT_STORAGE_KEY);
       await this.#store.remove(UNLOCK_GUARD_KEY);
+      // Before the lane releases, so a host's derived data is gone by the time this resolves.
+      // Awaited rather than fired: a private cache that outlives the vault it was keyed to is
+      // exactly what "irreversible" must not leave behind.
+      for (const listener of this.#destroyListeners) {
+        try {
+          await listener();
+        } catch {
+          /* One host's cleanup failing must not leave the record in place. */
+        }
+      }
       // Belt and braces. The revision check makes an overtaken unlock refuse to install
       // anything, and this makes the outcome of a destroy independent of the lane order
       // regardless: when this returns, there is no session, full stop.
@@ -411,14 +494,48 @@ export class Vault {
     if (next.length === 0) throw new Error('New password is required');
     assertPassword(next, 'Password');
     if (!(await this.unlock(current))) return false;
-    // Captured after the unlock that verified `current` and before the re-seal queues, so a
-    // lock landing inside the re-seal's own derivation — which the auto-lock that unlock just
-    // armed can do on its own, no adversary required — cancels it instead of installing a live
-    // vault key into a vault the user has locked. Throws rather than returning false: false
-    // means the current password was wrong, and this was not that.
+    // The re-seal itself is {@link reEncrypt}, so there is one implementation of it and the
+    // difference between the two entry points is only whether a password is verified first.
+    // Throws rather than returning false if it fails: false means the current password was
+    // wrong, and this was not that.
+    await this.reEncrypt(next);
+    return true;
+  }
+
+  /**
+   * Re-seal the ALREADY OPEN vault under `next`, with a fresh salt and the current work factor.
+   * No current password, because none is needed and asking for one would be worse.
+   *
+   * The distinction from {@link changePassword}, which is the whole reason both exist:
+   * `changePassword` verifies `current` through {@link unlock}, so a wrong one is charged to the
+   * brute-force guard — correct for a password-change form, where a wrong current password IS a
+   * failed attempt. This path verifies nothing. The vault is open, the payload is in memory, and
+   * the callers are a transparent work-factor upgrade, a lock-mode switch and a host's own
+   * change-password handler that has already checked the user. Routing those through
+   * `changePassword` would spend a second of PBKDF2 re-deriving a key already held and walk the
+   * user towards a lockout for something they never typed.
+   *
+   * The session stays open across it: the payload is untouched, only the record and the held key
+   * change. The empty password is refused here for the reason {@link changePassword} refuses it —
+   * it is how "never lock" mode is stored, and arriving there through a *password change* leaves
+   * a vault that still presents as protected while anyone can open it. The only route into that
+   * mode is a deliberate {@link create} under the empty password.
+   *
+   * @throws if the vault is locked, `next` is empty or shorter than the minimum, or a lock landed
+   *         while the derivation ran — in which case the record is still valid and only this
+   *         session is over
+   */
+  async reEncrypt(next: string): Promise<void> {
+    if (next.length === 0) throw new Error('New password is required');
+    assertPassword(next, 'Password');
+    // Refused before the lane, so a locked vault is told so rather than queueing behind work
+    // that will refuse it anyway.
+    this.#requireOpen();
+    // Captured before the re-seal queues, so a lock landing inside its own derivation — which
+    // the auto-lock can do on its own, no adversary required — cancels it instead of installing
+    // a live vault key into a vault the user has locked.
     const revision = this.#sessionRevision;
     await this.#run(() => this.#resealNow(next, revision));
-    return true;
   }
 
   // ── Auto-lock ─────────────────────────────────────────────────────────────────────────
@@ -443,6 +560,31 @@ export class Vault {
     await this.#store.set(AUTO_LOCK_STORAGE_KEY, ms);
     this.#autoLockMs = ms;
     this.#armAutoLock();
+  }
+
+  /**
+   * {@link setAutoLockMs}, synchronously: the timer is re-armed before this returns and the
+   * preference is written fire and forget.
+   *
+   * Both shapes exist because both are right somewhere, and which one a caller wants is decided
+   * by what it needs to be true when the call returns. A settings screen that shows a saved
+   * state awaits {@link setAutoLockMs} and can report a failed write. A host tightening the
+   * interval — a lock-on-blur, a policy change, a mode switch inside a larger synchronous
+   * handler — needs the TIMER re-armed now and cannot await anything; making it wait on a
+   * storage round trip leaves the vault on the old, longer interval for the duration of the
+   * write, which is the wrong way round for a security control.
+   *
+   * So the ordering here is deliberate: the interval takes effect first, and the persistence
+   * follows. A dropped write costs the user their preference on the next cold start, which is
+   * recoverable; a delayed re-arm costs them the lock they just asked for.
+   *
+   * Validation is synchronous and throws, exactly as {@link setAutoLockMs} rejects.
+   */
+  setAutoLockTimeout(ms: number): void {
+    if (!Number.isFinite(ms) || ms < 0) throw new Error('Auto-lock interval must be >= 0');
+    this.#autoLockMs = ms;
+    this.#armAutoLock();
+    void Promise.resolve(this.#store.set(AUTO_LOCK_STORAGE_KEY, ms)).catch(() => {});
   }
 
   // ── Accounts ──────────────────────────────────────────────────────────────────────────
@@ -605,14 +747,36 @@ export class Vault {
   }
 
   /**
-   * Public account metadata, and only that.
+   * Public account metadata, and only that. **Synchronous** — see the note below.
    *
    * Through `toSafeAccount`, which copies an explicit allowlist rather than deleting known
    * secrets: a field added to `Account` later is private until someone says otherwise, which
    * is the only default that fails safe. An account with no private key reports `readOnly`
    * whatever its stored flag says.
+   *
+   * ## Why this and its siblings are synchronous
+   *
+   * They were `async`, and that cost a consumer its migration. A shipping extension's account
+   * accessors are synchronous and its suite calls them without `await` in 208 places; no adapter
+   * can make an asynchronous method synchronous, so the package was unadoptable for a reason
+   * that bought nothing — none of these methods ever awaited anything. They read `#payload`,
+   * which is in memory by definition, because it exists only while the vault is unlocked.
+   *
+   * The rule that replaced the habit, and it is a rule rather than a case-by-case judgement:
+   *
+   *   - **reads over already-decrypted in-memory state are synchronous.** `isLocked`,
+   *     `hasMnemonic`, `hasImportedPqKeys`, `getActiveAccountId`, `getActivePubkey`,
+   *     `getActiveAccount`, `getActiveAccountWithWallet`, `getAccountById`, `listAccounts`,
+   *     `getAccountForRemoteSigning`, `getDecryptedPayload`, `getSessionRevision`.
+   *   - **anything that touches the injected `KeyValueStore` stays asynchronous**, because the
+   *     store is a port and a host's may be a round trip: `exists`, `create`, `unlock`,
+   *     `destroy`, `getAutoLockMs`, `setAutoLockMs`, every mutation, and every scoped accessor
+   *     (which is async for its own reason — the callback is).
+   *
+   * So the async-ness is where it is load-bearing and nowhere else. `lock()` was already
+   * synchronous and unconditional for the same family of reasons.
    */
-  async listAccounts(): Promise<SafeAccount[]> {
+  listAccounts(): SafeAccount[] {
     const payload = this.#payload;
     if (!payload) return [];
     return payload.accounts.map((account) => this.#toSafe(account));
@@ -624,7 +788,7 @@ export class Vault {
    * (the bunker's pubkey, the relay, the local pubkey) so a caller can name the connection;
    * the credentials go through {@link withRemoteSignerCredentials}.
    */
-  async getAccountById(accountId: string): Promise<VaultAccount | null> {
+  getAccountById(accountId: string): VaultAccount | null {
     const payload = this.#payload;
     if (!payload) return null;
     const account = this.#findAccount(payload, accountId);
@@ -642,8 +806,124 @@ export class Vault {
   }
 
   /** The active account's id, or null when there is none — or when the vault is locked. */
-  async getActiveAccountId(): Promise<string | null> {
+  getActiveAccountId(): string | null {
     return this.#payload?.activeAccountId ?? null;
+  }
+
+  /**
+   * The active account's public metadata, or null when there is none or the vault is locked.
+   *
+   * `getActiveAccountId()` then `getAccountById()` in one call, which is what a host does at
+   * dozens of sites. Through the same allowlist as {@link listAccounts}, so it carries no
+   * secret and no NIP-46 credential.
+   */
+  getActiveAccount(): SafeAccount | null {
+    const payload = this.#payload;
+    if (!payload || payload.activeAccountId === null) return null;
+    const account = this.#findAccount(payload, payload.activeAccountId);
+    return account ? this.#toSafe(account) : null;
+  }
+
+  /**
+   * The active account's public key, or null when there is none or the vault is locked.
+   *
+   * The single most-called read in a signer: every "who am I" answer, every `getPublicKey`, every
+   * header. Null rather than a throw while locked, because a pubkey is public and a surface
+   * asking for it is not asking to be told the lock state through an exception.
+   */
+  getActivePubkey(): string | null {
+    return this.getActiveAccount()?.pubkey ?? null;
+  }
+
+  /**
+   * The active account plus the host-owned `walletConfig` the record carried, detached.
+   *
+   * The vault does not model that field — see {@link OpaqueWalletConfig} for why importing the
+   * wallet's type here would invert the layering — but it does store it, so it has to be
+   * readable. The config is deep-copied through JSON on the way out: it is JSON by construction
+   * (it was sealed into the record), and a caller that mutated the object it got back would
+   * otherwise be editing the open vault.
+   */
+  getActiveAccountWithWallet(): VaultAccountWithWallet | null {
+    const payload = this.#payload;
+    if (!payload || payload.activeAccountId === null) return null;
+    const account = this.#findAccount(payload, payload.activeAccountId);
+    if (!account) return null;
+    const stored = (account as unknown as Record<string, unknown>)['walletConfig'];
+    return {
+      ...this.#toSafe(account),
+      ...(stored === undefined ? {} : { walletConfig: cloneJson(stored) as OpaqueWalletConfig }),
+    };
+  }
+
+  /**
+   * The whole decrypted payload, secrets and all, as the storage shape. **An escape hatch.**
+   *
+   * One of the two members on this class that hands out key material outside a scoped callback,
+   * and it is the broader of the two, so what it costs is written here rather than implied:
+   * `privkey`, `mnemonic` and every NIP-46 credential come back as JavaScript STRINGS. A string
+   * cannot be overwritten, so these copies are outside `lock()`'s reach entirely and stay in the
+   * heap until the collector happens to reclaim them. That is the exact property the whole
+   * memory shape of this package exists to provide, and this method does not provide it.
+   *
+   * It exists because two host operations cannot be expressed any other way, and both are real:
+   *
+   *   - **Re-creating the vault under a different password.** The never-lock switch calls
+   *     `create(otherPassword, payload.accounts)` on a vault that is already open. `create`
+   *     takes `Account[]`, so the payload has to come from somewhere, and there is no current
+   *     password to re-derive it from.
+   *   - **Showing the user their own seed phrase**, and reading a mnemonic whose word count
+   *     decides whether post-quantum keys may be derived at all.
+   *
+   * Prefer, in this order: {@link getActiveAccount} / {@link listAccounts} for metadata,
+   * {@link withMnemonic} and {@link withPrivkey} for a secret that is only computed with,
+   * {@link reEncrypt} for a password change that does not change the lock mode. Reach for this
+   * only for the two cases above, and let what it returns go out of scope immediately.
+   *
+   * A detached deep copy, through JSON: the payload is JSON by construction, and a caller
+   * editing the object it got back would otherwise be editing the open vault.
+   *
+   * @throws if the vault is locked. Deliberately, rather than answering an empty payload: a
+   *         caller about to re-seal from this must not seal an empty vault over a full one.
+   */
+  getDecryptedPayload(): VaultPayload {
+    return cloneJson(toStoragePayload(this.#requireOpen()));
+  }
+
+  /**
+   * A NIP-46 account's public metadata plus its full configuration, credentials as strings, or
+   * null when the account is not a remote signer. **The second escape hatch.**
+   *
+   * `withRemoteSignerCredentials` is the right shape for everything that computes and returns,
+   * and it cannot express the one thing a NIP-46 host actually does: hold a connected bunker
+   * client for the life of a session. The client owns a local keypair, reconnects with it, and
+   * outlives any callback by design, so the credentials have to leave the vault. Cancelling such
+   * a handle needs an `AbortSignal` contract that belongs with whatever introduces long-lived
+   * signers; until then a host pins its client to {@link getSessionRevision} and drops it from
+   * {@link onSessionInvalidated}, which is what makes a lock reach a live bunker connection.
+   *
+   * What it costs: the connect token and the local private key come back as strings, outside
+   * `lock()`'s reach, exactly as on {@link getDecryptedPayload}. Use
+   * {@link withRemoteSignerCredentials} for anything that is not a long-lived client.
+   *
+   * `readOnly` is reported as STORED here, and not forced true for the missing local private
+   * key the way {@link listAccounts} forces it. A remote-signer account has no local key by
+   * definition and signs perfectly well through its bunker; calling it read-only would tell the
+   * caller the opposite of the truth on the one path that exists to use it.
+   *
+   * A detached deep copy. Null while locked.
+   */
+  getAccountForRemoteSigning(accountId: string): RemoteSignerAccount | null {
+    const payload = this.#payload;
+    if (!payload || !accountId) return null;
+    const account = this.#findAccount(payload, accountId);
+    if (!account || account.type !== 'nip46' || !account.nip46) return null;
+    const stored = toStorageAccount(account);
+    if (!stored.nip46Config) return null;
+    return {
+      ...toSafeAccount(account),
+      nip46Config: cloneJson(stored.nip46Config),
+    };
   }
 
   /**
@@ -769,6 +1049,54 @@ export class Vault {
   }
 
   /**
+   * Set or remove an account's host-owned `walletConfig` and re-seal. `null` removes it.
+   *
+   * The vault does not model this field and must not: typing it would mean importing the wallet
+   * package, which builds on the vault. See {@link OpaqueWalletConfig}. It stores it, because
+   * `toMemoryAccount` and `toStorageAccount` walk an account's keys generically, so it round
+   * trips whether or not this layer has a name for it — and it needs to be settable, or a host
+   * that stores the field cannot use this vault at all.
+   *
+   * `null` DELETES the key rather than writing an explicit null, which is not tidiness: the
+   * serializer keeps `undefined` and `null` apart so a record round trips byte for byte, and
+   * writing a null where the field was absent would change the sealed bytes of every vault a
+   * host touched.
+   *
+   * Declared `'secrets'`, and that is the significant choice here. An NWC connection string
+   * carries a secret in its query, so replacing or removing one replaces or destroys secret
+   * material, which moves the session on and lets a host drop the live wallet client it opened
+   * under the old configuration through {@link onSessionInvalidated}. A `'no-secrets'` mutation
+   * would leave a connected client authenticating with a connection the user has just revoked.
+   *
+   * The config is deep-copied on the way in, so a caller that goes on editing the object it
+   * passed is not editing the open vault.
+   *
+   * @throws if the vault is locked, there is no such account, or the store refused the write
+   */
+  async updateAccountWalletConfig(accountId: string, walletConfig: OpaqueWalletConfig | null): Promise<void> {
+    const next = walletConfig === null ? null : cloneJson(walletConfig);
+    return this.#mutate('secrets', (payload) => {
+      const account = this.#findAccount(payload, accountId);
+      if (!account) throw new Error('Account not found');
+      // The field is not on `MemoryAccount` by design; it rides along in the generic passthrough.
+      const host = account as unknown as Record<string, unknown>;
+      const had = 'walletConfig' in host;
+      const previous = host['walletConfig'];
+      if (next === null) delete host['walletConfig'];
+      else host['walletConfig'] = next;
+      return {
+        undo: () => {
+          if (had) host['walletConfig'] = previous;
+          else delete host['walletConfig'];
+        },
+        // Nothing to zero: a `walletConfig` is JSON, not a `Uint8Array`, which is precisely the
+        // caveat {@link OpaqueWalletConfig} records. There is no buffer to fill on either path.
+        abandon: () => {},
+      };
+    });
+  }
+
+  /**
    * Store externally generated post-quantum keys on an account and re-seal. The caller has
    * validated the pair; this only stores. Replacing an existing import zeroes the outgoing
    * secrets once the write lands and moves the session on, voiding any `withImportedPqKeys`
@@ -882,6 +1210,171 @@ export class Vault {
     return !!this.#findAccount(payload, accountId)?.mnemonicBytes;
   }
 
+  // ── Session lifecycle a host can subscribe to ─────────────────────────────────────────
+  //
+  // A host's private cache, wallet client and social-graph layer all hold state that is only
+  // valid while one vault session is. Polling `isLocked()` is not a substitute: the moment that
+  // matters is the TRANSITION, and an auto-lock fires on a timer nobody is watching. Every
+  // subscribe returns its own unsubscribe, so a surface that comes and goes does not accumulate
+  // listeners.
+
+  /**
+   * Which session the vault is on. Changes on every lock, destroy, create, unlock and
+   * secret-touching mutation, and never otherwise.
+   *
+   * For a host that holds something derived from an open vault across awaits — a bunker client,
+   * a decrypted cache entry, a pending signature — and has to know it is still the same session
+   * when it comes back. Capture it, compare it, and throw rather than use what you were holding.
+   * The vault's own scoped accessors do exactly this internally; this is the same guarantee for
+   * state the vault cannot see.
+   *
+   * The number itself means nothing beyond "different means a different session". Do not persist
+   * it: it starts at 0 in a fresh process.
+   */
+  getSessionRevision(): number {
+    return this.#sessionRevision;
+  }
+
+  /**
+   * Called synchronously after every {@link lock}, including an auto-lock.
+   *
+   * Synchronous because `lock()` is, and `lock()` is synchronous so that nothing can make it
+   * fail or wait. A listener that throws is swallowed and the next one still runs: one host's
+   * cleanup failing must never leave the vault half-locked. A listener with asynchronous work to
+   * do starts it and does not expect to be awaited.
+   *
+   * @returns the unsubscribe
+   */
+  onLock(listener: () => void): () => void {
+    this.#lockListeners.add(listener);
+    return () => {
+      this.#lockListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Called, and AWAITED, after every successful {@link unlock} and {@link create}, before either
+   * resolves.
+   *
+   * Awaited because the work is real and ordered: a host's private cache may need re-encrypting
+   * under a key that exists only while the vault is open, and a caller that proceeded first
+   * would read a cache that had not been migrated yet. A listener that throws is swallowed, with
+   * the next one still run, and the unlock still succeeds — a deferred cache migration is not a
+   * reason to refuse a user their vault.
+   *
+   * Announcing an unlock matters as much as announcing a lock. A never-lock vault re-opens
+   * itself on every cold start, and a surface that asked during that window was told "locked"
+   * with no way to ever hear the correction.
+   *
+   * @returns the unsubscribe
+   */
+  onUnlock(listener: () => Promise<void>): () => void {
+    this.#unlockListeners.add(listener);
+    return () => {
+      this.#unlockListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Called, and AWAITED, inside {@link destroy}, after the record is gone and before it resolves.
+   *
+   * For data a host derived from the vault and that must not outlive it: a private cache keyed to
+   * the vault's cache key, a relay-list snapshot, anything that would otherwise sit there
+   * undecryptable and undeleted. A listener that throws is swallowed, because the record is
+   * already gone and a failed cleanup must not make `destroy` look incomplete.
+   *
+   * @returns the unsubscribe
+   */
+  onDestroy(listener: () => Promise<void>): () => void {
+    this.#destroyListeners.add(listener);
+    return () => {
+      this.#destroyListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Called synchronously on every session change, which is strictly more often than
+   * {@link onLock}: a lock, a destroy, a create, an unlock, and every mutation declared
+   * `'secrets'`.
+   *
+   * The difference is the point. `onLock` says "the keys are gone"; this says "whatever you
+   * derived from the previous session is void", which is also true when the vault is still open —
+   * an account was removed, a NIP-46 keypair was replaced, a wallet configuration changed. A
+   * host that only listened for locks kept a bunker client connected with credentials the user
+   * had just revoked.
+   *
+   * Synchronous, and a thrower is swallowed, for the reason {@link onLock} is: revocation is the
+   * path that must run to completion whatever happens on it.
+   *
+   * @returns the unsubscribe
+   */
+  onSessionInvalidated(listener: () => void): () => void {
+    this.#sessionListeners.add(listener);
+    return () => {
+      this.#sessionListeners.delete(listener);
+    };
+  }
+
+  // ── The startup auto-unlock gate ──────────────────────────────────────────────────────
+  //
+  // A "never lock" vault is re-opened automatically on every cold start, and that unlock is
+  // asynchronous: a storage read plus PBKDF2. So the vault reports LOCKED for a few hundred
+  // milliseconds after the host starts, and on a platform that tears its worker down when idle
+  // an ordinary request routinely lands inside that window. Without a gate the request path saw
+  // `isLocked() === true`, queued an unlock and put a password prompt in front of the user — for
+  // an unlock they did not have to perform, on a request their saved permission had already
+  // approved.
+  //
+  // The gate is in this class rather than in the host because `isLocked()` is here: the state a
+  // caller would otherwise misread is this object's, so the correction belongs beside it.
+
+  /**
+   * Register the host's startup auto-unlock so request paths can wait for it.
+   *
+   * `run` is invoked immediately and its rejection is SWALLOWED: a failed auto-unlock simply
+   * means the vault stays locked and the user is prompted, which is the correct outcome and not
+   * an error every awaiting request path should have to catch. The returned promise resolves
+   * when the attempt settles, either way.
+   *
+   * Calling this again replaces the gate, so a host that restarts its own startup sequence does
+   * not leave callers waiting on the previous attempt.
+   */
+  beginStartupUnlock(run: () => Promise<void>): Promise<void> {
+    const settled = run()
+      .catch(() => {})
+      .then(() => {
+        // Only clear it if it is still ours: a second `beginStartupUnlock` has installed a newer
+        // gate that callers are now waiting on, and clearing it would release them early.
+        if (this.#startupUnlock === settled) this.#startupUnlock = null;
+      });
+    this.#startupUnlock = settled;
+    return settled;
+  }
+
+  /**
+   * Resolves once any in-flight startup auto-unlock has settled, immediately when there is none.
+   *
+   * What a request path awaits BEFORE reading {@link isLocked}, so a cold start is not mistaken
+   * for a locked vault. Never rejects.
+   */
+  whenStartupUnlockSettled(): Promise<void> {
+    return this.#startupUnlock ?? Promise.resolve();
+  }
+
+  /**
+   * Wait through any startup auto-unlock, then enforce the real lock state.
+   *
+   * The two-line sequence every request path needs, in one place so no path can get the order
+   * wrong — reading {@link isLocked} before the gate is exactly the bug the gate exists for, and
+   * it is invisible in a test where the unlock happens to have finished.
+   *
+   * @throws `Vault is locked` when the vault is genuinely locked, after the gate has settled
+   */
+  async requireUnlocked(): Promise<void> {
+    await this.whenStartupUnlockSettled();
+    if (this.isLocked()) throw new Error('Vault is locked');
+  }
+
   // ── Internals ─────────────────────────────────────────────────────────────────────────
 
   /**
@@ -899,6 +1392,33 @@ export class Vault {
    */
   #invalidateSession(): void {
     this.#sessionRevision += 1;
+    for (const listener of this.#sessionListeners) {
+      // One holder failing to let go must not stop the next from being told. Revocation is the
+      // path that has to run to completion whatever happens on it.
+      try {
+        listener();
+      } catch {
+        /* Revocation must continue for every other holder. */
+      }
+    }
+  }
+
+  /**
+   * Tell every unlock listener, in turn, and swallow what they throw.
+   *
+   * Sequential rather than `Promise.all`: a host registers these in the order its subsystems
+   * depend on each other (the private cache before anything that reads it), and a concurrent
+   * fan-out would silently break that. A throwing listener does not fail the unlock; see
+   * {@link onUnlock}.
+   */
+  async #notifyUnlocked(): Promise<void> {
+    for (const listener of this.#unlockListeners) {
+      try {
+        await listener();
+      } catch {
+        /* A deferred host migration is not a reason to refuse the user their vault. */
+      }
+    }
   }
 
   /** Refuse to install anything from a session that has been overtaken. */
