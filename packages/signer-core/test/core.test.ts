@@ -1467,7 +1467,14 @@ describe('the permission cascade applies per item', () => {
     const remote: RemoteSignerPort = { execute };
     const acct = account('bunker', null, { type: 'nip46', pubkey: PUBKEY_2, readOnly: false });
     const { core, approval } = await fixture(true, { accounts: [acct], remote });
-    await expect(core.handleBatch(batchReq([sign(1)]))).rejects.toMatchObject({ code: 'unsupported' });
+    // The message, not only the code: the fixture's identity port reports a keyless account as
+    // read-only, and that gate answers `unsupported` too. This one has to be the remote gate.
+    // `expect.stringMatching`, not a bare RegExp: `toMatchObject` does not apply a RegExp to a
+    // string property, and the bare form passed against 'This account has no signing key'.
+    await expect(core.handleBatch(batchReq([sign(1)]))).rejects.toMatchObject({
+      code: 'unsupported',
+      message: expect.stringMatching(/remote/i),
+    });
     expect(execute).not.toHaveBeenCalled();
     expect(approval.presentedBatches).toHaveLength(0);
   });
@@ -1641,10 +1648,23 @@ describe('a batch in the queue', () => {
   });
 
   test('a locked vault and no batch unlock port is a locked vault, after the permission gate', async () => {
-    const unlock: UnlockPort = { async requestUnlock() {} };
-    const { core, permissions } = await fixture(true, { locked: true, unlock });
+    // The single-request port takes a SignerRequest and would open the vault if asked. It is
+    // not asked: a batch is not a request, and a host that never opted into batches must not
+    // be handed one through a port typed for something else.
+    let vaultRef: Vault | null = null;
+    const askedSingle: unknown[] = [];
+    const unlock: UnlockPort = {
+      async requestUnlock(request) {
+        askedSingle.push(request);
+        await vaultRef!.unlock(PASSWORD);
+      },
+    };
+    const { core, permissions, vault } = await fixture(true, { locked: true, unlock });
+    vaultRef = vault;
     await permissions.save('example.com', 'signEvent', 1, 'allow', 'acct_1');
     await expect(core.handleBatch(batchReq([sign(1)]))).rejects.toMatchObject({ code: 'vault_locked' });
+    expect(askedSingle).toEqual([]);
+    expect(vault.isLocked()).toBe(true);
     await permissions.save('example.com', 'signEvent', 1, 'deny', 'acct_1');
     await expect(core.handleBatch(batchReq([sign(1)]))).rejects.toMatchObject({ code: 'permission_denied' });
   });
