@@ -98,27 +98,42 @@ Everything a host needs to persist is one `BunkerState`:
 
 ```ts
 interface BunkerState {
+  version: 2;
+  connectionPubkey: string;
   secrets: { secret: string; origin: "bunker" | "nostrconnect"; relays: string[]; clientPubkey?: string; confirmed: boolean; expiresAt?: number }[];
   clients: { clientPubkey: string; relays: string[]; secret?: string; connectedAt: number }[];
+  mac: string; // HMAC-SHA256 under a key derived from the connection secret key
 }
 ```
 
 `onStateChange(state)` hands out a fresh one after every change (mint, bind, confirm, release,
-revoke, lapse, admit, forget); `exportState()` returns one on demand; `restore(state)` rehydrates
-it on the way back up under the same connection key, before or after `start()`. A restored
-secret keeps its binding: a different client presenting it is refused exactly as before the
-restart. Restored clients carry on without re-pairing, on their own relays. Pending approvals
-are exported as bound but unconfirmed, so the same client may retry and nobody else can.
+revoke, lapse, admit, forget; one snapshot per successful restore); `exportState()` returns one
+on demand; `restore(state)` rehydrates it on the way back up under the same connection key,
+before or after `start()`. A restored secret keeps its binding: a different client presenting
+it is refused exactly as before the restart. Restored clients carry on without re-pairing, on
+their own relays. Pending approvals are exported as bound but unconfirmed, so the same client
+may retry and nobody else can.
 
-On the way back in the state is **untrusted input**. `restore` validates the whole object first
-(the `connectionPubkey` must be this server's; shapes and types; relay URLs by the same rules as
-pairing; every client must reference a secret in the same state that is bound to it and
-confirmed, unless `requireSecret: false`; no duplicate secrets or clients; `confirmed` only with
-a `clientPubkey`; within the ceilings) and applies all of it or none of it. It is refused while
-any approval is pending (a restore mid-approval would replace the record the approval is about
-to confirm, and waiting could take as long as the host allows, so the caller retries) and when
-a secret is bound in memory to a different client than the state says. Where memory already
-holds a binding or a client, memory wins: a live handshake outranks a stored record.
+**What the MAC buys.** The export is authenticated under the connection key, and `restore`
+verifies it before reading anything else. A state that was edited, assembled by hand, or
+signed by anyone who does not hold the connection key is refused with
+`state authentication failed`. That is the case that matters on a phone: the state sits in
+ordinary storage and the key sits in the keychain, and the weaker domain cannot forge a pairing
+on its own. It is exactly as strong as the key's storage: whoever holds the connection secret
+key can sign any state (`signBunkerState` is exported for migration tooling that does).
+
+**The rest of `restore`, in order.** The state must belong to this connection key; it must be
+signed, or `restore(state, { allowUnsigned: true })` migrates a pre-2 state once (persist the
+signed export afterwards and drop the flag; an unsigned state is only as trustworthy as where
+it came from); no approval may be pending (`pendingApprovals` says how many, `whenIdle()`
+resolves when none is, so a host with `handlerTimeoutMs: 0` and an unanswered prompt knows when
+to retry); the MAC must verify; then the whole object is validated (shapes and types, relay URLs
+by the pairing rules, pubkeys on the curve, every client backed by a secret in the same state
+bound to it and confirmed with the same relays, no duplicates, `confirmed` only with a
+`clientPubkey`, within the ceilings). Only then is anything applied, all at once, with nothing
+emitted until it has succeeded, so a host persisting on every callback never sees a partial
+state. Where memory already holds a binding or a client, memory wins: a live handshake outranks
+a stored record; a secret bound in memory to a different client refuses the whole restore.
 
 ### Secrets do not pile up
 
@@ -131,8 +146,9 @@ of an unauthenticated request, which checks its one secret instead. A confirmed 
 expires, since paired clients reconnect with it indefinitely.
 
 Ceilings, live and restored alike: `maxSecrets` (256; minting past it throws), `maxClients` (64;
-a `connect` past it is refused with `too many clients`), `maxRelaysPerClient` (8; a longer
-`nostrconnect://` URI or client record is refused).
+approvals in flight count, so a `connect` past it is refused with `too many clients` even while
+another is pending), `maxRelaysPerClient` (8; a longer `nostrconnect://` URI or client record is
+refused). On a scan, both ceilings are host-facing errors, not wire-visible ones.
 
 ### Relays are per client
 
@@ -165,12 +181,14 @@ and see the package report for the upstream defect.
 
 ## Vendoring
 
-Prefer `npm pack`: `prepack` rebuilds, so a tarball is never stale. If you must vendor by path,
-run `npm run check:dist -w @nostr-wot/bunker` first: the build stamps `dist/.src-hash` with a
-hash of every build input (`src/`, `tsup.config.ts`, `tsconfig.json`, `package.json`, written by
-tsup's `onSuccess` so it cannot exist without a build), and the check fails when `dist/` is
-missing or behind them. There is deliberately no test for this: `dist/` is gitignored, so a
-test would run against nothing in CI and could never fail there.
+Prefer `npm pack`: `prepack` rebuilds, so a tarball is never stale. The build stamps
+`dist/.src-hash` (written by tsup's `onSuccess`, so it cannot exist without a build) with a hash
+of every build input: `src/`, `tsup.config.ts`, `package.json`, the TypeScript config as tsc
+resolves it (`tsc --showConfig`, so a change in the monorepo's `tsconfig.base.json` counts), and
+the versions of tsup, esbuild and typescript. `npm run check:dist -w @nostr-wot/bunker` fails
+when `dist/` is missing or behind any of them; CI runs it right after the build, and anyone
+vendoring by path should run it first. There is deliberately no vitest test for this: `dist/`
+is gitignored, so such a test would run against nothing in CI.
 
 ## React Native
 
