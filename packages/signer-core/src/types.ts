@@ -198,6 +198,43 @@ export interface BatchResult {
 
 // ── Approval ──
 
+/**
+ * The host's answer to a prompt. One `allow` for the request, or for the whole batch.
+ *
+ * **There is deliberately no `excludedItems`.** A batch is approved or refused whole, so a
+ * user who objects to item 41 of 64 refuses all 64. That was assessed and left out, and the
+ * reasoning is here because the next person to want it will look at this type first:
+ *
+ * - **It is not just a decision field.** It needs a validation path (ids that are strings,
+ *   in this batch, deduplicated — an unknown id has to refuse the batch, because ignoring it
+ *   would silently sign the item the user excluded), its own outcome code so a caller can
+ *   tell "the user removed this one, the other 63 are done" from "the batch was refused,
+ *   recompose" (a wire-visible addition to `SignerError['code']`), a rule that exclude-all
+ *   normalises to a deny rather than resolving with 64 refusals, and a rule that it cannot
+ *   combine with `remember`: exclusion is per item, a stored permission is per method and
+ *   kind, so remembering an approval of 63 kind-1 items would auto-sign the 64th next time.
+ * - **The consent answer grows from one bit to N.** The core cannot see the screen and has
+ *   never been able to verify what the user tapped; `allow: true` is already taken on the
+ *   host's word for all 64 items, so a partial approval adds no new trust and no new
+ *   capability to a hostile host (claiming an exclusion that did not happen only refuses an
+ *   item; claiming none when there was one is no worse than approving a denied batch, which
+ *   is already possible). What it adds is room for a *correct-looking* host to ship the
+ *   wrong ids — an off-by-one on a filtered list, an id reused across a re-render, a stale
+ *   closure — and sign the item the user actively unchecked. Validating unknown ids catches
+ *   typos and stale ids, not an off-by-one that lands on another valid id, and nothing in
+ *   this package can close that: it is the one bug shape whose result is a signature the
+ *   user refused.
+ * - **What it buys is one saved re-review**, of a burst the research puts at twelve items,
+ *   and nothing measures how often a user objects to exactly one item. What it costs every
+ *   host is a prompt that holds per-item state across re-renders and cancellation instead of
+ *   answering one question.
+ *
+ * The cheap wins were taken instead: say the all-or-nothing rule before the list (the app's
+ * prompt does), and give a refusal a machine-readable "which item", so a caller can drop the
+ * offending item and recompose without spending the user's attention again. Without that
+ * last piece a denied batch is re-sent identically and denied forever, which is the actual
+ * user-facing defect near here — and it is smaller than `excludedItems`, not bigger.
+ */
 export interface ApprovalDecision {
   allow: boolean;
   /** Persist this decision through permissions, so the origin is not asked again. */

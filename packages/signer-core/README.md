@@ -276,7 +276,10 @@ A batch is a first-class request, not a loop over single ones, and it runs the s
 in the same order. What differs is deliberate, and each rule is written on `#runBatch`:
 
 - **Every item is shown.** The `ApprovalPort` gets `presentBatch(batch, account)` with the
-  whole frozen batch: every item, full content, every tag. A host that does not implement it
+  whole frozen batch: every item, full content, every tag. It is answered once, for the whole
+  batch: there is deliberately no per-item exclusion, and the assessment that left it out is
+  written on `ApprovalDecision` in `types.ts` — say the all-or-nothing rule before the list.
+  A host that does not implement it
   cannot show a batch, so a batch that needs a prompt is refused as `unsupported`; a batch
   every item of which is already allowed still signs. Same for `UnlockPort.requestUnlockBatch`.
   A `signPqAttestation` item is built before the prompt and shown as the `signEvent` it is, for
