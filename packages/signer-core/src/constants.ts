@@ -67,6 +67,13 @@ export const MAX_CRYPTO_PLAINTEXT_BYTES = 65535;
 /** Ciphertext handed to a decrypt method, in characters. */
 export const MAX_CRYPTO_CIPHERTEXT_LENGTH = 131072;
 
+/**
+ * A recipient's ML-KEM-1024 key as `opts.recipientKemKey`, in base64 characters: 1568 bytes
+ * is exactly this long. Checked by length before the string is scanned or decoded, as the
+ * extension checks it.
+ */
+export const RECIPIENT_KEM_KEY_LENGTH = 2092;
+
 // ── Batches ──
 //
 // A batch is one request carrying many items, approved once. On iOS every signature costs a
@@ -96,6 +103,7 @@ export const SIGNER_METHODS = [
   'nip04Decrypt',
   'nip44Encrypt',
   'nip44Decrypt',
+  'signPqAttestation',
 ] as const;
 
 /** Where a request can come from, as a runtime set for the boundary check. */
@@ -108,4 +116,5 @@ export const KEY_METHODS: ReadonlySet<string> = new Set([
   'nip04Decrypt',
   'nip44Encrypt',
   'nip44Decrypt',
+  'signPqAttestation',
 ]);

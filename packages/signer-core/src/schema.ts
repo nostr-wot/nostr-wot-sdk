@@ -24,9 +24,11 @@ import {
   MAX_REQUEST_ID_LENGTH,
   MAX_TAG_VALUES,
   ORIGIN_KINDS,
+  RECIPIENT_KEM_KEY_LENGTH,
   SIGNER_METHODS,
 } from './constants.js';
 import { canonicalHostname, canonicalHttpOrigin } from '@nostr-wot/permissions';
+import { isPqEnvelope } from '@nostr-wot/pq';
 import { SignerError } from './errors.js';
 import type {
   EventTemplateInput,
@@ -42,6 +44,8 @@ import type {
 } from './types.js';
 
 const HEX_PUBKEY = /^[0-9a-f]{64}$/;
+/** Standard base64, padding at the end only; what a `kind:10203` carries. */
+const BASE64 = /^[A-Za-z0-9+/]+=*$/;
 /** NIP-01: an integer between 0 and 65535. */
 const MAX_KIND = 65535;
 
@@ -261,10 +265,37 @@ interface MeasuredParams {
  * own limit. Inside a batch the effective limit is the smaller of the two, and when it is the
  * budget that is hit, the error says the batch is too large rather than the item.
  */
+/**
+ * The post-quantum opt-in on `nip44Encrypt`, as the extension validates it: `opts` is either
+ * absent (classic) or exactly `{ scheme: 'pq', recipientKemKey }` with a key that is 2092
+ * base64 characters, the length of an ML-KEM-1024 key, checked before a character of it is
+ * scanned. Any other spelling is refused rather than folded into classic, because a caller
+ * that asked for post-quantum and got NIP-44 back could not tell.
+ */
+function validateEncryptScheme(raw: Record<string, unknown>): { scheme: 'classic' } | { scheme: 'pq'; recipientKemKey: string } {
+  const opts = raw['opts'];
+  if (opts === undefined) return { scheme: 'classic' };
+  if (!isRecord(opts)) throw invalid('opts must be an object');
+  if (opts['scheme'] !== 'pq') throw invalid('opts.scheme must be pq');
+  const key = opts['recipientKemKey'];
+  if (typeof key !== 'string') throw invalid('opts.recipientKemKey must be a string');
+  if (key.length !== RECIPIENT_KEM_KEY_LENGTH) {
+    throw invalid(`opts.recipientKemKey must be ${RECIPIENT_KEM_KEY_LENGTH} base64 characters`);
+  }
+  if (!BASE64.test(key)) throw invalid('opts.recipientKemKey must be base64');
+  return { scheme: 'pq', recipientKemKey: key };
+}
+
 function validateParams(method: SignerMethod, raw: Record<string, unknown>, budget = Infinity): MeasuredParams {
   switch (method) {
     case 'getPublicKey':
     case 'getRelays':
+      return { params: { method }, bytes: 0 };
+    case 'signPqAttestation':
+      // The event is entirely the account's: its own keys, its own proof of possession.
+      // A caller that hands over a template is asking for something this method does not
+      // do, and is told so rather than having the template silently ignored.
+      if (Object.keys(raw).length > 0) throw invalid('signPqAttestation takes no params');
       return { params: { method }, bytes: 0 };
     case 'signEvent': {
       const limit = Math.min(MAX_EVENT_BYTES, budget);
@@ -282,7 +313,13 @@ function validateParams(method: SignerMethod, raw: Record<string, unknown>, budg
       if (plaintext.length > limit) throw tooLarge();
       const bytes = utf8ByteLength(plaintext);
       if (bytes > limit) throw tooLarge();
-      return { params: { method, pubkey, plaintext }, bytes };
+      if (method === 'nip04Encrypt') {
+        if (raw['opts'] !== undefined) throw invalid('opts are only supported for nip44Encrypt');
+        return { params: { method, pubkey, plaintext }, bytes };
+      }
+      const scheme = validateEncryptScheme(raw);
+      // The recipient's key is held with the request; a batch is charged for it.
+      return { params: { method, pubkey, plaintext, ...scheme }, bytes: bytes + (scheme.scheme === 'pq' ? RECIPIENT_KEM_KEY_LENGTH : 0) };
     }
     case 'nip04Decrypt':
     case 'nip44Decrypt': {
@@ -294,7 +331,11 @@ function validateParams(method: SignerMethod, raw: Record<string, unknown>, budg
           ? batchTooLarge()
           : invalid(`ciphertext may be at most ${MAX_CRYPTO_CIPHERTEXT_LENGTH} characters`);
       }
-      return { params: { method, pubkey, ciphertext }, bytes: ciphertext.length };
+      if (method === 'nip04Decrypt') return { params: { method, pubkey, ciphertext }, bytes: ciphertext.length };
+      // The payload is self-describing (a version byte and an algorithm byte), so the route
+      // is decided here, once, and every consumer of the typed params sees which it is.
+      const scheme = isPqEnvelope(ciphertext) ? 'pq' : 'classic';
+      return { params: { method, pubkey, ciphertext, scheme }, bytes: ciphertext.length };
     }
   }
 }
@@ -304,12 +345,17 @@ function wireParams(params: ValidatedParams): Record<string, unknown> {
   switch (params.method) {
     case 'getPublicKey':
     case 'getRelays':
+    case 'signPqAttestation':
       return {};
     case 'signEvent':
       return { event: params.event };
     case 'nip04Encrypt':
-    case 'nip44Encrypt':
       return { pubkey: params.pubkey, plaintext: params.plaintext };
+    case 'nip44Encrypt':
+      // The opt-in travels with the frozen request, so the prompt can say "post-quantum".
+      return params.scheme === 'pq'
+        ? { pubkey: params.pubkey, plaintext: params.plaintext, opts: { scheme: 'pq', recipientKemKey: params.recipientKemKey } }
+        : { pubkey: params.pubkey, plaintext: params.plaintext };
     case 'nip04Decrypt':
     case 'nip44Decrypt':
       return { pubkey: params.pubkey, ciphertext: params.ciphertext };

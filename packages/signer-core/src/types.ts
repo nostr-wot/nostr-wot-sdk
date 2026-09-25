@@ -16,7 +16,12 @@ import type { SignerErrorCode } from './errors.js';
 
 // ── The request ──
 
-/** The extension's NIP-07 method set, kept identical so the bridge is structural. */
+/**
+ * The extension's NIP-07 method set, kept identical so the bridge is structural, plus one
+ * NIP-07 has no spelling for: `signPqAttestation`, which signs the account's own `kind:10203`
+ * post-quantum attestation. The extension does that from a privileged settings handler; here
+ * it is a signing request like any other, under the `signEvent` rule for kind 10203.
+ */
 export type SignerMethod =
   | 'getPublicKey'
   | 'signEvent'
@@ -24,7 +29,8 @@ export type SignerMethod =
   | 'nip04Encrypt'
   | 'nip04Decrypt'
   | 'nip44Encrypt'
-  | 'nip44Decrypt';
+  | 'nip44Decrypt'
+  | 'signPqAttestation';
 
 /** Who is asking. */
 export interface RequestOrigin {
@@ -44,8 +50,14 @@ export interface RequestOrigin {
  * | --- | --- |
  * | `getPublicKey`, `getRelays` | none |
  * | `signEvent` | `{ event: { kind, content, tags, created_at?, pubkey? } }` |
- * | `nip04Encrypt`, `nip44Encrypt` | `{ pubkey, plaintext }` |
+ * | `nip04Encrypt` | `{ pubkey, plaintext }` |
+ * | `nip44Encrypt` | `{ pubkey, plaintext, opts?: { scheme: 'pq', recipientKemKey } }` |
  * | `nip04Decrypt`, `nip44Decrypt` | `{ pubkey, ciphertext }` |
+ * | `signPqAttestation` | none |
+ *
+ * `opts` is the extension's post-quantum opt-in: hybrid sealing to the recipient's
+ * ML-KEM-1024 key (base64, from their `kind:10203`), never inferred. A decrypt takes no flag:
+ * the payload says what it is.
  *
  * Validated at the boundary by `validateRequest`, and nowhere else.
  */
@@ -67,13 +79,24 @@ export interface EventTemplateInput {
   pubkey?: string;
 }
 
-/** The params after validation, typed by method. Only `validateRequest` produces one. */
+/**
+ * The params after validation, typed by method. Only `validateRequest` produces one.
+ *
+ * `scheme` on the NIP-44 methods is required, never defaulted: it decides whether the
+ * account's post-quantum keys are read and which construction runs, so every consumer has
+ * to say which it handled. For an encrypt it is what the caller asked for; for a decrypt it
+ * is what the self-describing payload is.
+ */
 export type ValidatedParams =
   | { method: 'getPublicKey' }
   | { method: 'getRelays' }
   | { method: 'signEvent'; event: EventTemplateInput }
-  | { method: 'nip04Encrypt' | 'nip44Encrypt'; pubkey: string; plaintext: string }
-  | { method: 'nip04Decrypt' | 'nip44Decrypt'; pubkey: string; ciphertext: string };
+  | { method: 'nip04Encrypt'; pubkey: string; plaintext: string }
+  | { method: 'nip44Encrypt'; pubkey: string; plaintext: string; scheme: 'classic' }
+  | { method: 'nip44Encrypt'; pubkey: string; plaintext: string; scheme: 'pq'; recipientKemKey: string }
+  | { method: 'nip04Decrypt'; pubkey: string; ciphertext: string }
+  | { method: 'nip44Decrypt'; pubkey: string; ciphertext: string; scheme: 'classic' | 'pq' }
+  | { method: 'signPqAttestation' };
 
 /**
  * A request that passed the boundary.
@@ -215,6 +238,8 @@ export interface ActivityEntry {
   ciphertext?: string;
   /** What a `signEvent` signed. */
   event?: EventTemplateInput;
+  /** For a NIP-44 method: the classic construction, or the post-quantum hybrid. */
+  scheme?: 'classic' | 'pq';
   /** The batch this item arrived in, when it did. `requestId` is then the item's id. */
   batchId?: string;
 }

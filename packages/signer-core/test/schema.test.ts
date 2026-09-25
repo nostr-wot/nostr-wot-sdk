@@ -344,14 +344,25 @@ describe('signEvent', () => {
 });
 
 describe('the crypto methods', () => {
-  test.each(['nip04Encrypt', 'nip44Encrypt'] as const)('%s takes a pubkey and a plaintext', (method) => {
-    const { params } = validateRequest(base(method, { pubkey: PUBKEY, plaintext: 'hi', extra: 1 }));
-    expect(params).toEqual({ method, pubkey: PUBKEY, plaintext: 'hi' });
+  test('nip04Encrypt takes a pubkey and a plaintext', () => {
+    const { params } = validateRequest(base('nip04Encrypt', { pubkey: PUBKEY, plaintext: 'hi', extra: 1 }));
+    expect(params).toEqual({ method: 'nip04Encrypt', pubkey: PUBKEY, plaintext: 'hi' });
   });
 
-  test.each(['nip04Decrypt', 'nip44Decrypt'] as const)('%s takes a pubkey and a ciphertext', (method) => {
-    const { params } = validateRequest(base(method, { pubkey: PUBKEY, ciphertext: 'c2VjcmV0' }));
-    expect(params).toEqual({ method, pubkey: PUBKEY, ciphertext: 'c2VjcmV0' });
+  test('nip44Encrypt takes a pubkey and a plaintext, and without opts the scheme is classic', () => {
+    const { params, request } = validateRequest(base('nip44Encrypt', { pubkey: PUBKEY, plaintext: 'hi', extra: 1 }));
+    expect(params).toEqual({ method: 'nip44Encrypt', pubkey: PUBKEY, plaintext: 'hi', scheme: 'classic' });
+    expect(request.params).toEqual({ pubkey: PUBKEY, plaintext: 'hi' });
+  });
+
+  test('nip04Decrypt takes a pubkey and a ciphertext', () => {
+    const { params } = validateRequest(base('nip04Decrypt', { pubkey: PUBKEY, ciphertext: 'c2VjcmV0' }));
+    expect(params).toEqual({ method: 'nip04Decrypt', pubkey: PUBKEY, ciphertext: 'c2VjcmV0' });
+  });
+
+  test('nip44Decrypt takes a pubkey and a ciphertext, and a payload that is not the envelope is classic', () => {
+    const { params } = validateRequest(base('nip44Decrypt', { pubkey: PUBKEY, ciphertext: 'c2VjcmV0' }));
+    expect(params).toEqual({ method: 'nip44Decrypt', pubkey: PUBKEY, ciphertext: 'c2VjcmV0', scheme: 'classic' });
   });
 
   test.each([
@@ -436,7 +447,7 @@ describe('a batch at the boundary', () => {
     expect(request.items.map((item) => item.id)).toEqual(['item_0', 'item_1', 'item_2']);
     expect(items.map((item) => item.params)).toEqual([
       { method: 'signEvent', event: { kind: 7, content: '+', tags: [['e', 'a'.repeat(64)]] } },
-      { method: 'nip44Encrypt', pubkey: PUBKEY, plaintext: 'hi' },
+      { method: 'nip44Encrypt', pubkey: PUBKEY, plaintext: 'hi', scheme: 'classic' },
       { method: 'nip04Decrypt', pubkey: PUBKEY, ciphertext: 'c2VjcmV0' },
     ]);
     // The wire copy carries only what was validated, and none of it is the caller's object.
