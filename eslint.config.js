@@ -25,6 +25,11 @@ const PLATFORM_GLOBALS = ['browser', 'chrome', 'window', 'localStorage'];
  */
 const AVOIDABLE_GLOBALS = [
   { name: 'structuredClone', message: 'Shared packages clone JSON with a JSON round trip, not structuredClone.' },
+  {
+    name: 'URL',
+    message:
+      "The host's URL is not a WHATWG parser everywhere (React Native folds neither case nor ports); use canonicalHttpOrigin / canonicalHostname from @nostr-wot/permissions.",
+  },
 ];
 
 export default [

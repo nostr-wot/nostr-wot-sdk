@@ -25,6 +25,7 @@
  */
 import { describe, test, expect } from 'vitest';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { ESLint } from 'eslint';
 import { basename, join, relative } from 'node:path';
 
 const ROOT = join(import.meta.dirname, '..', '..', '..');
@@ -65,7 +66,7 @@ const FORBIDDEN: ReadonlyArray<{ pattern: RegExp; why: string }> = [
   { pattern: /\bstructuredClone\b/, why: 'uses `structuredClone`; clone JSON with a JSON round trip' },
   // The host's URL parser is not a WHATWG parser everywhere (React Native's folds neither
   // case nor ports). Origins are canonicalised by `canonicalHttpOrigin` in permissions.
-  { pattern: /\bnew\s+URL\s*\(|\bURL\.canParse\b/, why: 'parses with the host `URL`; use `canonicalHttpOrigin`' },
+  { pattern: /\bURL\b/, why: 'reaches for the host `URL`; use `canonicalHttpOrigin`' },
 ];
 
 /**
@@ -222,6 +223,50 @@ describe('the platform boundary', () => {
   const hits = (source: string) =>
     FORBIDDEN.some(({ pattern }) => pattern.test(stripComments(source)));
 
+  /**
+   * Every form each FORBIDDEN entry exists to catch. A guard that matches one spelling of a
+   * thing and not the others is a guard that has been passed once already: `new URL(` was
+   * matched while `URL.parse(` and `new globalThis.URL(` were not.
+   */
+  const NEGATIVE_CONTROLS: ReadonlyArray<[string, string]> = [
+    ['react import', "import { useState } from 'react';"],
+    ['react-native import', "import { View } from 'react-native/Libraries/Components/View/View';"],
+    ['browser namespace', 'const store = browser.storage.local;'],
+    ['chrome namespace', 'chrome.runtime.sendMessage(x);'],
+    ['window', 'window.location.reload();'],
+    ['localStorage', "localStorage.getItem('vault');"],
+    ['crypto.subtle', 'await crypto.subtle.digest("SHA-256", bytes);'],
+    ['structuredClone', 'const draft = structuredClone(tree);'],
+    ['new URL', 'const url = new URL(origin);'],
+    ['URL.parse', 'const url = URL.parse(origin);'],
+    ['URL.canParse', 'if (URL.canParse(origin)) return origin;'],
+    ['new globalThis.URL', 'const url = new globalThis.URL(origin);'],
+    ['globalThis.URL.parse', 'const url = globalThis.URL.parse(origin);'],
+    ['URL as a value', 'const Parser = URL; new Parser(origin);'],
+  ];
+
+  test.each(NEGATIVE_CONTROLS)('the scan catches %s', (_name, line) => {
+    expect(hits(line), line).toBe(true);
+  });
+
+  test.each(NEGATIVE_CONTROLS)('ESLint catches %s in a shared package', async (_name, line) => {
+    // Linted as if it were a file in a shared package's src, through the real config: the
+    // rule set is what runs in CI, not a re-statement of it here.
+    const eslint = new ESLint({ cwd: ROOT });
+    const [result] = await eslint.lintText(`export const probe = () => { ${line} };\n`, {
+      filePath: join(PACKAGES, 'permissions', 'src', 'probe.ts'),
+    });
+    expect(result!.errorCount, `${line}\n${result!.messages.map((m) => m.message).join('\n')}`).toBeGreaterThan(0);
+  });
+
+  test('ESLint is quiet on a clean line in a shared package, so the controls above mean something', async () => {
+    const eslint = new ESLint({ cwd: ROOT });
+    const [result] = await eslint.lintText("export const probe = (text: string) => new TextEncoder().encode(text);\n", {
+      filePath: join(PACKAGES, 'permissions', 'src', 'probe.ts'),
+    });
+    expect(result!.errorCount, result!.messages.map((m) => m.message).join('\n')).toBe(0);
+  });
+
   test('the scan sees a violation when one is planted in code', () => {
     // The guard has to be able to fail. A scan whose patterns never fire is indistinguishable
     // from one that is scanning the wrong directory.
@@ -233,8 +278,6 @@ describe('the platform boundary', () => {
       "localStorage.getItem('vault');",
       'await crypto.subtle.digest("SHA-256", bytes);',
       'const draft = structuredClone(tree);',
-      'const url = new URL(origin);',
-      'if (URL.canParse(origin)) return origin;',
       // A string literal is in scope: closer to code than to prose.
       "const api = 'crypto.subtle';",
       'const key = `${prefix}localStorage`;',
@@ -249,6 +292,8 @@ describe('the platform boundary', () => {
       '/** the extension supplies `browser.storage` here, the app supplies SecureStore */',
       '/*\n * multi-line: window.location\n * and chrome.runtime\n */\nexport const x = 1;',
       "const url = 'https://example.test/path'; // window.open used to live here",
+      "const bunkerUrl = account.nip46Config.bunkerUrl; const BUNKER_URL = 1;",
+      "const params = new URLSearchParams(query);",
       "import { pbkdf2Async } from '@noble/hashes/pbkdf2.js';",
       'const timeWindow = windowMs;',
       'const reactive = true;',
