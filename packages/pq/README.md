@@ -142,6 +142,22 @@ const payload = encryptPq('hello', att.kem!, nip44ConversationKey, parties);
 const text    = decryptPq(payload, myKem.secretKey, nip44ConversationKey, parties);
 ```
 
+Two ways to look at a payload before opening it. `isPqEnvelope(payload)` is the boolean a
+cipher routes on. `classifyEnvelope(payload)` is the one a caller that reports failures should
+use, because a boolean cannot tell "somebody else's ciphertext" from "ours and broken":
+
+| `classifyEnvelope` | Means |
+| --- | --- |
+| `'pq'` | A complete envelope at this version and algorithm. Identical to `isPqEnvelope`. |
+| `'pq-unreadable'` | The header names **our** version and we cannot open it: truncated, an algorithm byte we do not implement, or base64 this host cannot decode. |
+| `'classic'` | Nothing claims to be ours. NIP-44's version byte is 0x02, so its ciphertext lands here, as does anything that is not base64. |
+
+The version and algorithm bytes are decoded from the first four base64 characters inline,
+without `atob` or `Buffer`, so a host that has neither still gets `'pq-unreadable'` for a valid
+envelope rather than being told it is classic and sent to the wrong code. A payload claiming a
+version this package has never heard of cannot be distinguished from a classic ciphertext of
+that version, so it is called classic — the honest answer, not a guess.
+
 ### Send a gift-wrapped direct message
 
 Most callers want this rather than the raw envelope. It composes the envelope with NIP-17

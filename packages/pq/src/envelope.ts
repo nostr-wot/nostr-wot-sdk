@@ -253,5 +253,65 @@ export function isPqEnvelope(payload: string): boolean {
   }
 }
 
+/** Standard base64, in index order. Used to read a header without a host decoder. */
+const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+/**
+ * The first two bytes of a base64 payload, decoded here rather than by the host.
+ *
+ * Four base64 characters are three bytes, and the version and algorithm bytes are the first
+ * two, so this is all the arithmetic the header needs. Doing it inline is not a
+ * micro-optimisation: `fromBase64` needs `atob` or `Buffer`, and a host that has neither is
+ * exactly the case that must not be answered with "this is a classic payload".
+ */
+function headerBytes(payload: string): [number, number] | null {
+  if (payload.length < 4) return null;
+  let accumulator = 0;
+  for (let i = 0; i < 4; i++) {
+    const index = BASE64_ALPHABET.indexOf(payload[i]!);
+    if (index < 0) return null;
+    accumulator = accumulator * 64 + index;
+  }
+  return [(accumulator >>> 16) & 0xff, (accumulator >>> 8) & 0xff];
+}
+
+/**
+ * What a payload says it is, before anything tries to open it.
+ *
+ * `isPqEnvelope` answers a boolean, and a boolean cannot tell "this is somebody else's
+ * ciphertext" from "this is one of ours and it is broken". Both came back false, so a truncated
+ * envelope, one naming an algorithm we do not implement, and a perfectly good one on a host
+ * with no base64 decoder were all routed to the classic path and failed there — under a classic
+ * label, in the error and in the signer's activity log. Anyone debugging that chases the wrong
+ * thing entirely.
+ *
+ *   - `pq` — a complete envelope at this version and algorithm. Exactly `isPqEnvelope`.
+ *   - `pq-unreadable` — the header names OUR version, and we cannot open it: truncated, an
+ *     algorithm byte we do not implement, or base64 this host cannot decode.
+ *   - `classic` — nothing claims to be one of ours. NIP-44's own version byte is 0x02, so its
+ *     ciphertext lands here, as does anything that is not base64 at all.
+ *
+ * The version byte is the whole test for "ours", and a payload claiming a version we have never
+ * heard of is indistinguishable from a classic ciphertext of that version, so it is called
+ * classic. That is the honest answer: this function reports what the wire format lets it know,
+ * not what it would like to.
+ */
+export type EnvelopeClass = 'pq' | 'pq-unreadable' | 'classic';
+
+export function classifyEnvelope(payload: string): EnvelopeClass {
+  const header = headerBytes(payload);
+  if (header === null || header[0] !== ENVELOPE_VERSION) return 'classic';
+  if (header[1] !== ALG_MLKEM1024_XCHACHA) return 'pq-unreadable';
+  let bytes: Uint8Array;
+  try {
+    bytes = fromBase64(payload);
+  } catch {
+    // Not base64 past the header, or this host has neither `atob` nor `Buffer`. Either way it
+    // named our envelope, so it is not somebody else's classic payload.
+    return 'pq-unreadable';
+  }
+  return bytes.length >= HEADER_BYTES + TAG_BYTES ? 'pq' : 'pq-unreadable';
+}
+
 /** Bytes this envelope adds on top of the plaintext, for capacity planning. */
 export const ENVELOPE_OVERHEAD_BYTES = HEADER_BYTES + TAG_BYTES + 2;

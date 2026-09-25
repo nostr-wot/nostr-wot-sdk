@@ -898,9 +898,19 @@ export class SignerCore {
       case 'nip44Encrypt':
         if (params.scheme !== 'pq') throw new SignerError('unsupported', 'classic nip44Encrypt does not use the post-quantum keys');
         return signer.nip44Encrypt(params.pubkey, params.plaintext, { scheme: 'pq', recipientKemKey: params.recipientKemKey });
-      case 'nip44Decrypt':
+      case 'nip44Decrypt': {
         if (params.scheme !== 'pq') throw new SignerError('unsupported', 'classic nip44Decrypt does not use the post-quantum keys');
+        // The boundary routed this here because the payload's header names our envelope. If it
+        // is not one we can open, say that: the alternative, which is what used to happen, was
+        // to hand it to the classic path, where it failed under a `classic` label — in the
+        // caller's error and in the activity entry — for a payload NIP-44 had never seen. The
+        // text names the framing, which anyone holding the ciphertext can already read, and no
+        // key-dependent outcome, so it is not an oracle.
+        if (params.envelope !== 'hybrid') {
+          throw new SignerError('operation_failed', 'This post-quantum payload is not a readable hybrid envelope');
+        }
         return signer.nip44Decrypt(params.pubkey, params.ciphertext);
+      }
       default:
         throw new SignerError('unsupported', `${params.method} does not use the post-quantum keys`);
     }

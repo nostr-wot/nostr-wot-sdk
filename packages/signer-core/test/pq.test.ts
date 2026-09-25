@@ -28,6 +28,7 @@ import {
   decryptPq,
   derivePqKeys,
   encryptPq,
+  fromBase64,
   isPqEnvelope,
   parseAttestation,
   toBase64,
@@ -354,11 +355,46 @@ describe('nip44Decrypt routes on the envelope', () => {
     const acct = seededAccount('acct_seed', M24);
     const { core, activity } = await fixture(true, { accounts: [acct] });
     const from = peer(acct.pubkey);
-    for (const ciphertext of ['not a ciphertext at all', toBase64(randomBytes(200)), 'AgAAAA==']) {
+    // Deliberately not random bytes: a random leading byte is our envelope version one time in
+    // 256, which would make this test's `scheme: 'classic'` assertion flaky rather than wrong.
+    const notOurs = toBase64(new Uint8Array(200).fill(0x02));
+    for (const ciphertext of ['not a ciphertext at all', notOurs, 'AgAAAA==']) {
       const error = await core.handle(req('nip44Decrypt', { pubkey: from.pk, ciphertext })).catch((e: unknown) => e);
       expect(error, ciphertext).toBeInstanceOf(SignerError);
       expect((error as SignerError).code, ciphertext).toBe('operation_failed');
       expect(activity.entries.at(-1), ciphertext).toMatchObject({ decision: 'deny', code: 'operation_failed', scheme: 'classic' });
+    }
+  });
+
+  test('a payload that names the hybrid envelope and cannot be opened is refused as hybrid, not mislabelled classic', async () => {
+    // Probed on the committed code: a truncated or wrong-algorithm envelope answered false to
+    // `isPqEnvelope`, so it was routed classic and failed there as `operation_failed` with
+    // `activity.scheme = 'classic'`. The payload says 0x01 in its first byte; calling it classic
+    // sends whoever is debugging it to the NIP-44 code, which never saw a payload like this.
+    const acct = seededAccount('acct_seed', M24);
+    const { core, activity } = await fixture(true, { accounts: [acct] });
+    const from = peer(acct.pubkey);
+    const whole = hybridPayload('for post-quantum eyes only', from, acct.pubkey, expectedKeys(M24, 0).kem.publicKey);
+
+    const truncated = toBase64(fromBase64(whole).subarray(0, 100));
+    const wrongAlg = fromBase64(whole);
+    wrongAlg[1] = 0x09;
+
+    for (const [name, ciphertext] of [
+      ['truncated', truncated],
+      ['an algorithm we do not implement', toBase64(wrongAlg)],
+    ] as const) {
+      expect(isPqEnvelope(ciphertext), name).toBe(false);
+      const error = await core.handle(req('nip44Decrypt', { pubkey: from.pk, ciphertext })).catch((e: unknown) => e);
+      expect((error as SignerError).code, name).toBe('operation_failed');
+      expect((error as SignerError).message, name).toBe('This post-quantum payload is not a readable hybrid envelope');
+      expect(activity.entries.at(-1), name).toMatchObject({
+        method: 'nip44Decrypt',
+        decision: 'deny',
+        code: 'operation_failed',
+        scheme: 'pq',
+        reason: 'This post-quantum payload is not a readable hybrid envelope',
+      });
     }
   });
 

@@ -20,6 +20,7 @@ import {
   type SignerBatchRequest,
   type SignerCoreDeps,
   type PqKeyScope,
+  type PreparedParams,
   type SignerErrorCode,
   type UnlockPort,
   type ValidatedParams,
@@ -99,6 +100,33 @@ test('the NIP-44 scheme is decided at the boundary and required after it, never 
     // @ts-expect-error a classic encrypt carries no recipient key
     params.recipientKemKey;
   }
+});
+
+test('a post-quantum decrypt has to say whether the envelope is readable, so no path can assume it is', () => {
+  // The defect this replaces: a payload naming our envelope that we cannot open answered false
+  // to a boolean check and was routed classic. A consumer that does not look at `envelope`
+  // cannot be written against the type.
+  // @ts-expect-error `envelope` is required on a post-quantum decrypt
+  const pq: ValidatedParams = { method: 'nip44Decrypt', pubkey: '', ciphertext: '', scheme: 'pq' };
+  void pq;
+  const params = {} as ValidatedParams;
+  if (params.method === 'nip44Decrypt' && params.scheme === 'pq') {
+    expectTypeOf(params.envelope).toEqualTypeOf<'hybrid' | 'unreadable'>();
+  }
+  if (params.method === 'nip44Decrypt' && params.scheme === 'classic') {
+    // @ts-expect-error a classic payload has no envelope verdict
+    params.envelope;
+  }
+});
+
+test('an unprepared attestation cannot reach the signing backend', () => {
+  // `signPqAttestation` arrives with no params and its event is built before the prompt. The
+  // type is what keeps a future path from signing one that was never built or shown.
+  // @ts-expect-error the attestation's event is required once params are prepared
+  const bare: PreparedParams = { method: 'signPqAttestation' };
+  void bare;
+  const prepared: PreparedParams = { method: 'signPqAttestation', event: { kind: 10203, content: '', tags: [] } };
+  if (prepared.method === 'signPqAttestation') expectTypeOf(prepared.event.tags).toEqualTypeOf<string[][]>();
 });
 
 test('the post-quantum scope names its account and hands out no key outside the callback', () => {

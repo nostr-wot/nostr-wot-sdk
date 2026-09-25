@@ -86,6 +86,12 @@ export interface EventTemplateInput {
  * account's post-quantum keys are read and which construction runs, so every consumer has
  * to say which it handled. For an encrypt it is what the caller asked for; for a decrypt it
  * is what the self-describing payload is.
+ *
+ * A post-quantum decrypt also carries `envelope`. A payload whose header names our envelope
+ * version and which we cannot open — truncated, an algorithm byte we do not implement, base64
+ * this host cannot decode — is `'unreadable'`, and it is still `scheme: 'pq'`, because it is:
+ * reporting it as classic sent the caller, the activity log and anyone debugging to the NIP-44
+ * code, which had never seen a payload like it.
  */
 export type ValidatedParams =
   | { method: 'getPublicKey' }
@@ -95,7 +101,8 @@ export type ValidatedParams =
   | { method: 'nip44Encrypt'; pubkey: string; plaintext: string; scheme: 'classic' }
   | { method: 'nip44Encrypt'; pubkey: string; plaintext: string; scheme: 'pq'; recipientKemKey: string }
   | { method: 'nip04Decrypt'; pubkey: string; ciphertext: string }
-  | { method: 'nip44Decrypt'; pubkey: string; ciphertext: string; scheme: 'classic' | 'pq' }
+  | { method: 'nip44Decrypt'; pubkey: string; ciphertext: string; scheme: 'classic' }
+  | { method: 'nip44Decrypt'; pubkey: string; ciphertext: string; scheme: 'pq'; envelope: 'hybrid' | 'unreadable' }
   | { method: 'signPqAttestation' };
 
 /**

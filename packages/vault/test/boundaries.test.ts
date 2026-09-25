@@ -80,9 +80,14 @@ const FORBIDDEN: ReadonlyArray<{ pattern: RegExp; why: string }> = [
  * `clearTimeout` run the vault's auto-lock and the queue's request timeout. Node and browsers
  * have all of them; a React Native host polyfills `crypto.getRandomValues` before importing
  * anything. `AbortController` is what the queue hands a remote-signer port so a timeout, a
- * switch or a disposal can abort the call in flight. They are listed here so that a reader of the FORBIDDEN list does not take their
- * absence for an oversight, and the test below holds every shared package's README to
- * declaring them.
+ * switch or a disposal can abort the call in flight. `atob` and `btoa` are what
+ * `@nostr-wot/pq`'s base64 helpers reach for, with a `Buffer` fallback Hermes does not have
+ * either, and `signer-core` is on their path: it decodes a stored ML-KEM key and reads a
+ * payload's envelope header through them. Their absence does not throw, which is why they
+ * belong on a declared list rather than being left to be discovered — it silently makes every
+ * hybrid payload unrecognisable. They are listed here so that a reader of the FORBIDDEN list
+ * does not take their absence for an oversight, and the test below holds every shared package's
+ * README to declaring them.
  */
 const REQUIRED_HOST_CAPABILITIES = [
   'TextEncoder',
@@ -90,6 +95,8 @@ const REQUIRED_HOST_CAPABILITIES = [
   'crypto.getRandomValues',
   'setTimeout',
   'AbortController',
+  'atob',
+  'btoa',
 ] as const;
 
 const SOURCE_FILE = /\.(ts|tsx|mts|cts|js|mjs|cjs|jsx)$/;

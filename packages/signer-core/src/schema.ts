@@ -28,7 +28,7 @@ import {
   SIGNER_METHODS,
 } from './constants.js';
 import { canonicalHostname, canonicalHttpOrigin } from '@nostr-wot/permissions';
-import { isPqEnvelope } from '@nostr-wot/pq';
+import { classifyEnvelope } from '@nostr-wot/pq';
 import { SignerError } from './errors.js';
 import type {
   EventTemplateInput,
@@ -334,9 +334,17 @@ function validateParams(method: SignerMethod, raw: Record<string, unknown>, budg
       }
       if (method === 'nip04Decrypt') return { params: { method, pubkey, ciphertext }, bytes: ciphertext.length };
       // The payload is self-describing (a version byte and an algorithm byte), so the route
-      // is decided here, once, and every consumer of the typed params sees which it is.
-      const scheme = isPqEnvelope(ciphertext) ? 'pq' : 'classic';
-      return { params: { method, pubkey, ciphertext, scheme }, bytes: ciphertext.length };
+      // is decided here, once, and every consumer of the typed params sees which it is. A
+      // payload whose header names our envelope and which cannot be opened is post-quantum and
+      // unreadable, never classic: it is not refused here, because a request that reached the
+      // boundary cleanly belongs in the activity log with an honest reason, and `invalid_request`
+      // would leave no entry at all.
+      const verdict = classifyEnvelope(ciphertext);
+      if (verdict === 'classic') return { params: { method, pubkey, ciphertext, scheme: 'classic' }, bytes: ciphertext.length };
+      return {
+        params: { method, pubkey, ciphertext, scheme: 'pq', envelope: verdict === 'pq' ? 'hybrid' : 'unreadable' },
+        bytes: ciphertext.length,
+      };
     }
   }
 }

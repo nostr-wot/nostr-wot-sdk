@@ -442,6 +442,8 @@ export {
   encryptPq,
   decryptPq,
   isPqEnvelope,
+  classifyEnvelope,
+  type EnvelopeClass,
   ENVELOPE_VERSION,
   ALG_MLKEM1024_XCHACHA,
   KEM_CIPHERTEXT_BYTES,

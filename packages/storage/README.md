@@ -82,8 +82,13 @@ own source names them: **`crypto.getRandomValues`** on `globalThis`, which `@nob
 and THROWS without — on Hermes that means importing `react-native-get-random-values` before
 anything else — and timers, **`setTimeout`** / `clearTimeout`, which run the vault's auto-lock
 and the queue's request timeout, and **`AbortController`**, which the queue hands a remote
-signer port so a timeout, a switch or a disposal can abort the call in flight. Node, browsers
-and React Native have all five except that React Native has to polyfill the random source. Storage, the clock and password stretching are injected as
+signer port so a timeout, a switch or a disposal can abort the call in flight. Two more come in
+with the post-quantum path: **`atob`** and **`btoa`**, which `@nostr-wot/pq`'s base64 helpers
+reach for (with a `Buffer` fallback Hermes does not have either) to decode a stored ML-KEM key
+and to read a payload's envelope header. Missing them throws nothing; it silently makes every
+hybrid payload unrecognisable, which is why they are declared here rather than left to be
+discovered. Node, browsers and React Native 0.74 or newer have all seven except that React
+Native has to polyfill the random source. Storage, the clock and password stretching are injected as
 ports. `structuredClone`, `URL`, WebCrypto's `subtle`, the DOM and the WebExtension namespaces
 are never used, and `packages/vault/test/boundaries.test.ts` plus the ESLint config enforce
 that.

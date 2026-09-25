@@ -49,6 +49,7 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
+    "check:dist": "node ../../scripts/dist-stamp.mjs check",
     "test": "vitest run",
     "test:run": "vitest run"
   },

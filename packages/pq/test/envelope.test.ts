@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { mnemonicToSeedSync } from '@scure/bip39';
 import {
-  derivePqKeys, encryptPq, decryptPq, isPqEnvelope, fromBase64, toBase64,
+  derivePqKeys, encryptPq, decryptPq, isPqEnvelope, classifyEnvelope, fromBase64, toBase64,
   ENVELOPE_VERSION, ALG_MLKEM1024_XCHACHA, KEM_CIPHERTEXT_BYTES, MAX_PLAINTEXT_BYTES,
   type EnvelopeParties,
 } from '../src/index.js';
@@ -66,6 +66,66 @@ describe('envelope framing', () => {
     expect(isPqEnvelope('not base64 !!!')).toBe(false);
     expect(isPqEnvelope(toBase64(new Uint8Array([2, 1, 3])))).toBe(false);
   });
+});
+
+describe('classifyEnvelope separates "not ours" from "ours and broken"', () => {
+  const bob = bobKeys();
+  const whole = () => encryptPq('hi', bob.kem.publicKey, convKey(), parties);
+
+  it('says pq for a whole envelope and classic for a payload that names another version', () => {
+    expect(classifyEnvelope(whole())).toBe('pq');
+    // NIP-44 v2 ciphertext begins with its own version byte, 0x02, and stays classic.
+    expect(classifyEnvelope(toBase64(new Uint8Array([2, 1, 3])))).toBe('classic');
+    expect(classifyEnvelope('not base64 !!!')).toBe('classic');
+    expect(classifyEnvelope('')).toBe('classic');
+  });
+
+  it('says pq-unreadable for a payload that names our version and cannot be opened', () => {
+    // Truncated: the header claims our envelope and there is not enough of it left.
+    const cut = toBase64(fromBase64(whole()).subarray(0, 100));
+    expect(isPqEnvelope(cut), 'isPqEnvelope cannot tell this from a classic payload').toBe(false);
+    expect(classifyEnvelope(cut)).toBe('pq-unreadable');
+    // Our version, an algorithm byte from a future we do not implement.
+    const alg = fromBase64(whole());
+    alg[1] = 0x09;
+    expect(classifyEnvelope(toBase64(alg))).toBe('pq-unreadable');
+    // Our version, and base64 that does not decode at all.
+    expect(classifyEnvelope(`${toBase64(new Uint8Array([ENVELOPE_VERSION, ALG_MLKEM1024_XCHACHA, 0]))}!!`)).toBe('pq-unreadable');
+  });
+
+  it('agrees with isPqEnvelope on every payload isPqEnvelope accepts', () => {
+    // The two must not disagree about what is decryptable, only about what to say when it is
+    // not: `signers` routes on `isPqEnvelope` inside the cipher, the boundary on this.
+    for (const payload of [whole(), toBase64(new Uint8Array([2, 1, 3])), 'not base64 !!!', '']) {
+      expect(classifyEnvelope(payload) === 'pq', payload.slice(0, 12)).toBe(isPqEnvelope(payload));
+    }
+  });
+
+  it('reads the header without a host base64 decoder, so a missing atob is not a silent downgrade', () => {
+    // The probe that started this: with `atob` and `Buffer` gone, `fromBase64` throws and
+    // `isPqEnvelope` answers false, so a VALID hybrid payload was routed classic. The
+    // classification refuses to call it classic, because the header says otherwise.
+    const payload = whole();
+    const globals = globalThis as { atob?: unknown; Buffer?: unknown };
+    const atob = globals.atob;
+    const buffer = globals.Buffer;
+    try {
+      delete globals.atob;
+      delete globals.Buffer;
+      expect(isPqEnvelope(payload)).toBe(false);
+      expect(classifyEnvelope(payload)).toBe('pq-unreadable');
+      expect(classifyEnvelope(toBase64Probe())).toBe('classic');
+    } finally {
+      globals.atob = atob;
+      globals.Buffer = buffer;
+    }
+  });
+
+  /** A classic-looking payload spelled without `toBase64`, which also needs the host globals. */
+  function toBase64Probe(): string {
+    // base64 of [0x02, 0x00, 0x00]: NIP-44's version byte, not ours.
+    return 'AgAA';
+  }
 });
 
 describe('envelope padding hides length', () => {

@@ -146,6 +146,19 @@ hybrid payload decrypts through the post-quantum path, a classic one through the
 everyone uses today, byte for byte, and anything else fails as `operation_failed`. Never
 silently, never partially.
 
+**And a broken hybrid payload is reported as hybrid.** `pq`'s `classifyEnvelope` answers three
+things where a boolean answered two: a whole envelope, one whose header names our version and
+which we cannot open (truncated, an algorithm byte we do not implement, base64 this host cannot
+decode), and somebody else's payload. The middle case used to come back false and be routed
+classic, so it failed as `operation_failed` with `scheme: 'classic'` in the activity log, which
+sends whoever is debugging it to NIP-44 code that never saw a payload like it. It now carries
+`scheme: 'pq'`, `envelope: 'unreadable'` on the validated params, and is refused with "This
+post-quantum payload is not a readable hybrid envelope" — in the caller's error and in the
+entry's `reason`. The header is read without a host base64 decoder for exactly this reason: a
+host missing `atob` would otherwise route every valid hybrid payload classic. A payload claiming
+a version we have never heard of is indistinguishable from a classic ciphertext of that version
+and stays classic; that is the limit of what the wire format allows, and it is not papered over.
+
 **Encrypt is opt-in, exactly as the extension.** `nip44Encrypt` seals hybrid only when the
 caller passes `opts: { scheme: 'pq', recipientKemKey }`, the recipient's ML-KEM-1024 key as
 2092 base64 characters from their `kind:10203`. It is never inferred from a relay lookup:
@@ -335,8 +348,13 @@ own source names them: **`crypto.getRandomValues`** on `globalThis`, which `@nob
 and THROWS without — on Hermes that means importing `react-native-get-random-values` before
 anything else — and timers, **`setTimeout`** / `clearTimeout`, which run the vault's auto-lock
 and the queue's request timeout, and **`AbortController`**, which the queue hands a remote
-signer port so a timeout, a switch or a disposal can abort the call in flight. Node, browsers
-and React Native have all five except that React Native has to polyfill the random source. Storage, the clock and password stretching are injected as
+signer port so a timeout, a switch or a disposal can abort the call in flight. Two more come in
+with the post-quantum path: **`atob`** and **`btoa`**, which `@nostr-wot/pq`'s base64 helpers
+reach for (with a `Buffer` fallback Hermes does not have either) to decode a stored ML-KEM key
+and to read a payload's envelope header. Missing them throws nothing; it silently makes every
+hybrid payload unrecognisable, which is why they are declared here rather than left to be
+discovered. Node, browsers and React Native 0.74 or newer have all seven except that React
+Native has to polyfill the random source. Storage, the clock and password stretching are injected as
 ports. `structuredClone`, `URL`, WebCrypto's `subtle`, the DOM and the WebExtension namespaces
 are never used, and `packages/vault/test/boundaries.test.ts` plus the ESLint config enforce
 that.
@@ -345,10 +363,10 @@ This package needs them through `@nostr-wot/vault` and `@nostr-wot/accounts`. It
 `utf8ByteLength` counts UTF-8 bytes without encoding, not to avoid `TextEncoder` but so the
 boundary never allocates an encoded copy of untrusted input before the size limit has bitten.
 
-The post-quantum path adds no requirement: `@noble/post-quantum` reaches for
-`crypto.getRandomValues` (ML-KEM encapsulation, ML-DSA's hedged signing) and nothing else,
-and that is already on the list. One thing to know: `@nostr-wot/pq`'s base64 helpers, which
-this package uses to decode a stored public key and the boundary uses to recognise an
-envelope, call `atob` and `btoa` where the host has them and fall back to `Buffer`. Node,
-browsers and React Native 0.74 or newer have both; an older React Native host needs a
-polyfill for them as it does for the random source.
+The post-quantum path's cryptography adds no requirement of its own: `@noble/post-quantum`
+reaches for `crypto.getRandomValues` (ML-KEM encapsulation, ML-DSA's hedged signing) and
+nothing else, and that is already on the list. Its base64 is what adds `atob` and `btoa`
+above, and an older React Native host needs a polyfill for them as it does for the random
+source. Without one the failure is loud rather than silent: a payload that names the hybrid
+envelope but cannot be decoded is refused as a post-quantum payload, with that in the error
+and in the activity entry, instead of being routed classic and failing there.
