@@ -173,19 +173,33 @@ export class Permissions {
    *
    * @param origin - the caller: a web origin, an Android package name, a remote signer key
    * @param method - the wire method, for example `signEvent` or `nip44Decrypt`
-   * @param kind - the event kind, when the method is `signEvent`; `undefined` otherwise
+   * @param kind - the event kind. Required when `method` is `signEvent` and forbidden
+   *   otherwise, at the type level: a `signEvent` check without its kind reads only the method
+   *   and wildcard levels, so `{ '*': 'allow', 'signEvent:1': 'deny' }` answers `allow` for
+   *   a kind-1 event that with its kind answers `deny`. A method only known at runtime has to
+   *   be narrowed first. Should one arrive anyway (JavaScript, a cast), it is answered from
+   *   the deny levels alone: `deny` if a blanket deny is in force, `ask` otherwise, never a
+   *   wildcard `allow`.
    * @param accountId - the account the request is for. Required at the type level: a caller
    *   that forgets it compiles fine, works in global mode, and in per-account mode prompts
    *   forever while every remembered approval reads as an internal error. Ignored while
    *   global defaults are on, which is exactly why forgetting it goes unnoticed.
    */
-  async check(
+  async check<M extends string>(
     origin: string,
-    method: string,
-    kind: number | undefined,
+    method: M,
+    kind: M extends 'signEvent' ? number : undefined,
     accountId: string,
   ): Promise<PermissionDecision> {
     const bucket = await this.getForOrigin(origin, accountId);
+    if (method === 'signEvent' && kind === undefined) {
+      const blanket = resolveDetailed(bucket, method, undefined);
+      if (blanket.decision === 'deny') {
+        this.#logger?.warn('permission denied', { origin, key: blanket.key, method });
+        return 'deny';
+      }
+      return 'ask';
+    }
     const { decision, key } = resolveDetailed(bucket, method, kind);
 
     if (decision === 'deny') {

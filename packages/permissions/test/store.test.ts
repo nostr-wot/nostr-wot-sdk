@@ -325,6 +325,20 @@ describe('copyPermissions and setupNewAccountPermissions', () => {
   });
 });
 
+describe('a signEvent check without its kind', () => {
+  test('cannot read a wildcard allow past a per-kind deny, and still honours a blanket deny', async () => {
+    // Legal at the type level no longer (contracts.test-d.ts); this is the runtime half, for
+    // JavaScript callers and casts. Answering from the method and wildcard levels alone gave
+    // `allow` here while the same request with its kind gives `deny`.
+    const permissions = new Permissions(seeded({ 'a.com': { _default: { '*': 'allow', 'signEvent:1': 'deny' } } }));
+    expect(await permissions.check('a.com', 'signEvent', 1, 'acct')).toBe('deny');
+    expect(await permissions.check('a.com', 'signEvent', undefined as never, 'acct')).toBe('ask');
+
+    const denied = new Permissions(seeded({ 'b.com': { _default: { signEvent: 'deny' } } }));
+    expect(await denied.check('b.com', 'signEvent', undefined as never, 'acct')).toBe('deny');
+  });
+});
+
 describe('migrations', () => {
   test('migrateToPerKind drops the old blanket keys and keeps the logical groups', async () => {
     const store = new MemoryStore({

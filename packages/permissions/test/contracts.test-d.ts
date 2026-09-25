@@ -35,6 +35,21 @@ test('check, save, saveDirect, getAll, getForOrigin and clear all require an acc
   void permissions.clear(undefined, 'acct');
 
   expectTypeOf(permissions.check).parameter(3).toEqualTypeOf<string>();
+});
+
+test('check needs the kind exactly when the method is signEvent', () => {
+  const permissions = new Permissions(new MemoryStore());
+  void permissions.check('a.com', 'signEvent', 1, 'acct');
+  void permissions.check('a.com', 'getPublicKey', undefined, 'acct');
+  // @ts-expect-error a signEvent check without the kind reads the wrong level
+  void permissions.check('a.com', 'signEvent', undefined, 'acct');
+  // @ts-expect-error a kind on anything but signEvent is a caller confusion
+  void permissions.check('a.com', 'nip04Decrypt', 4, 'acct');
+  // A method that is only known at runtime has to be narrowed first.
+  const method = 'signEvent' as string;
+  // @ts-expect-error not narrowed
+  void permissions.check('a.com', method, 1, 'acct');
+  if (method === 'signEvent') void permissions.check('a.com', method, 1, 'acct');
   expectTypeOf(permissions.save).parameter(4).toEqualTypeOf<string>();
   expectTypeOf(permissions.saveDirect).parameter(3).toEqualTypeOf<string>();
   expectTypeOf(permissions.getAll).parameter(0).toEqualTypeOf<string>();
