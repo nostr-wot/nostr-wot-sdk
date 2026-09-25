@@ -1,7 +1,7 @@
 import { normalizeURL } from "nostr-tools/utils";
 import type { NostrConnectUri } from "./types";
 
-const HEX64 = /^[0-9a-f]{64}$/;
+const HEX64 = /^[0-9a-f]{64}$/i;
 const NOSTRCONNECT = /^nostrconnect:\/\/([0-9a-fA-F]{64})\??(.*)$/;
 
 /**
@@ -10,11 +10,12 @@ const NOSTRCONNECT = /^nostrconnect:\/\/([0-9a-fA-F]{64})\??(.*)$/;
  */
 export function createBunkerUri(params: { pubkey: string; relays: string[]; secret?: string }): string {
   if (!HEX64.test(params.pubkey)) throw new Error("bunker URI: pubkey must be 64 hex chars");
+  const pubkey = params.pubkey.toLowerCase();
   if (params.relays.length === 0) throw new Error("bunker URI: at least one relay is required");
   const qs = new URLSearchParams();
   for (const relay of normalizeRelays(params.relays)) qs.append("relay", relay);
   if (params.secret) qs.set("secret", params.secret);
-  return `bunker://${params.pubkey}?${qs.toString()}`;
+  return `bunker://${pubkey}?${qs.toString()}`;
 }
 
 /**

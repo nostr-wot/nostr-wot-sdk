@@ -174,18 +174,43 @@ export interface BunkerClientRecord {
  * Pending approvals are exported as bound but unconfirmed: the same client may
  * retry, another is refused.
  *
- * On the way back in it is untrusted input: `restore` validates the whole
- * object against the same rules the pairing paths use and applies all of it
- * or none. A client record is only accepted when it references a secret in
- * the same state that is bound to it and confirmed (or, with
- * `requireSecret: false`, without a secret), so a pairing cannot be forged by
- * writing to storage.
+ * `mac` authenticates the whole object under the connection key (HMAC-SHA256
+ * over a fixed serialization, keyed from the secret key). `restore` verifies
+ * it before reading anything else, so a state that was edited, assembled, or
+ * signed by anyone without the connection key is refused. That is the
+ * protection that matters when the state sits in ordinary storage and the key
+ * sits in the keychain: two protection domains, and the weaker one cannot
+ * forge a pairing on its own. Someone holding the connection key can sign any
+ * state, so the guarantee is exactly as strong as the key's storage.
+ *
+ * On the way back in the state is still validated in full (shape, types,
+ * relay URLs by the pairing paths' rules, every client backed by a secret in
+ * the same state bound to it and confirmed, pubkeys on the curve, no
+ * duplicates, within the ceilings) and applied all at once or not at all.
  */
 export interface BunkerState {
+  /** Format version. Unsigned pre-2 states are refused unless `restore` is told to migrate them. */
+  version: 2;
   /** The connection key this state belongs to. `restore` refuses a state minted under another key. */
   connectionPubkey: string;
   secrets: BunkerSecretRecord[];
   clients: BunkerClientRecord[];
+  /** HMAC-SHA256, hex, under a key derived from the connection secret key. */
+  mac: string;
+}
+
+/** A state before signing: what `signBunkerState` takes. */
+export type UnsignedBunkerState = Omit<BunkerState, "mac">;
+
+export interface RestoreOptions {
+  /**
+   * Accept a state with no `mac` (the pre-2 format) once, to migrate it. The
+   * state is validated exactly as a signed one and, after it lands, the next
+   * `exportState` / `onStateChange` is signed; persist that and drop the flag.
+   * Only pass it for storage you already trust: an unsigned state is as
+   * trustworthy as wherever it came from, and no more.
+   */
+  allowUnsigned?: boolean;
 }
 
 /**

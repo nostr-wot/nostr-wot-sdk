@@ -53,6 +53,7 @@
     "prepack": "npm run build"
   },
   "dependencies": {
+    "@noble/hashes": "^2.0.1",
     "@nostr-wot/relay": "^0.1.1"
   },
   "peerDependencies": {

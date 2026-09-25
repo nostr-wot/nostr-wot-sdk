@@ -1375,7 +1375,10 @@ describe("BunkerServer loopback", () => {
         [/connection key/, { ...good, connectionPubkey: getPublicKey(generateSecretKey()) }],
         [/connectedAt/, { ...good, clients: [{ ...good.clients[0]!, connectedAt: Number.NaN }] }],
       ];
-      for (const [reason, state] of cases) {
+      // Each hostile state is signed with the connection key, so it reaches validation rather than the MAC gate.
+      const sign = ({ mac: _mac, ...unsigned }: BunkerState) => signBunkerState(connectionSk, unsigned);
+      for (const [reason, hostile] of cases) {
+        const state = sign(hostile);
         const fresh = new BunkerServer({ connectionSecretKey: connectionSk, relays: [relay.url], handler: signerHandler(user) });
         await fresh.start();
         cleanups.push(() => fresh.stop());
@@ -1451,8 +1454,9 @@ describe("BunkerServer loopback", () => {
     });
 
     it("secrets, clients and relays per client are all bounded", async () => {
+      const cappedSecretKey = generateSecretKey();
       const capped = new BunkerServer({
-        connectionSecretKey: generateSecretKey(),
+        connectionSecretKey: cappedSecretKey,
         relays: [relay.url],
         maxSecrets: 2,
         maxClients: 1,
@@ -1478,8 +1482,9 @@ describe("BunkerServer loopback", () => {
 
       const many = ["ws://127.0.0.1:1", "ws://127.0.0.1:2", "ws://127.0.0.1:3"].map((u) => `relay=${encodeURIComponent(u)}`).join("&");
       await expect(capped.acceptNostrConnect(`nostrconnect://${getPublicKey(generateSecretKey())}?${many}&secret=x`)).rejects.toThrow(/too many relays/);
-      const state = capped.exportState();
-      await expect(capped.restore({ ...state, clients: [{ ...state.clients[0]!, relays: ["ws://127.0.0.1:1/", "ws://127.0.0.1:2/", "ws://127.0.0.1:3/"] }] })).rejects.toThrow(/relays/);
+      const { mac: _mac, ...state } = capped.exportState();
+      const tooMany = ["ws://127.0.0.1:1/", "ws://127.0.0.1:2/", "ws://127.0.0.1:3/"];
+      await expect(capped.restore(signBunkerState(cappedSecretKey, { ...state, secrets: [{ ...state.secrets[0]!, relays: tooMany }], clients: [{ ...state.clients[0]!, relays: tooMany }] }))).rejects.toThrow(/relays/);
     });
 
     it("a restored unclaimed secret keeps its expiry", async () => {

@@ -1,9 +1,11 @@
 // Run by tsup's onSuccess: writes dist/.src-hash, a hash of everything the
-// build depends on (src/, tsup.config.ts, tsconfig.json, package.json), so
-// `npm run check:dist` can tell a stale dist/ from a current one before it is
-// vendored. `npm pack` rebuilds first (prepack); vendoring by path should run
-// the check.
+// build depends on: src/, tsup.config.ts, package.json, the RESOLVED TypeScript
+// config (tsc --showConfig, so a change in ../../tsconfig.base.json counts),
+// and the versions of tsup, esbuild and typescript. `npm run check:dist`
+// compares; CI runs it after the build, and so should anyone vendoring by path.
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,7 +13,17 @@ import { fileURLToPath } from "node:url";
 const pkg = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 /** Hash of every file under `root`, in path order. */
-export const BUILD_INPUTS = ["src", "tsup.config.ts", "tsconfig.json", "package.json"];
+export const BUILD_INPUTS = ["src", "tsup.config.ts", "package.json"];
+const require = createRequire(import.meta.url);
+
+/** The TypeScript config as tsc sees it, `extends` resolved. */
+export function resolvedTsConfig() {
+  return execFileSync(process.execPath, [require.resolve("typescript/lib/tsc.js"), "--showConfig", "-p", pkg], { encoding: "utf8" });
+}
+
+export function toolVersions() {
+  return ["tsup", "esbuild", "typescript"].map((name) => `${name}@${require(`${name}/package.json`).version}`).join(",");
+}
 
 export function hashSrc(root = join(pkg, "src")) {
   const files = [];
@@ -38,6 +50,8 @@ export function hashSrc(root = join(pkg, "src")) {
 export function hashBuildInputs() {
   const h = createHash("sha256");
   for (const input of BUILD_INPUTS) h.update(input + ":" + hashSrc(join(pkg, input)) + "\n");
+  h.update("tsconfig(resolved):" + resolvedTsConfig() + "\n");
+  h.update("tools:" + toolVersions() + "\n");
   return h.digest("hex");
 }
 
