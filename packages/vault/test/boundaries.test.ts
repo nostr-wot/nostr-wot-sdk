@@ -78,11 +78,18 @@ const FORBIDDEN: ReadonlyArray<{ pattern: RegExp; why: string }> = [
  * it, which is exactly Hermes without `react-native-get-random-values`. `setTimeout` and
  * `clearTimeout` run the vault's auto-lock and the queue's request timeout. Node and browsers
  * have all of them; a React Native host polyfills `crypto.getRandomValues` before importing
- * anything. They are listed here so that a reader of the FORBIDDEN list does not take their
+ * anything. `AbortController` is what the queue hands a remote-signer port so a timeout, a
+ * switch or a disposal can abort the call in flight. They are listed here so that a reader of the FORBIDDEN list does not take their
  * absence for an oversight, and the test below holds every shared package's README to
  * declaring them.
  */
-const REQUIRED_HOST_CAPABILITIES = ['TextEncoder', 'TextDecoder', 'crypto.getRandomValues', 'setTimeout'] as const;
+const REQUIRED_HOST_CAPABILITIES = [
+  'TextEncoder',
+  'TextDecoder',
+  'crypto.getRandomValues',
+  'setTimeout',
+  'AbortController',
+] as const;
 
 const SOURCE_FILE = /\.(ts|tsx|mts|cts|js|mjs|cjs|jsx)$/;
 

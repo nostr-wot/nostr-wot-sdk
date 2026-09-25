@@ -165,8 +165,9 @@ own source names them: **`crypto.getRandomValues`** on `globalThis`, which `@nob
 `randomBytes` reaches for (the vault's salt, IV and cache key; the ncryptsec salt and nonce)
 and THROWS without — on Hermes that means importing `react-native-get-random-values` before
 anything else — and timers, **`setTimeout`** / `clearTimeout`, which run the vault's auto-lock
-and the queue's request timeout. Node and browsers have all four; a React Native host
-polyfills the random source. Storage, the clock and password stretching are injected as
+and the queue's request timeout, and **`AbortController`**, which the queue hands a remote
+signer port so a timeout, a switch or a disposal can abort the call in flight. Node, browsers
+and React Native have all five except that React Native has to polyfill the random source. Storage, the clock and password stretching are injected as
 ports. `structuredClone`, `URL`, WebCrypto's `subtle`, the DOM and the WebExtension namespaces
 are never used, and `packages/vault/test/boundaries.test.ts` plus the ESLint config enforce
 that.
