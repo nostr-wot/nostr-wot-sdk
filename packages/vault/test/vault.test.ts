@@ -1202,6 +1202,72 @@ describe('a write that fails after the session has died', () => {
   });
 });
 
+describe('a mutation that replaces or destroys secret material voids the callbacks holding them', () => {
+  /** Park a scoped accessor on a gate, run `mutation` while it is parked, release, and settle. */
+  async function raced<T>(
+    run: (gate: Promise<void>) => Promise<T>,
+    mutation: () => Promise<unknown>,
+  ): Promise<PromiseSettledResult<T>> {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const pending = run(gate);
+    await flush();
+    await mutation();
+    release();
+    return (await Promise.allSettled([pending]))[0]!;
+  }
+
+  test('clearImportedPqKeys inside withImportedPqKeys: the secret the callback holds no longer exists', async () => {
+    const { vault } = await openVault([account]);
+    await vault.setImportedPqKeys('acct_1', pqKeys, 'nip-pqc/v1');
+    const outcome = await raced(
+      (gate) => vault.withImportedPqKeys('acct_1', async (keys) => { await gate; return Array.from(keys.kemSecret); }),
+      () => vault.clearImportedPqKeys('acct_1'),
+    );
+    expect(outcome.status).toBe('rejected');
+    expect(String((outcome as PromiseRejectedResult).reason)).toMatch(/session/i);
+    expect(vault.isLocked()).toBe(false);
+  });
+
+  test('setImportedPqKeys inside withImportedPqKeys: the replaced secret is void too', async () => {
+    const { vault } = await openVault([account]);
+    await vault.setImportedPqKeys('acct_1', pqKeys, 'nip-pqc/v1');
+    const replacement = {
+      kem: { publicKey: new Uint8Array(8).fill(5), secretKey: new Uint8Array(8).fill(6) },
+      dsa: { publicKey: new Uint8Array(8).fill(7), secretKey: new Uint8Array(8).fill(8) },
+    };
+    const outcome = await raced(
+      (gate) => vault.withImportedPqKeys('acct_1', async () => { await gate; return 'stale'; }),
+      () => vault.setImportedPqKeys('acct_1', replacement, 'nip-pqc/v1'),
+    );
+    expect(outcome.status).toBe('rejected');
+    await vault.withImportedPqKeys('acct_1', async (keys) => {
+      expect(Array.from(keys.kemSecret)).toEqual(Array.from(replacement.kem.secretKey));
+    });
+  });
+
+  test('updateAccountNip46Keys inside withRemoteSignerCredentials: the replaced local key is void', async () => {
+    const { vault } = await openVault([account, bunker]);
+    await vault.updateAccountNip46Keys('acct_bunker', new Uint8Array(32).fill(1), '01'.repeat(32));
+    const outcome = await raced(
+      (gate) => vault.withRemoteSignerCredentials('acct_bunker', async () => { await gate; return 'stale'; }),
+      () => vault.updateAccountNip46Keys('acct_bunker', new Uint8Array(32).fill(2), '02'.repeat(32)),
+    );
+    expect(outcome.status).toBe('rejected');
+  });
+
+  test('addAccount touches no existing secret, so a callback holding another account\'s key is not voided', async () => {
+    const { vault } = await openVault([account]);
+    const outcome = await raced(
+      (gate) => vault.withPrivkey('acct_1', async (key) => { await gate; return bytesToHex(key); }),
+      () => vault.addAccount(seeded),
+    );
+    expect(outcome).toEqual({ status: 'fulfilled', value: account.privkey });
+  });
+});
+
 describe('create and addAccount agree', () => {
   test('create refuses duplicate account ids, as addAccount does', async () => {
     const vault = new Vault({ store: new MemoryStore(), kdf: fastKdf });

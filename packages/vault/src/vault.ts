@@ -648,7 +648,7 @@ export class Vault {
    *         refused the write — in which case the account is not left in memory either
    */
   async addAccount(account: Account): Promise<void> {
-    return this.#mutate((payload) => {
+    return this.#mutate('no-secrets', (payload) => {
       if (payload.accounts.some((candidate) => candidate.id === account.id)) {
         throw new Error('Account already exists in vault');
       }
@@ -675,8 +675,7 @@ export class Vault {
    * @throws if the vault is locked or there is no such account
    */
   async removeAccount(accountId: string): Promise<void> {
-    return this.#mutate(
-      (payload) => {
+    return this.#mutate('secrets', (payload) => {
         const index = payload.accounts.findIndex((candidate) => candidate.id === accountId);
         if (index < 0) throw new Error('Account not found');
         const [removed] = payload.accounts.splice(index, 1) as [MemoryAccount];
@@ -693,15 +692,15 @@ export class Vault {
           // Detached from the payload before the write, so the lock never reached it.
           abandon: () => zeroMemoryAccount(removed),
         };
-      },
-      { invalidateSession: true },
-    );
+    });
   }
 
   /**
    * Store the local keypair a NIP-46 session was established with, so a restart reconnects
    * as the same client identity. Takes the raw 32-byte key, copies it, and keeps the copy as
    * the ASCII hex the record stores; the previous key, if any, is zeroed once the write lands.
+   * Moves the session on: a `withRemoteSignerCredentials` callback still holding the previous
+   * key gets its result voided, since the key it computed under no longer exists.
    *
    * @throws if the vault is locked, the account is not a NIP-46 account, or the key is not
    *         32 bytes
@@ -713,7 +712,7 @@ export class Vault {
     // The copy is made inside `apply`, after every refusal (locked, session moved, wrong
     // account) has had its chance: a copy made out here would be dropped un-zeroed by any of
     // them. The caller's buffer stays theirs and must outlive this call.
-    return this.#mutate((payload) => {
+    return this.#mutate('secrets', (payload) => {
       const account = this.#findAccount(payload, accountId);
       if (!account || account.type !== 'nip46' || !account.nip46) {
         throw new Error('This account is not a NIP-46 account');
@@ -743,7 +742,8 @@ export class Vault {
   /**
    * Store externally generated post-quantum keys on an account and re-seal. The caller has
    * validated the pair; this only stores. Replacing an existing import zeroes the outgoing
-   * secrets once the write lands.
+   * secrets once the write lands and moves the session on, voiding any `withImportedPqKeys`
+   * callback still holding them.
    *
    * @throws if the vault is locked or there is no such account
    */
@@ -751,7 +751,7 @@ export class Vault {
     const importedAt = this.#now();
     // Copies are made inside `apply`, after every refusal has had its chance; see
     // `updateAccountNip46Keys`. The caller's buffers stay theirs and must outlive this call.
-    return this.#mutate((payload) => {
+    return this.#mutate('secrets', (payload) => {
       const account = this.#findAccount(payload, accountId);
       if (!account) throw new Error('Account not found');
       // The public halves first: encoding is the last thing that can throw, and a throw
@@ -796,14 +796,15 @@ export class Vault {
   }
 
   /**
-   * Remove an account's imported post-quantum keys, zeroing the secrets, and re-seal.
+   * Remove an account's imported post-quantum keys, zeroing the secrets, and re-seal. Moves
+   * the session on, voiding any `withImportedPqKeys` callback still holding them.
    *
    * @returns true when there was something to remove
    * @throws if the vault is locked or there is no such account
    */
   async clearImportedPqKeys(accountId: string): Promise<boolean> {
     let cleared = false;
-    await this.#mutate((payload) => {
+    await this.#mutate('secrets', (payload) => {
       const account = this.#findAccount(payload, accountId);
       if (!account) throw new Error('Account not found');
       if (!account.pqPublic) return null;
@@ -932,21 +933,26 @@ export class Vault {
    * on a dead session the mutation is abandoned instead: everything it detached or created
    * is zeroed, and nothing is restored. It is the one case where rollback is worse than loss.
    *
-   * With `invalidateSession`, the session moves on before the write, so anything in flight
-   * against the old one — a scoped callback holding a key this change removes — is voided
-   * rather than returned. The write itself is made under the new revision, so a lock landing
-   * inside it still wins.
+   * `touches` is required and has no default, on purpose. A mutation that replaces or
+   * destroys secret material (`'secrets'`) moves the session on before the write, so anything
+   * in flight against the old one — a scoped callback holding a key this change removes or
+   * replaces — is voided rather than returned: the key it computed under no longer exists.
+   * Only a mutation that says `'no-secrets'` (adding an account touches nothing that anyone
+   * could be holding) skips that. An optional flag defaulting to "do not void" was how three
+   * of the five mutations quietly lost the property `removeAccount` had; the choice is now
+   * made at every site, in the open. The write itself is made under the new revision, so a
+   * lock landing inside it still wins.
    */
   async #mutate(
+    touches: 'secrets' | 'no-secrets',
     apply: (payload: MemoryVaultPayload) => Mutation | null,
-    options: { invalidateSession?: boolean } = {},
   ): Promise<void> {
     const revision = this.#sessionRevision;
     return this.#run(async () => {
       this.#assertRevision(revision);
       const payload = this.#requireOpen();
       let current = revision;
-      if (options.invalidateSession) {
+      if (touches === 'secrets') {
         this.#invalidateSession();
         current = this.#sessionRevision;
       }
