@@ -121,10 +121,16 @@ export interface ImportedPqKeys {
 
 /** A change to the open payload: applied in memory, persisted, undone if the write fails. */
 interface Mutation {
-  /** Reverts the in-memory change. Runs only when the store refused the write. */
+  /** Reverts the in-memory change. Runs only when the store refused the write AND the session is still alive. */
   undo: () => void;
   /** Runs once the write has landed; where outgoing secrets get zeroed. */
   commit?: () => void;
+  /**
+   * Runs when the store refused the write and the session died meanwhile. Zeroes every
+   * secret the mutation detached or created: there is no payload left to restore into, only
+   * a dead one no lock will ever visit again.
+   */
+  abandon: () => void;
 }
 
 const BUNKER_PUBKEY = /^bunker:\/\/([0-9a-fA-F]{64})(?:[/?#]|$)/;
@@ -641,6 +647,7 @@ export class Vault {
           payload.accounts.splice(payload.accounts.indexOf(added), 1);
           zeroMemoryAccount(added);
         },
+        abandon: () => zeroMemoryAccount(added),
       };
     });
   }
@@ -671,6 +678,8 @@ export class Vault {
             payload.activeAccountId = previousActive;
           },
           commit: () => zeroMemoryAccount(removed),
+          // Detached from the payload before the write, so the lock never reached it.
+          abandon: () => zeroMemoryAccount(removed),
         };
       },
       { invalidateSession: true },
@@ -709,6 +718,10 @@ export class Vault {
           else config.localPubkey = previous.pubkey;
         },
         commit: () => previous.key?.fill(0),
+        abandon: () => {
+          previous.key?.fill(0);
+          encoded.fill(0);
+        },
       };
     });
   }
@@ -757,6 +770,12 @@ export class Vault {
           previous.kem?.fill(0);
           previous.dsa?.fill(0);
         },
+        abandon: () => {
+          previous.kem?.fill(0);
+          previous.dsa?.fill(0);
+          kemSecret.fill(0);
+          dsaSecret.fill(0);
+        },
       };
     });
   }
@@ -785,6 +804,10 @@ export class Vault {
           account.pqDsaSecretBytes = previous.dsa;
         },
         commit: () => {
+          previous.kem?.fill(0);
+          previous.dsa?.fill(0);
+        },
+        abandon: () => {
           previous.kem?.fill(0);
           previous.dsa?.fill(0);
         },
@@ -883,9 +906,16 @@ export class Vault {
    *
    * `apply` edits the payload in place and hands back how to undo it; `null` means there was
    * nothing to change and nothing is written. The undo runs only when the store refuses the
-   * write, so memory never describes a record that was not saved. `commit` runs after the
-   * write has landed and is where outgoing secrets get zeroed: zeroing them before the write
-   * would destroy the only copy of something the undo might have to put back.
+   * write AND the session is still alive, so memory never describes a record that was not
+   * saved. `commit` runs after the write has landed and is where outgoing secrets get zeroed:
+   * zeroing them before the write would destroy the only copy of something the undo might
+   * have to put back.
+   *
+   * The undo is right while the session is alive and wrong once it is not. A lock landing
+   * inside the write zeroes the payload; if the write then fails, restoring the outgoing
+   * secrets would put live key material back into a payload nobody will ever lock again. So
+   * on a dead session the mutation is abandoned instead: everything it detached or created
+   * is zeroed, and nothing is restored. It is the one case where rollback is worse than loss.
    *
    * With `invalidateSession`, the session moves on before the write, so anything in flight
    * against the old one — a scoped callback holding a key this change removes — is voided
@@ -910,7 +940,8 @@ export class Vault {
       try {
         await this.#saveNow(current);
       } catch (error) {
-        mutation.undo();
+        if (current === this.#sessionRevision) mutation.undo();
+        else mutation.abandon();
         throw error;
       }
       mutation.commit?.();

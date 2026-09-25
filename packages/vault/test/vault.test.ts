@@ -1038,6 +1038,99 @@ describe('account mutation', () => {
   });
 });
 
+describe('a write that fails after the session has died', () => {
+  /** A store whose next record write locks the vault and then fails, or just fails. */
+  function failingStore(lockFirst: boolean): { store: KeyValueStore; arm: (vault: Vault) => void } {
+    const backing = new MemoryStore();
+    let target: Vault | null = null;
+    const store: KeyValueStore = {
+      get: (key) => backing.get(key),
+      set: async (key, value) => {
+        if (target && key === VAULT_STORAGE_KEY) {
+          const vault = target;
+          target = null;
+          if (lockFirst) vault.lock();
+          throw new Error('disk full');
+        }
+        return backing.set(key, value);
+      },
+      remove: (key) => backing.remove(key),
+      keys: () => backing.keys(),
+    };
+    return { store, arm: (vault) => { target = vault; } };
+  }
+
+  /** The live payload the vault installs, taken where it is born. */
+  function captureInstalled(): { installed: MemoryVaultPayload[]; restore: () => void } {
+    const installed: MemoryVaultPayload[] = [];
+    const real = serialization.toMemoryPayload;
+    const spy = vi.spyOn(serialization, 'toMemoryPayload').mockImplementation((payload) => {
+      const mem = real(payload);
+      installed.push(mem);
+      return mem;
+    });
+    return { installed, restore: () => spy.mockRestore() };
+  }
+
+  test('removeAccount: the undo restores the account while the session is alive', async () => {
+    const { store, arm } = failingStore(false);
+    const vault = new Vault({ store, kdf: fastKdf });
+    await vault.create('hunter22', [account, seeded]);
+    arm(vault);
+    await expect(vault.removeAccount('acct_seed')).rejects.toThrow(/disk full/);
+    expect(vault.isLocked()).toBe(false);
+    expect((await vault.listAccounts()).map((candidate) => candidate.id)).toEqual(['acct_1', 'acct_seed']);
+    expect(await vault.withMnemonic('acct_seed', async (phrase) => new TextDecoder().decode(phrase))).toBe(MNEMONIC);
+  });
+
+  test('removeAccount: when a lock landed inside the write, the outgoing secrets are zeroed, not restored', async () => {
+    // Restoring them would re-insert live key material into a payload that is already dead:
+    // the lock zeroed everything it could reach, and nothing will ever lock this object again.
+    const { installed, restore } = captureInstalled();
+    try {
+      const { store, arm } = failingStore(true);
+      const vault = new Vault({ store, kdf: fastKdf });
+      await vault.create('hunter22', [account, seeded]);
+      const dead = installed[0]!;
+      const removed = dead.accounts.find((candidate) => candidate.id === 'acct_seed')!;
+      arm(vault);
+      await expect(vault.removeAccount('acct_seed')).rejects.toThrow(/disk full/);
+      expect(vault.isLocked()).toBe(true);
+      expect(Array.from(removed.privkeyBytes!)).toEqual(zeros(32));
+      expect(Array.from(removed.mnemonicBytes!)).toEqual(zeros(MNEMONIC.length));
+      // Nothing anywhere on the dead payload spells a secret.
+      for (const acct of dead.accounts) {
+        expect(Array.from(acct.privkeyBytes ?? [])).toEqual(zeros(acct.privkeyBytes?.length ?? 0));
+      }
+    } finally {
+      restore();
+    }
+  });
+
+  test('updateAccountNip46Keys: when a lock landed inside the write, the previous local key is zeroed', async () => {
+    const { installed, restore } = captureInstalled();
+    try {
+      const { store, arm } = failingStore(true);
+      const vault = new Vault({ store, kdf: fastKdf });
+      await vault.create('hunter22', [
+        account,
+        { ...bunker, nip46Config: { ...bunker.nip46Config!, localPrivkey: '5a'.repeat(32), localPubkey: '6b'.repeat(32) } },
+      ]);
+      const config = installed[0]!.accounts.find((candidate) => candidate.id === 'acct_bunker')!.nip46!;
+      const previous = config.localPrivkeyBytes!;
+      arm(vault);
+      await expect(vault.updateAccountNip46Keys('acct_bunker', new Uint8Array(32).fill(1), '01'.repeat(32))).rejects.toThrow(
+        /disk full/,
+      );
+      expect(vault.isLocked()).toBe(true);
+      expect(Array.from(previous)).toEqual(zeros(64));
+      expect(Array.from(config.localPrivkeyBytes ?? [])).toEqual(zeros(config.localPrivkeyBytes?.length ?? 0));
+    } finally {
+      restore();
+    }
+  });
+});
+
 describe('imported post-quantum keys', () => {
   test('setImportedPqKeys stores the pair, hasImportedPqKeys sees it, and the record carries it', async () => {
     const { vault, store } = await openVault([account]);
