@@ -181,11 +181,13 @@ export class Vault {
    */
   #sessionRevision = 0;
   /**
-   * The key copies handed to in-flight {@link withPrivkey} callbacks.
+   * The secret copies held by in-flight scoped callbacks: {@link withPrivkey}'s key and every
+   * sibling's, {@link withDerivedSecrets}' included.
    *
    * Tracked so that a lock reaches them too: without it a callback that is already running
    * keeps signing with live key material for as long as it likes while `isLocked()` reports
-   * true. These are copies, so zeroing them cannot corrupt the vault.
+   * true. These are copies, or buffers handed over for the purpose, so zeroing them cannot
+   * corrupt the vault.
    */
   readonly #liveKeys = new Set<Uint8Array>();
 
@@ -467,7 +469,8 @@ export class Vault {
    * this contract, which belongs with whatever introduces long-lived signer handles.
    *
    * The same contract holds for every other scoped accessor on this class: {@link withMnemonic},
-   * {@link withImportedPqKeys}, {@link withCacheKey} and {@link withRemoteSignerCredentials}.
+   * {@link withImportedPqKeys}, {@link withDerivedSecrets}, {@link withCacheKey} and
+   * {@link withRemoteSignerCredentials}.
    *
    * `accountId` names the account and is required. The extension's copy takes `undefined` to
    * mean "whatever is active now", which is exactly the substitution the signing pipeline
@@ -524,6 +527,32 @@ export class Vault {
     return this.#scoped([kemSecret, dsaSecret], () =>
       fn({ profile, kemPublic, dsaPublic, kemSecret, dsaSecret }),
     );
+  }
+
+  /**
+   * Run `fn` with secret bytes the CALLER derived, under the same discipline every accessor
+   * above runs under: the arrays are registered as live key material for the duration, so a
+   * `lock()` taken while `fn` is running zeroes them where they are, and they are zeroed again
+   * on the way out on every path. Same contract as {@link withPrivkey} otherwise — compute and
+   * return, never externalize, and a result computed under a session that moved is void.
+   *
+   * For a secret the vault does not store and cannot hand out: the ML-KEM-1024 and ML-DSA-87
+   * keys `@nostr-wot/signer-core` derives from an account's seed phrase per request, which are
+   * a deterministic function of a mnemonic this vault does hold. Zeroing those in the deriver's
+   * own `finally` covers a return and a throw, and misses the case that matters: `lock()` is
+   * the user saying "let go of my keys now", and a derived secret the vault has never heard of
+   * goes on living until the callback happens to finish. The vault is what promises that lock
+   * reaches key material, so the register lives here rather than being re-implemented by every
+   * caller that derives something.
+   *
+   * The arrays are taken over, not copied. Pass buffers you own and do not keep a second
+   * reference: this method will fill them with zeroes.
+   *
+   * @throws if the vault is locked, or the session was revoked while `fn` was running
+   */
+  async withDerivedSecrets<T>(secrets: readonly Uint8Array[], fn: () => Promise<T>): Promise<T> {
+    this.#requireOpen();
+    return this.#scoped([...secrets], fn);
   }
 
   /**

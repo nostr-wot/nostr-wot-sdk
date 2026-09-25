@@ -16,8 +16,10 @@
  *      the weakest link, so such an account is told to import instead rather than handed a
  *      weak key that looks strong.
  *
- * The secrets never leave {@link withPqKeys}: the callback computes and returns, the copies
- * are zeroed in a `finally`, and a result computed under a session that moved is voided,
+ * The secrets never leave {@link withPqKeys}: the callback computes and returns, and every
+ * secret is registered with the vault for the duration through `withDerivedSecrets`, so one
+ * `lock()` zeroes the derived ML-KEM and ML-DSA keys where they are — mid-callback, not when
+ * the callback happens to finish — and a result computed under a session that moved is voided,
  * as `withPrivkey` and `withImportedPqKeys` void theirs. The refusals carry the extension's
  * text, which reaches the caller on purpose: `window.nostr.nip44.schemes` advertises what
  * the signer accepts, not what the selected account can do, so a caller that correctly
@@ -59,8 +61,10 @@ function countWords(value: string): number {
 }
 
 /**
- * Run `fn` with the account's post-quantum keys, resolved as described on this module, and
- * zero every secret afterwards on every path.
+ * Run `fn` with the account's post-quantum keys, resolved as described on this module, and zero
+ * every secret afterwards on every path — and, because they are registered with the vault, the
+ * moment the vault is locked, whether or not `fn` has returned. Exactly like `withPrivkey`,
+ * which `pq.test.ts` holds this to by locking mid-callback and reading both.
  *
  * Refuses, as a `SignerError` with code `unsupported` and the extension's text, an account
  * that is watch-only, has no seed phrase, or has a phrase shorter than 24 words and no
@@ -112,12 +116,14 @@ export async function withPqKeys<T>(
       // before the callback runs.
       seed.fill(0);
     }
-    try {
-      return await fn({ source: 'derived', keys });
-    } finally {
-      keys.kem.secretKey.fill(0);
-      keys.dsa.secretKey.fill(0);
-    }
+    // Handed to the vault, not zeroed here. A `finally` of our own would cover the return and
+    // the throw and miss the lock, which is the case that matters: `lock()` is the user saying
+    // "let go of my keys now", and secrets the vault has never been told about are the ones it
+    // cannot reach. `withDerivedSecrets` registers them in the same live-key set `withPrivkey`
+    // puts its copy in, so one `lock()` zeroes both, and zeroes them again on the way out.
+    return vault.withDerivedSecrets([keys.kem.secretKey, keys.dsa.secretKey], () =>
+      fn({ source: 'derived', keys }),
+    );
   });
 }
 

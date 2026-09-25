@@ -255,20 +255,53 @@ describe('withPqKeys resolves the account\'s post-quantum keys as the extension 
     expect(Array.from(leaked)).toEqual(zeros(leaked.length));
   });
 
-  test('a result computed under a session that moved is voided, derived and imported alike', async () => {
-    const { stored } = importedPair();
-    const derived = seededAccount('acct_seed', M24);
-    const imported = account('acct_imp', PRIVKEY_2, { pqKeys: stored });
-    for (const acct of [derived, imported]) {
-      const { vault } = await fixture(true, { accounts: [acct] });
-      const safe = (await vault.getAccountById(acct.id))!;
-      await expect(
-        withPqKeys(vault, safe, async () => {
+  test('a lock inside the callback zeroes the derived secrets there and then, exactly like withPrivkey', async () => {
+    // The claim under test is `lock()` reaching key material that is already in flight. Zeroing
+    // in a `finally` cannot show it: that runs after the callback, so a callback still computing
+    // with live ML-KEM and ML-DSA secrets while `isLocked()` says true would pass. So the bytes
+    // are read INSIDE the callback, after the lock, and compared against `withPrivkey`'s copy in
+    // the same window — the thing this scope says it behaves exactly like.
+    const { vault } = await fixture(true, { accounts: [seededAccount('acct_seed', M24)] });
+    const safe = (await vault.getAccountById('acct_seed'))!;
+    let privkeyAfterLock: number[] = [];
+    let kemAfterLock: number[] = [];
+    let dsaAfterLock: number[] = [];
+    await expect(
+      vault.withPrivkey('acct_seed', (privkey) =>
+        withPqKeys(vault, safe, async (scope) => {
+          expect(privkey.some((byte) => byte !== 0)).toBe(true);
+          expect(scope.keys.kem.secretKey.some((byte) => byte !== 0)).toBe(true);
+          expect(scope.keys.dsa.secretKey.some((byte) => byte !== 0)).toBe(true);
           vault.lock();
+          privkeyAfterLock = Array.from(privkey);
+          kemAfterLock = Array.from(scope.keys.kem.secretKey);
+          dsaAfterLock = Array.from(scope.keys.dsa.secretKey);
           return 'computed under a dead session';
         }),
-      ).rejects.toThrow(/session changed/i);
-    }
+      ),
+    ).rejects.toThrow(/session changed/i);
+    expect(vault.isLocked()).toBe(true);
+    expect(privkeyAfterLock).toEqual(zeros(privkeyAfterLock.length));
+    expect(kemAfterLock, 'the derived ML-KEM secret survived the lock').toEqual(zeros(kemAfterLock.length));
+    expect(dsaAfterLock, 'the derived ML-DSA secret survived the lock').toEqual(zeros(dsaAfterLock.length));
+  });
+
+  test('a lock inside the callback zeroes imported secrets too, and voids the result', async () => {
+    const { stored } = importedPair();
+    const { vault } = await fixture(true, { accounts: [account('acct_imp', PRIVKEY_2, { pqKeys: stored })] });
+    const safe = (await vault.getAccountById('acct_imp'))!;
+    let kemAfterLock: number[] = [];
+    let dsaAfterLock: number[] = [];
+    await expect(
+      withPqKeys(vault, safe, async (scope) => {
+        vault.lock();
+        kemAfterLock = Array.from(scope.keys.kem.secretKey);
+        dsaAfterLock = Array.from(scope.keys.dsa.secretKey);
+        return 'computed under a dead session';
+      }),
+    ).rejects.toThrow(/session changed/i);
+    expect(kemAfterLock).toEqual(zeros(kemAfterLock.length));
+    expect(dsaAfterLock).toEqual(zeros(dsaAfterLock.length));
   });
 });
 

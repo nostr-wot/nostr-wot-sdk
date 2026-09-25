@@ -1379,6 +1379,29 @@ describe('scoped access to the other secrets', () => {
     await expect(vault.withRemoteSignerCredentials('acct_1', async () => 'x')).rejects.toThrow(/nip-46/i);
   });
 
+  test('withDerivedSecrets zeroes the buffers it was handed, on return and on throw, and refuses while locked', async () => {
+    // The accessor for a secret the vault cannot hand out because it never stored it: keys a
+    // caller derived from a mnemonic the vault does hold. It exists so `lock()` reaches those
+    // too, which the enumeration below covers; this is its own contract.
+    const { vault } = await openVault([seeded]);
+    const kem = new Uint8Array(32).fill(3);
+    const dsa = new Uint8Array(64).fill(4);
+    expect(await vault.withDerivedSecrets([kem, dsa], async () => 'computed')).toBe('computed');
+    expect(Array.from(kem)).toEqual(zeros(32));
+    expect(Array.from(dsa)).toEqual(zeros(64));
+
+    const onThrow = new Uint8Array(16).fill(5);
+    await expect(
+      vault.withDerivedSecrets([onThrow], async () => {
+        throw new Error('signing blew up');
+      }),
+    ).rejects.toThrow(/signing blew up/);
+    expect(Array.from(onThrow)).toEqual(zeros(16));
+
+    vault.lock();
+    await expect(vault.withDerivedSecrets([new Uint8Array(8)], async () => 'x')).rejects.toThrow(/locked/i);
+  });
+
   test('a lock landing inside any scoped callback zeroes its copy and voids its result', async () => {
     const { vault } = await openVault([seeded, bunker]);
     await vault.setImportedPqKeys('acct_seed', pqKeys, 'nip-pqc/v1');
@@ -1402,6 +1425,15 @@ describe('scoped access to the other secrets', () => {
     cases.push([
       'withRemoteSignerCredentials',
       (gate) => vault.withRemoteSignerCredentials('acct_bunker', async (creds) => { copies.push(creds.secret!); await gate; return 'creds'; }),
+      () => copies,
+    ]);
+    cases.push([
+      'withDerivedSecrets',
+      (gate) => {
+        // A secret the vault never stored: what a caller derived from a mnemonic it does hold.
+        const derived = [new Uint8Array(32).fill(7), new Uint8Array(64).fill(9)];
+        return vault.withDerivedSecrets(derived, async () => { copies.push(...derived); await gate; return 'derived'; });
+      },
       () => copies,
     ]);
     for (const [name, run, held] of cases) {
