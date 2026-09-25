@@ -91,6 +91,32 @@ await server.acceptNostrConnect(scannedUri);
 | Clock skew | Requests further than `maxClockSkewSec` (default 300) from now are dropped, as Amber does. |
 | Logging | Optional injected logger; no `console`, and no key, plaintext or ciphertext ever reaches it. |
 
+### Surviving a restart
+
+A phone kills and restarts the process constantly, so pairings must not live only in memory.
+Everything a host needs to persist is one `BunkerState`:
+
+```ts
+interface BunkerState {
+  secrets: { secret: string; origin: "bunker" | "nostrconnect"; relays: string[]; clientPubkey?: string; confirmed: boolean; expiresAt?: number }[];
+  clients: { clientPubkey: string; relays: string[]; secret?: string; connectedAt: number }[];
+}
+```
+
+`onStateChange(state)` hands out a fresh one after every change (mint, bind, confirm, release,
+revoke, lapse, admit, forget); `exportState()` returns one on demand; `restore(state)` rehydrates
+it on the way back up under the same connection key, before or after `start()`. A restored
+secret keeps its binding: a different client presenting it is refused exactly as before the
+restart. Restored clients carry on without re-pairing, on their own relays. Pending approvals
+are exported as bound but unconfirmed, so the same client may retry and nobody else can.
+
+### Secrets do not pile up
+
+`revokeSecret(secret)` forgets a secret; a client already connected through it stays connected
+until `disconnectClient`. Unclaimed secrets lapse after `secretTtlMs` (default 15 minutes,
+`createBunkerUri({ ttlMs })` per mint, `0` disables) and are swept on mint, connect and export.
+A confirmed binding never expires, since paired clients reconnect with it indefinitely.
+
 ### Relays are per client
 
 Relay selection is a privacy control, not a delivery detail. A client's responses go to the
@@ -119,6 +145,12 @@ are nulled without a close, and the pool forgets the relay, so `stop()` cannot c
 attempt against a slow relay, retries included, leaks one socket for the process lifetime.
 Prefer relays that accept promptly, set the timeout generously on hosts that run for hours,
 and see the package report for the upstream defect.
+
+## Vendoring by path
+
+`npm run build` stamps `dist/.src-hash` with a hash of `src/`, and `test/dist-fresh.test.ts`
+fails whenever a `dist/` present in the tree is behind the source. A stale build cannot pass
+the suite, so anyone installing this package from a checkout gets current code or a red test.
 
 ## React Native
 
