@@ -21,6 +21,11 @@ npm-debug.log*
 # Test coverage
 coverage/
 
+# Where `packages/signer-core/test/extension-interop-probe.mjs` stages its rewritten copies of
+# the browser extension's crypto sources. Not under node_modules/: Node refuses to strip types
+# from a .ts file there, and the probe imports them directly.
+.interop-extension/
+
 # Environment files
 .env
 .env.local

@@ -196,10 +196,15 @@ approval would put a different event on the wire than the one the user saw.
 
 That has one visible consequence. Building the event needs the account's post-quantum keys, so
 for `signPqAttestation` the unlock runs **before** the prompt rather than after it, and an
-account whose keys cannot be resolved is refused instead of being asked. Opening the vault is
-not consent to sign: the prompt still follows, a refusal still refuses, and a stored deny still
-blocks before any of it. The activity entry keeps `method: 'signPqAttestation'` and now carries
-the event it signed, as a `signEvent` entry does.
+account whose keys cannot be resolved is refused instead of being asked. The alternative —
+prompt first, showing a preview — could only show the event with the proof of possession
+missing, because computing that is what needs the key; that is showing the user something other
+than what gets signed, on the one screen where the difference is the point. Opening the vault is
+not consent to sign: the permission cascade short-circuits a deny before any unlock, the prompt
+still follows, and a refusal still refuses. The cost is a biometric before the approval screen
+instead of after it, which is a user-experience cost and not a security one. The activity entry
+keeps `method: 'signPqAttestation'` and now carries the event it signed, as a `signEvent` entry
+does.
 
 **What it costs.** ML-KEM and ML-DSA are not free, and everything below runs synchronously
 on the JavaScript thread. Measured on Node 24, Apple silicon, mean of 100:

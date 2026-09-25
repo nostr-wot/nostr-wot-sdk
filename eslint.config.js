@@ -34,7 +34,9 @@ const AVOIDABLE_GLOBALS = [
 
 export default [
   {
-    ignores: ['**/dist/**', '**/node_modules/**', '**/coverage/**'],
+    // `.interop-extension/` holds copies of the browser extension's sources, staged by the
+    // interop probe. They are not ours to lint.
+    ignores: ['**/dist/**', '**/node_modules/**', '**/coverage/**', '.interop-extension/**'],
   },
   {
     files: [`packages/{${SHARED_PACKAGES.join(',')}}/src/**/*.ts`],

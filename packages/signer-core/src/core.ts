@@ -19,13 +19,16 @@
  * not the key is available, and whether the account is local or remote. Reordering these
  * steps is a regression, not a refactor.
  *
- * **`signPqAttestation` runs 4 before 3.** It is the one method whose event the pipeline
- * computes rather than receives, and it computes it from the account's own post-quantum keys,
- * so a shut vault means there is nothing to put in front of the user. The vault is opened, the
- * `kind:10203` is built, and only then is the prompt shown — carrying that event, spelled as the
- * `signEvent` it is, so a host renders it with the preview it already has. Unlocking is not
- * consent: the prompt still follows and a refusal still refuses. Everything the prompt shows is
- * what gets signed, down to the randomised proof of possession, because it is the same template.
+ * **`signPqAttestation` runs 4 before 3, and that is not the regression it resembles.** It is
+ * the one method whose event the pipeline computes rather than receives, out of the account's
+ * own post-quantum keys, so a shut vault means there is nothing to put in front of the user. The
+ * vault is opened, the `kind:10203` is built, and only then is the prompt shown — carrying that
+ * event, spelled as the `signEvent` it is, so a host renders it with the preview it already has.
+ * Prompting first could only show a preview with the proof of possession missing, which is
+ * showing the user something other than what gets signed on the one screen where that is the
+ * whole point. Unlocking is not consent: the permission cascade still short-circuits a deny
+ * before any unlock, the prompt still follows, and a refusal still refuses. The full reasoning,
+ * and the alternative that was rejected, are at the call site in `#run`.
  *
  * **Only fixed text leaves.** Every rejection out of `handle` is a `SignerError`. Whatever a
  * port, a store, the vault or a cipher threw is given to the logger and to the activity
@@ -504,13 +507,38 @@ export class SignerCore {
       }
     }
 
-    // The attestation is the one method whose event this pipeline computes rather than receives,
-    // out of the account's own post-quantum keys, so it cannot be built while the vault is shut.
-    // For it, and only for it, step 4 runs before step 3 and the event is built in between: the
-    // user is shown the kind:10203 that will be signed, in full, as a `signEvent` request. The
-    // alternative is a prompt that names an operation and shows nothing, which is a button
-    // rather than a decision, and this project has twice decided against it. Opening the vault
-    // first is not consent to sign: the prompt still follows, and a refusal still refuses.
+    // ── STEP 4 BEFORE STEP 3, DELIBERATELY. DO NOT "FIX" THIS. ──
+    //
+    // This is the one place in the pipeline where the unlock precedes the prompt, and it looks
+    // exactly like the ordering mistake this file warns about at the top. It is not one. Ruled
+    // on and kept, for the reason below.
+    //
+    // The attestation is the only method whose event the pipeline COMPUTES rather than receives.
+    // Its ML-DSA proof of possession needs the account's post-quantum secret key, which needs an
+    // open vault. So the order is: permissions, unlock, build the kind:10203, show it, sign that
+    // exact object.
+    //
+    // The alternative, rejected: prompt first and show a preview of the event-to-be. It cannot
+    // include the `pop` tag, because computing it is the thing that needs the key. That means
+    // showing the user something that is NOT what gets signed, on the one screen where that
+    // distinction is the entire point — and this project has twice defended the rule that an
+    // approval shows the full content and all tags of the actual object, never a description of
+    // it. A preview with a hole in it is the blind-signing button wearing a disguise. Signing a
+    // freshly built event after approval is worse still: ML-DSA signing is randomised, so the
+    // `pop` on the wire would differ from any `pop` that was shown.
+    //
+    // What the reordering does NOT cost:
+    //   - It is not consent. The approval prompt still follows, and a refusal still refuses.
+    //   - A denied origin cannot cause the vault to open: the permission cascade above
+    //     short-circuits a `deny` before this line is reached, as it does for every method.
+    //   - An account that cannot produce the event is refused here instead of being asked,
+    //     which is the same disclosure, one step earlier.
+    // What it does cost is a biometric or a password before the approval screen rather than
+    // after it. That is a user-experience cost, not a security one.
+    //
+    // `pq.test.ts` pins both halves: `a locked vault is opened first, then the built event is
+    // shown, then it signs` asserts the order, and `the prompt is shown the event that will be
+    // signed, spelled as the signEvent it is` asserts that what was shown is what was signed.
     let prepared: PreparedParams;
     if (params.method === 'signPqAttestation') {
       await this.#openVault(request, originKey, account);
