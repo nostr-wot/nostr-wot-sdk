@@ -99,6 +99,24 @@ export type ValidatedParams =
   | { method: 'signPqAttestation' };
 
 /**
+ * The params of a request that is about to be executed, with the attestation's event resolved.
+ *
+ * `signPqAttestation` is the one method whose event this pipeline computes rather than receives:
+ * the account's ML-KEM and ML-DSA public keys, the provenance tags and an ML-DSA proof of
+ * possession. It is built BEFORE the user is asked, so the prompt can show the `kind:10203` in
+ * full the way a `signEvent` template is shown, and that exact template is what gets signed —
+ * the proof of possession is randomised, so rebuilding it after the prompt would put a
+ * different event on the wire than the one that was approved.
+ *
+ * Everything downstream of the prompt (the signing backend, the activity entry) works on this,
+ * not on {@link ValidatedParams}, so there is no path on which the attestation reaches a
+ * signature without its event having been resolved and disclosed first.
+ */
+export type PreparedParams =
+  | Exclude<ValidatedParams, { method: 'signPqAttestation' }>
+  | { method: 'signPqAttestation'; event: EventTemplateInput };
+
+/**
  * A request that passed the boundary.
  *
  * `request` is a deep copy of what the transport handed in, frozen: it is what the user is
@@ -190,6 +208,14 @@ export interface ApprovalDecision {
  * tag; the pipeline never truncates on the way in. `cancel` is called when a request the host
  * is still showing has been settled from elsewhere: timed out, disposed, or rejected because
  * the account changed. The host should close the prompt; its eventual answer is ignored.
+ *
+ * **The `method` a prompt is shown may not be the one the caller sent.** `signPqAttestation`
+ * arrives with no params and is presented as the `signEvent` it is, carrying the `kind:10203`
+ * this pipeline built for it: a host that switches on `request.method` reaches its existing
+ * event preview, and no host needs a case for a method name to avoid showing the user a
+ * button with nothing behind it. The permission rule is `signEvent` for kind 10203 too, so
+ * what the prompt says and what a remembered decision stores are the same thing. The activity
+ * log keeps the method the caller actually asked for.
  *
  * `cancel` names the origin as well as the id, because the id alone does not identify a
  * prompt: the queue keys entries by origin, kind and id, a NIP-46 request id is chosen by the

@@ -19,6 +19,14 @@
  * not the key is available, and whether the account is local or remote. Reordering these
  * steps is a regression, not a refactor.
  *
+ * **`signPqAttestation` runs 4 before 3.** It is the one method whose event the pipeline
+ * computes rather than receives, and it computes it from the account's own post-quantum keys,
+ * so a shut vault means there is nothing to put in front of the user. The vault is opened, the
+ * `kind:10203` is built, and only then is the prompt shown — carrying that event, spelled as the
+ * `signEvent` it is, so a host renders it with the preview it already has. Unlocking is not
+ * consent: the prompt still follows and a refusal still refuses. Everything the prompt shows is
+ * what gets signed, down to the randomised proof of possession, because it is the same template.
+ *
  * **Only fixed text leaves.** Every rejection out of `handle` is a `SignerError`. Whatever a
  * port, a store, the vault or a cipher threw is given to the logger and to the activity
  * entry, and the caller gets a code and a sentence that names nothing on the device.
@@ -44,7 +52,7 @@ import { GET_PUBLIC_KEY_COOLDOWN_MS, KEY_METHODS, ORIGIN_KINDS } from './constan
 import { SignerError, errorMessage } from './errors.js';
 import { needsPqKeys, remotePqRefusal, withPqKeys, type PqKeyScope } from './pq.js';
 import { ApprovalQueue } from './queue.js';
-import { validateBatchRequest, validateRequest } from './schema.js';
+import { disclosedBatch, disclosedRequest, validateBatchRequest, validateRequest } from './schema.js';
 import type {
   ActivityEntry,
   ActivityPort,
@@ -52,8 +60,10 @@ import type {
   ApprovalPort,
   BatchItemOutcome,
   BatchResult,
+  EventTemplateInput,
   IdentityPort,
   PendingEntry,
+  PreparedParams,
   RelayListPort,
   RemoteSignerPort,
   RequestOrigin,
@@ -149,13 +159,25 @@ interface RunContext {
   account: SafeAccount | null;
   /** Which step a foreign error came out of, which decides the fixed text it becomes. */
   phase: 'pipeline' | 'execute';
+  /**
+   * The params as prepared, once an attestation's event has been built: what the prompt showed
+   * and what was signed, so the activity entry records the event rather than only its kind. One
+   * entry for a single request, one per item for a batch, filled in as far as the run got.
+   */
+  prepared: readonly PreparedParams[] | null;
 }
 
-/** What the activity log is told about: a request, or one item of a batch. */
+/**
+ * What the activity log is told about: a request, or one item of a batch.
+ *
+ * Either shape of params, because an attestation refused before its event could be built has
+ * no event to record, and saying so is honest. Everything past the prompt is {@link
+ * PreparedParams}; only the log accepts both.
+ */
 interface Recorded {
   id: string;
   origin: RequestOrigin;
-  params: ValidatedParams;
+  params: PreparedParams | ValidatedParams;
   batchId?: string;
 }
 
@@ -340,15 +362,19 @@ export class SignerCore {
     } catch (error) {
       throw this.#toSignerError(error, 'pipeline', requestIdForLog(request));
     }
-    const context: RunContext = { account: null, phase: 'pipeline' };
-    const recorded: Recorded = { id: validated.request.id, origin: validated.request.origin, params: validated.params };
+    const context: RunContext = { account: null, phase: 'pipeline', prepared: null };
+    const recorded = (): Recorded => ({
+      id: validated.request.id,
+      origin: validated.request.origin,
+      params: context.prepared?.[0] ?? validated.params,
+    });
     try {
       const result = await this.#run(validated, context);
-      await this.#record(recorded, context.account, { decision: 'allow' });
+      await this.#record(recorded(), context.account, { decision: 'allow' });
       return result;
     } catch (error) {
       const refusal = this.#toSignerError(error, context.phase, validated.request.id);
-      await this.#record(recorded, context.account, {
+      await this.#record(recorded(), context.account, {
         decision: 'deny',
         // The original text, for the log on the device. The caller gets `refusal.message`.
         reason: errorMessage(error),
@@ -380,10 +406,10 @@ export class SignerCore {
     const view = (index: number): Recorded => ({
       id: items[index]!.id,
       origin: request.origin,
-      params: items[index]!.params,
+      params: context.prepared?.[index] ?? items[index]!.params,
       batchId: request.id,
     });
-    const context: RunContext = { account: null, phase: 'pipeline' };
+    const context: RunContext = { account: null, phase: 'pipeline', prepared: null };
     try {
       const runs = await this.#runBatch(validated, context);
       const outcomes: BatchItemOutcome[] = [];
@@ -452,11 +478,30 @@ export class SignerCore {
       }
     }
 
+    // The attestation is the one method whose event this pipeline computes rather than receives,
+    // out of the account's own post-quantum keys, so it cannot be built while the vault is shut.
+    // For it, and only for it, step 4 runs before step 3 and the event is built in between: the
+    // user is shown the kind:10203 that will be signed, in full, as a `signEvent` request. The
+    // alternative is a prompt that names an operation and shows nothing, which is a button
+    // rather than a decision, and this project has twice decided against it. Opening the vault
+    // first is not consent to sign: the prompt still follows, and a refusal still refuses.
+    let prepared: PreparedParams;
+    if (params.method === 'signPqAttestation') {
+      await this.#openVault(request, originKey, account);
+      await this.#assertStillActive(account);
+      prepared = { method: 'signPqAttestation', event: await this.#buildAttestation(account) };
+      context.prepared = [prepared];
+    } else {
+      // Every other method arrives as exactly what will be signed; there is nothing to prepare.
+      prepared = params;
+    }
+
     // 3. Ask. The prompt shows the frozen copy: full content, every tag, exactly what is signed.
     if (decision === 'ask' && this.#needsPrompt(method, remote, originKey, account)) {
+      const shown = disclosedRequest(request, prepared);
       const outcome = await this.#queue.track(
         { id: request.id, kind: 'approval', origin: originKey, accountId: account.id },
-        () => this.#approval.present(request, account),
+        () => this.#approval.present(shown, account),
       );
       if (!outcome.allow) {
         if (outcome.remember) await this.#remember(originKey, rule, outcome, 'deny', account);
@@ -474,16 +519,10 @@ export class SignerCore {
       }
     }
 
-    // 4. Unlock if required. Only a method that needs the key, only while locked.
-    if (needsKey && this.#vault.isLocked()) {
-      if (!this.#unlock) throw new SignerError('vault_locked', 'Vault is locked');
-      const unlock = this.#unlock;
-      await this.#queue.track(
-        { id: request.id, kind: 'unlock', origin: originKey, accountId: account.id },
-        () => unlock.requestUnlock(request, account),
-      );
-      // The port said it unlocked; the vault is the authority on whether it did.
-      if (this.#vault.isLocked()) throw new SignerError('vault_locked', 'Vault is locked');
+    // 4. Unlock if required. Only a method that needs the key, only while locked. Already done
+    //    above for the attestation, whose event could not have been built otherwise.
+    if (needsKey && prepared.method !== 'signPqAttestation') {
+      await this.#openVault(request, originKey, account);
     }
 
     // On every path, prompted or not: the account this request was resolved against has to
@@ -494,7 +533,7 @@ export class SignerCore {
 
     // 5. Execute. 6. Zero: `withPrivkey` hands the backend a copy and zeroes it on every path.
     context.phase = 'execute';
-    const result = await this.#executeFor(account, remote, originKey, request, params);
+    const result = await this.#executeFor(account, remote, originKey, request, params, prepared);
     // And once more after execute, as the extension asserts the session after signing. The
     // execute window is real: a switch landing inside withPrivkey, or during a remote round
     // trip, would otherwise hand back a result computed for an account the user has left.
@@ -580,15 +619,36 @@ export class SignerCore {
       }
     }
 
+    // An attestation item's event is this pipeline's to compute, so for a batch carrying one the
+    // unlock runs before the prompt and the events are built in between, for the reason written
+    // on `#run`: a batch prompt has to show every item in full, and one of these items cannot be
+    // shown at all until it exists. An account that cannot produce it refuses the whole batch
+    // here, before the prompt, alongside every other thing decided about the batch as the caller
+    // composed it — nothing the user is shown is later removed.
+    if (items.some((item) => item.params.method === 'signPqAttestation')) {
+      await this.#openVaultForBatch(request, originKey, account);
+      await this.#assertStillActive(account);
+    }
+    const prepared: PreparedParams[] = [];
+    context.prepared = prepared;
+    for (const item of items) {
+      prepared.push(
+        item.params.method === 'signPqAttestation'
+          ? { method: 'signPqAttestation', event: await this.#buildAttestation(account) }
+          : item.params,
+      );
+    }
+
     // 3. Ask once, showing the whole frozen batch. A host with no batch prompt cannot give
     //    the user every item, and a prompt that cannot is a blind-signing button; refused.
     if (asked.length > 0) {
       const approval = this.#approval;
       const presentBatch = approval.presentBatch;
       if (!presentBatch) throw new SignerError('unsupported', 'This host cannot show a batch');
+      const shown = disclosedBatch(request, prepared);
       const outcome = await this.#queue.track(
         { id: request.id, kind: 'approval', origin: originKey, accountId: account.id },
-        () => presentBatch.call(approval, request, account),
+        () => presentBatch.call(approval, shown, account),
       );
       if (!outcome.allow) {
         if (outcome.remember) await this.#rememberAll(originKey, asked, outcome, 'deny', account);
@@ -598,17 +658,9 @@ export class SignerCore {
       if (outcome.remember) await this.#rememberAll(originKey, asked, outcome, 'allow', account);
     }
 
-    // 4. Unlock if required, once for the batch.
-    if (this.#vault.isLocked()) {
-      const unlock = this.#unlock;
-      const requestUnlockBatch = unlock?.requestUnlockBatch;
-      if (!unlock || !requestUnlockBatch) throw new SignerError('vault_locked', 'Vault is locked');
-      await this.#queue.track(
-        { id: request.id, kind: 'unlock', origin: originKey, accountId: account.id },
-        () => requestUnlockBatch.call(unlock, request, account),
-      );
-      if (this.#vault.isLocked()) throw new SignerError('vault_locked', 'Vault is locked');
-    }
+    // 4. Unlock if required, once for the batch. Already done above when the batch carries an
+    //    attestation, whose event could not have been built otherwise.
+    await this.#openVaultForBatch(request, originKey, account);
     await this.#assertStillActive(account);
 
     // 5. Execute, each item in its own key scope. 6. Zero, on every path, per item.
@@ -622,7 +674,7 @@ export class SignerCore {
     for (const [index, item] of items.entries()) {
       if (index > 0) await this.#assertStillWanted(account, originKey, revokedBefore);
       try {
-        runs.push({ id: item.id, ok: true, result: await this.#signLocally(account, item.params) });
+        runs.push({ id: item.id, ok: true, result: await this.#signLocally(account, prepared[index]!) });
       } catch (error) {
         runs.push({ id: item.id, ok: false, error, refusal: this.#toSignerError(error, 'execute', item.id) });
       }
@@ -632,6 +684,69 @@ export class SignerCore {
     return runs;
   }
 
+  /**
+   * Step 4, on its own so the attestation can run it before the prompt (see `#run`). A no-op
+   * when the vault is already open.
+   */
+  async #openVault(request: SignerRequest, originKey: string, account: SafeAccount): Promise<void> {
+    if (!this.#vault.isLocked()) return;
+    if (!this.#unlock) throw new SignerError('vault_locked', 'Vault is locked');
+    const unlock = this.#unlock;
+    await this.#queue.track(
+      { id: request.id, kind: 'unlock', origin: originKey, accountId: account.id },
+      () => unlock.requestUnlock(request, account),
+    );
+    // The port said it unlocked; the vault is the authority on whether it did.
+    if (this.#vault.isLocked()) throw new SignerError('vault_locked', 'Vault is locked');
+  }
+
+  /** The same on a batch's behalf: one unlock for the whole batch, through the batch port. */
+  async #openVaultForBatch(batch: SignerBatchRequest, originKey: string, account: SafeAccount): Promise<void> {
+    if (!this.#vault.isLocked()) return;
+    const unlock = this.#unlock;
+    const requestUnlockBatch = unlock?.requestUnlockBatch;
+    if (!unlock || !requestUnlockBatch) throw new SignerError('vault_locked', 'Vault is locked');
+    await this.#queue.track(
+      { id: batch.id, kind: 'unlock', origin: originKey, accountId: account.id },
+      () => requestUnlockBatch.call(unlock, batch, account),
+    );
+    if (this.#vault.isLocked()) throw new SignerError('vault_locked', 'Vault is locked');
+  }
+
+  /**
+   * The `kind:10203` for this account: its ML-KEM and ML-DSA public keys, the provenance tags
+   * and an ML-DSA proof of possession, at the vault's clock.
+   *
+   * Built before the prompt, in the post-quantum scope alone — no private key is read here, and
+   * the secp256k1 signature comes later, over exactly this template. `derived` asserts one
+   * mnemonic restores these keys, which only a 24-word seed can; imported keys are `independent`
+   * and claim no seed strength, exactly as the extension tags them, so a relay reader can tell
+   * the two provenances apart.
+   *
+   * A failure is wrapped the way the signing step's failures are, so an account that cannot hold
+   * post-quantum keys is refused with the extension's `unsupported` text and a vault that closed
+   * mid-derivation is reported as the lock, rather than both becoming `internal`.
+   */
+  async #buildAttestation(account: SafeAccount): Promise<EventTemplateInput> {
+    try {
+      return await withPqKeys(this.#vault, account, async (scope) => ({
+        kind: PQC_KIND,
+        content: '',
+        tags: buildAttestationTags({
+          pubkey: account.pubkey,
+          kem: scope.keys.kem.publicKey,
+          dsa: scope.keys.dsa.publicKey,
+          origin: scope.source === 'derived' ? 'derived' : 'independent',
+          dsaSecretKey: scope.keys.dsa.secretKey,
+        }),
+        created_at: Math.floor(this.#now() / 1000),
+      }));
+    } catch (error) {
+      if (error instanceof SignerError) throw error;
+      throw new ExecuteFailure(error, 'callback', this.#vault.isLocked());
+    }
+  }
+
   /** The execute step, by method and by where the key lives. */
   async #executeFor(
     account: SafeAccount,
@@ -639,6 +754,7 @@ export class SignerCore {
     originKey: string,
     request: SignerRequest,
     params: ValidatedParams,
+    prepared: PreparedParams,
   ): Promise<unknown> {
     switch (params.method) {
       case 'getPublicKey':
@@ -655,7 +771,7 @@ export class SignerCore {
         (signal) => port.execute(account, request, params, signal),
       );
     }
-    return this.#signLocally(account, params);
+    return this.#signLocally(account, prepared);
   }
 
   /**
@@ -667,7 +783,7 @@ export class SignerCore {
    * first, `withPqKeys`, and only then: a classic request never reads the seed phrase or
    * the imported keys, so the path everyone uses today does exactly what it did.
    */
-  async #signLocally(account: SafeAccount, params: ValidatedParams): Promise<unknown> {
+  async #signLocally(account: SafeAccount, params: PreparedParams): Promise<unknown> {
     try {
       // Pinned to the account the user saw, never "whatever is active now".
       return await this.#vault.withPrivkey(account.id, async (key) => {
@@ -679,8 +795,11 @@ export class SignerCore {
           throw new SignerError('author_mismatch', 'Event author does not match the active account');
         }
         try {
-          if (!needsPqKeys(params)) return await this.#execute(params, new PrivateKeySigner(key));
-          return await withPqKeys(this.#vault, account, (scope) => this.#executePq(params, key, scope, account));
+          // The attestation's post-quantum scope was opened before the prompt, to build the
+          // event the user approved; by here it is an ordinary event to sign.
+          const pq = params.method !== 'signPqAttestation' && needsPqKeys(params);
+          if (!pq) return await this.#execute(params, new PrivateKeySigner(key));
+          return await withPqKeys(this.#vault, account, (scope) => this.#executePq(params, key, scope));
         } catch (error) {
           if (error instanceof SignerError) throw error;
           throw new ExecuteFailure(error, 'callback', this.#vault.isLocked());
@@ -696,8 +815,12 @@ export class SignerCore {
    * The signing backend. Computes and returns; never externalizes. `PrivateKeySigner` holds
    * the very buffer the vault handed in, so the vault's zeroing reaches it.
    */
-  async #execute(params: ValidatedParams, signer: PrivateKeySigner): Promise<unknown> {
+  async #execute(params: PreparedParams, signer: PrivateKeySigner): Promise<unknown> {
     switch (params.method) {
+      // The attestation signs the template that was built for it and shown at the prompt: the
+      // same tags, the same proof of possession, the same second. Rebuilding it here would sign
+      // something other than what was approved, because the proof of possession is randomised.
+      case 'signPqAttestation':
       case 'signEvent': {
         const { event } = params;
         // A fresh, unfrozen template: `finalizeEvent` fills id, pubkey and sig in place, and
@@ -722,19 +845,20 @@ export class SignerCore {
         // classic NIP-44 path and nothing else.
         return signer.nip44Decrypt(params.pubkey, params.ciphertext);
       default:
-        // `getPublicKey` and `getRelays` were answered before the key was ever read, and
-        // the attestation runs under the post-quantum scope.
+        // `getPublicKey` and `getRelays` were answered before the key was ever read.
         throw new SignerError('unsupported', `${params.method} does not use the key`);
     }
   }
 
   /**
    * The post-quantum backend, inside both scopes: the private key for the classic half of
-   * the hybrid, and the account's ML-KEM / ML-DSA keys for the rest. The signer is built
-   * with the KEM key so its own routing applies; the attestation's proof of possession is
-   * signed by the ML-DSA key and the event by the private key, as the extension does.
+   * the hybrid, and the account's ML-KEM key for the rest. The signer is built with the KEM
+   * key so its own routing applies.
+   *
+   * The attestation is not here: its post-quantum half ran before the prompt, in
+   * `#buildAttestation`, and the private-key half is an ordinary `signEvent`.
    */
-  async #executePq(params: ValidatedParams, key: Uint8Array, scope: PqKeyScope, account: SafeAccount): Promise<unknown> {
+  async #executePq(params: PreparedParams, key: Uint8Array, scope: PqKeyScope): Promise<unknown> {
     const signer = new PrivateKeySigner(key, { pqKem: scope.keys.kem });
     switch (params.method) {
       case 'nip44Encrypt':
@@ -743,22 +867,6 @@ export class SignerCore {
       case 'nip44Decrypt':
         if (params.scheme !== 'pq') throw new SignerError('unsupported', 'classic nip44Decrypt does not use the post-quantum keys');
         return signer.nip44Decrypt(params.pubkey, params.ciphertext);
-      case 'signPqAttestation':
-        return signer.signEvent({
-          kind: PQC_KIND,
-          content: '',
-          // `derived` asserts one mnemonic restores these keys, which only a 24-word seed
-          // can; imported keys are `independent` and claim no seed strength, exactly as the
-          // extension tags them, so a relay reader can tell the two provenances apart.
-          tags: buildAttestationTags({
-            pubkey: account.pubkey,
-            kem: scope.keys.kem.publicKey,
-            dsa: scope.keys.dsa.publicKey,
-            origin: scope.source === 'derived' ? 'derived' : 'independent',
-            dsaSecretKey: scope.keys.dsa.secretKey,
-          }),
-          created_at: Math.floor(this.#now() / 1000),
-        });
       default:
         throw new SignerError('unsupported', `${params.method} does not use the post-quantum keys`);
     }
@@ -898,6 +1006,10 @@ export class SignerCore {
         break;
       case 'signPqAttestation':
         entry.kind = PQC_KIND;
+        // The event this pipeline built and the user approved, when the run got that far. An
+        // attestation refused before it could be built has the kind and nothing to show, which
+        // is honest: there was no event.
+        if ('event' in params) entry.event = params.event;
         break;
       case 'nip04Encrypt':
         entry.theirPubkey = params.pubkey;

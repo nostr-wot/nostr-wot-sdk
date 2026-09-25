@@ -39,10 +39,11 @@ import {
   PQ_SEED_WORD_COUNT,
   verifyPqAttestation,
   withPqKeys,
+  type EventTemplateInput,
   type PqKeyScope,
   type RemoteSignerPort,
 } from '../src/index.js';
-import { account, fixture, req, nextId, PRIVKEY_2, PUBKEY_2 } from './harness.js';
+import { account, fixture, req, nextId, PASSWORD, PRIVKEY_2, PUBKEY_2 } from './harness.js';
 
 // ── Identities ──
 
@@ -581,8 +582,67 @@ describe('signPqAttestation is a signing request like any other', () => {
     expect(verified.popValid).toBe(true);
     expect(verified.kem).toEqual(expected.kem.publicKey);
 
-    expect(approval.presented[0]!.request.method).toBe('signPqAttestation');
     expect(activity.entries.at(-1)).toMatchObject({ method: 'signPqAttestation', kind: PQC_KIND, decision: 'allow', pubkey: acct.pubkey });
+  });
+
+  test('the prompt is shown the event that will be signed, spelled as the signEvent it is', async () => {
+    // The user cannot consent to "signPqAttestation" with nothing attached: the keys, the tags
+    // and the proof of possession are all this pipeline's to compute, so it computes them
+    // BEFORE asking and shows the kind:10203 in full, exactly as a `signEvent` template is
+    // shown. A host that switches on `request.method` therefore reaches its existing event
+    // preview, with no case for a name it has never heard of.
+    const acct = seededAccount('acct_seed', M24);
+    const { core, approval } = await fixture(true, { accounts: [acct] });
+    const event = (await core.handle(req('signPqAttestation'))) as Event;
+
+    expect(approval.presented).toHaveLength(1);
+    const shown = approval.presented[0]!.request;
+    expect(shown.method).toBe('signEvent');
+    const template = (shown.params as { event: EventTemplateInput }).event;
+    expect(template.kind).toBe(PQC_KIND);
+    expect(template.content).toBe('');
+    // Not a summary, not a count: every tag the signature will cover, in order, with values.
+    expect(template.tags).toEqual(event.tags);
+    expect(template.created_at).toBe(event.created_at);
+    // What was shown is what was signed, down to the proof of possession — which is randomised,
+    // so rebuilding the event after the prompt would have produced a different `pop` tag.
+    expect(template.tags.find((t) => t[0] === 'pop')).toEqual(event.tags.find((t) => t[0] === 'pop'));
+    // And the prompt cannot be edited into something else on its way to the signer.
+    expect(Object.isFrozen(shown)).toBe(true);
+    expect(Object.isFrozen(template.tags)).toBe(true);
+  });
+
+  test('the batch prompt shows the attestation as an event too, beside the items around it', async () => {
+    const acct = seededAccount('acct_seed', M24);
+    const { core, approval } = await fixture(true, { accounts: [acct] });
+    const result = await core.handleBatch({
+      id: nextId('batch'),
+      origin: { kind: 'web', identifier: 'example.com' },
+      items: [
+        { id: 'a', method: 'signPqAttestation', params: {} },
+        { id: 'b', method: 'signEvent', params: { event: { kind: 1, content: 'hello', tags: [] } } },
+      ],
+      receivedAt: Date.now(),
+    });
+    expect(result.items.map((item) => item.ok)).toEqual([true, true]);
+    const shown = approval.presentedBatches[0]!.batch;
+    expect(shown.items.map((item) => item.method)).toEqual(['signEvent', 'signEvent']);
+    const signed = (result.items[0] as { result: Event }).result;
+    const template = (shown.items[0]!.params as { event: EventTemplateInput }).event;
+    expect(template.kind).toBe(PQC_KIND);
+    expect(template.tags).toEqual(signed.tags);
+    expect(shown.items[1]!.params).toEqual({ event: { kind: 1, content: 'hello', tags: [] } });
+  });
+
+  test('an attestation the account cannot produce is refused before the user is asked', async () => {
+    // The event is the disclosure. There is nothing honest to show for an account whose keys
+    // cannot be resolved, so the refusal comes instead of the prompt, not after it.
+    const { core, approval, activity } = await fixture(true, { accounts: [account('acct_nsec', PRIVKEY_2)] });
+    const error = await core.handle(req('signPqAttestation')).catch((e: unknown) => e);
+    expect((error as SignerError).code).toBe('unsupported');
+    expect((error as SignerError).message).toBe('This account has no seed phrase, so it cannot use post-quantum keys');
+    expect(approval.presented).toHaveLength(0);
+    expect(activity.entries.at(-1)).toMatchObject({ method: 'signPqAttestation', decision: 'deny', code: 'unsupported' });
   });
 
   test('an account with imported keys signs origin independent and claims no seed strength', async () => {
@@ -636,14 +696,6 @@ describe('signPqAttestation is a signing request like any other', () => {
     expect((error as SignerError).code).toBe('rejected');
   });
 
-  test('an account that cannot hold post-quantum keys is refused after the gate, with the reason', async () => {
-    const { core, approval } = await fixture(true, { accounts: [account('acct_nsec', PRIVKEY_2)] });
-    const error = await core.handle(req('signPqAttestation')).catch((e: unknown) => e);
-    expect((error as SignerError).code).toBe('unsupported');
-    expect((error as SignerError).message).toBe('This account has no seed phrase, so it cannot use post-quantum keys');
-    expect(approval.presented).toHaveLength(1);
-  });
-
   test('a watch-only account is refused as any key method is', async () => {
     const { core } = await fixture(true, { accounts: [account('acct_watch', null)] });
     const error = await core.handle(req('signPqAttestation')).catch((e: unknown) => e);
@@ -651,12 +703,38 @@ describe('signPqAttestation is a signing request like any other', () => {
     expect((error as SignerError).message).toBe('This account has no signing key');
   });
 
-  test('a locked vault with no unlock port refuses it after the permission gate', async () => {
+  test('a locked vault with no unlock port refuses it after the permission gate, and before the prompt', async () => {
+    // The order the attestation runs in, and the one place it differs from every other method:
+    // its event is computed from the account's own post-quantum keys, so a shut vault means
+    // there is nothing to show. Asking first would put a prompt on screen that names an
+    // operation and displays nothing, then refuse it anyway.
     const acct = seededAccount('acct_seed', M24);
     const { core, approval } = await fixture(true, { accounts: [acct], locked: true });
     const error = await core.handle(req('signPqAttestation')).catch((e: unknown) => e);
     expect((error as SignerError).code).toBe('vault_locked');
-    expect(approval.presented).toHaveLength(1);
+    expect(approval.presented).toHaveLength(0);
+  });
+
+  test('a locked vault is opened first, then the built event is shown, then it signs', async () => {
+    const acct = seededAccount('acct_seed', M24);
+    const order: string[] = [];
+    const { core, approval, vault } = await fixture(true, {
+      accounts: [acct],
+      locked: true,
+      unlock: {
+        async requestUnlock() {
+          order.push('unlock');
+          await vault.unlock(PASSWORD);
+        },
+      },
+    });
+    approval.decide = async () => {
+      order.push('prompt');
+      return { allow: true };
+    };
+    const event = (await core.handle(req('signPqAttestation'))) as Event;
+    expect(order).toEqual(['unlock', 'prompt']);
+    expect((approval.presented[0]!.request.params as { event: EventTemplateInput }).event.tags).toEqual(event.tags);
   });
 
   test('the attestation can ride in a batch with the events that will follow it', async () => {

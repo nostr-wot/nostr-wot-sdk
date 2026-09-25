@@ -130,11 +130,14 @@ post-quantum keys". Those refusals reach the caller on purpose, after the permis
 and any prompt: `schemes` advertises what the signer accepts, not what the selected account
 can do, and the caller has to be able to tell the user which of the reasons it hit.
 
-`withPqKeys` is the only path to the secrets. It hands its callback live key material,
-zeroes every copy in a `finally`, voids a result computed under a session that moved, and
-never returns secret bytes: a callback that hands the buffer back gets zeros. It opens
-inside `withPrivkey`, and only for a request that needs it; a classic request never reads
-the seed phrase or the imported keys.
+`withPqKeys` is the only path to the secrets. It hands its callback live key material and
+registers every secret with the vault through `withDerivedSecrets`, so one `lock()` zeroes
+the derived ML-KEM and ML-DSA keys where they are rather than whenever the callback happens
+to finish — exactly as `withPrivkey`'s copy is zeroed, and held to it by a test that locks
+mid-callback and reads all three. A result computed under a session that moved is voided,
+and no secret bytes are returned: a callback that hands the buffer back gets zeros. It is
+opened only for a request that needs it; a classic request never reads the seed phrase or
+the imported keys.
 
 **Decrypt routes on the payload.** `nip44Decrypt` takes no flag. The envelope is
 self-describing (a version byte and an algorithm byte), so the boundary decides the route
@@ -169,6 +172,21 @@ in the extension's tag order. It runs the whole pipeline under the `signEvent` r
 remembered approval is stored as `signEvent:10203`. The result is the signed event; the
 host publishes it. `verifyPqAttestation(event)` is the check for someone else's: kind,
 secp256k1 signature, then the tags, with `usable: false` and typed problems otherwise.
+
+**And the prompt shows that event, not the method name.** The attestation is the one method
+whose event this pipeline computes rather than receives, so it computes it *before* asking and
+hands the approval port a `signEvent` request carrying the full `kind:10203` — every tag, the
+proof of possession, the `created_at` — which is what a host's existing event preview renders,
+with no case for a method name it has never heard of. The template the prompt shows is the
+template that gets signed: the proof of possession is randomised, so rebuilding it after
+approval would put a different event on the wire than the one the user saw.
+
+That has one visible consequence. Building the event needs the account's post-quantum keys, so
+for `signPqAttestation` the unlock runs **before** the prompt rather than after it, and an
+account whose keys cannot be resolved is refused instead of being asked. Opening the vault is
+not consent to sign: the prompt still follows, a refusal still refuses, and a stored deny still
+blocks before any of it. The activity entry keeps `method: 'signPqAttestation'` and now carries
+the event it signed, as a `signEvent` entry does.
 
 **What it costs.** ML-KEM and ML-DSA are not free, and everything below runs synchronously
 on the JavaScript thread. Measured on Node 24, Apple silicon, mean of 100:
@@ -219,6 +237,9 @@ in the same order. What differs is deliberate, and each rule is written on `#run
   whole frozen batch: every item, full content, every tag. A host that does not implement it
   cannot show a batch, so a batch that needs a prompt is refused as `unsupported`; a batch
   every item of which is already allowed still signs. Same for `UnlockPort.requestUnlockBatch`.
+  A `signPqAttestation` item is built before the prompt and shown as the `signEvent` it is, for
+  the reason above, which is also why a batch carrying one unlocks first and refuses outright
+  when the account cannot produce it.
 - **Permissions are per item.** A batch of kinds 1, 7 and 1059 reads the rule for each, before
   lock state. A `deny` on any item refuses the whole batch as `permission_denied` before any
   prompt: a stored deny is the user's standing answer, and neither re-asking it nor hiding it

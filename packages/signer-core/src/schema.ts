@@ -32,6 +32,7 @@ import { isPqEnvelope } from '@nostr-wot/pq';
 import { SignerError } from './errors.js';
 import type {
   EventTemplateInput,
+  PreparedParams,
   RequestOrigin,
   SignerBatchItem,
   SignerBatchRequest,
@@ -404,6 +405,42 @@ function validate(input: unknown): ValidatedRequest {
     receivedAt,
   };
   return { request: deepFreeze(request), params: deepFreeze(params) };
+}
+
+/**
+ * The request the prompt is shown, once an attestation's event has been built.
+ *
+ * `signPqAttestation` reaches the boundary with no params, because everything in the event is
+ * the account's: its own post-quantum keys, its own proof of possession. Presenting that as it
+ * arrived would hand the host a method name and an empty object, which is a button, not a
+ * decision. So the built `kind:10203` is disclosed here as the `signEvent` it is, frozen, and
+ * an existing event preview renders it with no case of its own. Any other method is returned
+ * unchanged — it is already exactly what will be signed.
+ */
+export function disclosedRequest(request: SignerRequest, prepared: PreparedParams): SignerRequest {
+  if (prepared.method !== 'signPqAttestation') return request;
+  return deepFreeze({
+    id: request.id,
+    origin: request.origin,
+    method: 'signEvent' as const,
+    params: { event: prepared.event },
+    receivedAt: request.receivedAt,
+  });
+}
+
+/** The same for a batch: every attestation item spelled as the `signEvent` it is. */
+export function disclosedBatch(batch: SignerBatchRequest, prepared: readonly PreparedParams[]): SignerBatchRequest {
+  if (!prepared.some((params) => params.method === 'signPqAttestation')) return batch;
+  return deepFreeze({
+    id: batch.id,
+    origin: batch.origin,
+    items: batch.items.map((item, index) => {
+      const params = prepared[index];
+      if (params?.method !== 'signPqAttestation') return item;
+      return { id: item.id, method: 'signEvent' as const, params: { event: params.event } };
+    }),
+    receivedAt: batch.receivedAt,
+  });
 }
 
 /**
