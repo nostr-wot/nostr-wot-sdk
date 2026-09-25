@@ -29,6 +29,9 @@ import {
 const DEFAULTS = {
   requireSecret: true,
   secretTtlMs: 15 * 60_000,
+  maxSecrets: 256,
+  maxClients: 64,
+  maxRelaysPerClient: 8,
   handlerTimeoutMs: 120_000,
   connectTimeoutMs: 3000,
   reconnectDelayMs: 3000,
@@ -40,6 +43,7 @@ const DEFAULTS = {
 
 /** The owner tag for relays the host configured, as opposed to a client's own. */
 const SERVER_OWNER = "server";
+const HEX64 = /^[0-9a-f]{64}$/i;
 
 interface ClientState {
   connectedAt: number;
@@ -152,6 +156,10 @@ export class BunkerServer {
   readonly #strangers = new Map<string, BoundedSet>();
   /** Every relay this server opened a socket to, subscribed or publish-only, so `stop()` can close them all. */
   readonly #opened = new Set<string>();
+  /** `connect` and scan approvals currently inside the handler. `restore` is refused while this is non-zero. */
+  #pendingApprovals = 0;
+  /** The earliest expiry among unclaimed secrets; the sweep is a no-op before then. */
+  #nextSweepAt = Number.POSITIVE_INFINITY;
   #started = false;
   #stopped = false;
 
@@ -168,6 +176,9 @@ export class BunkerServer {
     this.#opts = {
       requireSecret: options.requireSecret ?? DEFAULTS.requireSecret,
       secretTtlMs: options.secretTtlMs ?? DEFAULTS.secretTtlMs,
+      maxSecrets: options.maxSecrets ?? DEFAULTS.maxSecrets,
+      maxClients: options.maxClients ?? DEFAULTS.maxClients,
+      maxRelaysPerClient: options.maxRelaysPerClient ?? DEFAULTS.maxRelaysPerClient,
       handlerTimeoutMs: options.handlerTimeoutMs ?? DEFAULTS.handlerTimeoutMs,
       connectTimeoutMs: options.connectTimeoutMs ?? DEFAULTS.connectTimeoutMs,
       reconnectDelayMs: options.reconnectDelayMs ?? DEFAULTS.reconnectDelayMs,
@@ -231,15 +242,23 @@ export class BunkerServer {
   }
 
   /**
-   * Forget a pairing secret. `connect` with it is refused from then on
-   * (`invalid secret`). A client already connected through it stays connected
-   * until `disconnectClient`; revoking only stops the secret from admitting
-   * anyone again. Returns `false` if there was nothing to revoke.
+   * Revoke a pairing secret: `connect` with it is refused from then on
+   * (`invalid secret`), an approval pending for it is discarded when the
+   * handler answers (`secret revoked` goes to the client, nothing is admitted),
+   * and the client bound to it, if connected through it, is disconnected.
+   * Returns `false` if there was nothing to revoke.
    */
   revokeSecret(secret: string): boolean {
-    const removed = this.#secrets.delete(secret);
-    if (removed) this.#emit();
-    return removed;
+    const record = this.#secrets.get(secret);
+    if (!record) return false;
+    this.#secrets.delete(secret);
+    const bound = record.clientPubkey ? this.#clients.get(record.clientPubkey) : undefined;
+    if (record.clientPubkey && bound && bound.secret === secret) {
+      this.disconnectClient(record.clientPubkey); // emits
+    } else {
+      this.#emit();
+    }
+    return true;
   }
 
   /**
@@ -259,39 +278,123 @@ export class BunkerServer {
       if (c.secret) out.secret = c.secret;
       return out;
     });
-    return { secrets, clients };
+    return { connectionPubkey: this.#pubkey, secrets, clients };
   }
 
   /**
    * Rehydrate what a previous process persisted, under the same connection
-   * key. Secrets come back with their bindings (a bound secret refuses any
-   * other client, exactly as before the restart); clients come back connected,
-   * on their own relays, without re-pairing. Lapsed unclaimed secrets are
-   * dropped. May be called before or after `start()`.
+   * key. The state is untrusted input: it is validated in full first (shape,
+   * types, relay URLs by the pairing paths' rules, every client backed by a
+   * secret bound to it and confirmed, no duplicates, `confirmed` only with a
+   * `clientPubkey`, within the ceilings) and applied all at once or not at all.
+   *
+   * Refused while any approval is pending: a restore in the middle of an
+   * approval would replace the record the approval is about to confirm, and
+   * waiting for the approval could take as long as the host allows, so the
+   * caller is told to retry instead. Refused, too, when a secret is already
+   * bound in memory to a different client than the state says. Where memory
+   * and state both hold a binding, or both hold a client, memory wins: a live
+   * handshake outranks a stored record. May be called before or after
+   * `start()`.
    */
   async restore(state: BunkerState): Promise<void> {
-    const now = Date.now();
-    for (const r of state.secrets ?? []) {
-      if (typeof r.secret !== "string" || !r.secret) continue;
-      if (!r.confirmed && r.expiresAt !== undefined && r.expiresAt <= now) continue;
-      const record: SecretState = {
-        relays: normalizeRelays(r.relays ?? []),
-        confirmed: r.confirmed === true,
-        pending: 0,
-        origin: r.origin === "nostrconnect" ? "nostrconnect" : "bunker",
-      };
-      if (typeof r.clientPubkey === "string" && r.clientPubkey) record.clientPubkey = r.clientPubkey.toLowerCase();
-      if (r.expiresAt !== undefined) record.expiresAt = r.expiresAt;
-      this.#secrets.set(r.secret, record);
+    const plan = this.#validateState(state);
+    if (this.#pendingApprovals > 0) {
+      throw new Error(`restore refused: ${this.#pendingApprovals} approval${this.#pendingApprovals === 1 ? "" : "s"} pending`);
     }
-    const admitted: Promise<void>[] = [];
-    for (const c of state.clients ?? []) {
-      if (typeof c.clientPubkey !== "string" || !/^[0-9a-f]{64}$/i.test(c.clientPubkey)) continue;
-      if (!Array.isArray(c.relays) || c.relays.length === 0) continue;
-      admitted.push(this.#admit(c.clientPubkey.toLowerCase(), c.secret, c.relays, c.connectedAt));
+    // Decide everything before touching anything.
+    const setSecrets: Array<[string, SecretState]> = [];
+    for (const [secret, incoming] of plan.secrets) {
+      const current = this.#secrets.get(secret);
+      if (current?.clientPubkey) {
+        if (incoming.clientPubkey && incoming.clientPubkey !== current.clientPubkey) {
+          throw new Error("restore refused: secret is bound to a different client in memory");
+        }
+        continue; // memory keeps its binding
+      }
+      setSecrets.push([secret, incoming]);
     }
-    await Promise.all(admitted);
+    const admit = plan.clients.filter((c) => !this.#clients.has(c.clientPubkey));
+    const secretsAfter = this.#secrets.size + setSecrets.filter(([k]) => !this.#secrets.has(k)).length;
+    if (secretsAfter > this.#opts.maxSecrets) throw new Error(`restore refused: too many secrets (limit ${this.#opts.maxSecrets})`);
+    if (this.#clients.size + admit.length > this.#opts.maxClients) {
+      throw new Error(`restore refused: too many clients (limit ${this.#opts.maxClients})`);
+    }
+    // Apply, synchronously: no await between the first mutation and the last.
+    for (const [secret, record] of setSecrets) {
+      this.#secrets.set(secret, record);
+      if (record.expiresAt !== undefined && !record.confirmed) this.#scheduleSweep(record.expiresAt);
+    }
+    const admitted = admit.map((c) => this.#admit(c.clientPubkey, c.secret, c.relays, c.connectedAt));
     this.#log.info?.("state restored", { secrets: this.#secrets.size, clients: this.#clients.size });
+    await Promise.all(admitted);
+  }
+
+  /** Validate and normalize a state without touching anything. Throws on the first problem. */
+  #validateState(state: BunkerState): { secrets: Map<string, SecretState>; clients: Array<{ clientPubkey: string; secret?: string; relays: string[]; connectedAt: number }> } {
+    if (!state || typeof state !== "object") throw new Error("restore refused: state is not an object");
+    if (state.connectionPubkey !== this.#pubkey) throw new Error("restore refused: state belongs to a different connection key");
+    if (!Array.isArray(state.secrets) || !Array.isArray(state.clients)) throw new Error("restore refused: secrets and clients must be arrays");
+    const relaysOf = (raw: unknown, what: string): string[] => {
+      if (!Array.isArray(raw) || raw.length === 0 || !raw.every((u) => typeof u === "string")) {
+        throw new Error(`restore refused: ${what} needs at least one relay`);
+      }
+      let relays: string[];
+      try {
+        relays = normalizeRelays(raw as string[]);
+      } catch {
+        throw new Error(`restore refused: ${what} has an invalid relay URL`);
+      }
+      if (relays.length > this.#opts.maxRelaysPerClient) {
+        throw new Error(`restore refused: ${what} has too many relays (limit ${this.#opts.maxRelaysPerClient})`);
+      }
+      return relays;
+    };
+    const now = Date.now();
+    const secrets = new Map<string, SecretState>();
+    for (const r of state.secrets) {
+      if (!r || typeof r !== "object") throw new Error("restore refused: secret record is not an object");
+      if (typeof r.secret !== "string" || r.secret.length === 0 || r.secret.length > 256) throw new Error("restore refused: secret must be a string of 1 to 256 characters");
+      if (secrets.has(r.secret)) throw new Error("restore refused: duplicate secret");
+      if (r.origin !== "bunker" && r.origin !== "nostrconnect") throw new Error("restore refused: secret origin must be bunker or nostrconnect");
+      if (typeof r.confirmed !== "boolean") throw new Error("restore refused: secret confirmed must be a boolean");
+      if (r.clientPubkey !== undefined && (typeof r.clientPubkey !== "string" || !HEX64.test(r.clientPubkey))) {
+        throw new Error("restore refused: secret clientPubkey must be 64 hex characters");
+      }
+      if (r.confirmed && !r.clientPubkey) throw new Error("restore refused: a confirmed secret needs a clientPubkey");
+      if (r.expiresAt !== undefined && (typeof r.expiresAt !== "number" || !Number.isFinite(r.expiresAt))) {
+        throw new Error("restore refused: secret expiresAt must be a finite number");
+      }
+      const record: SecretState = { relays: relaysOf(r.relays, `secret ${r.secret.slice(0, 8)}…`), confirmed: r.confirmed, pending: 0, origin: r.origin };
+      if (r.clientPubkey) record.clientPubkey = r.clientPubkey.toLowerCase();
+      if (r.expiresAt !== undefined) record.expiresAt = r.expiresAt;
+      if (!record.confirmed && record.expiresAt !== undefined && record.expiresAt <= now) continue; // lapsed: drop, do not fail
+      secrets.set(r.secret, record);
+    }
+    if (secrets.size > this.#opts.maxSecrets) throw new Error(`restore refused: too many secrets (limit ${this.#opts.maxSecrets})`);
+    const clients: Array<{ clientPubkey: string; secret?: string; relays: string[]; connectedAt: number }> = [];
+    const seenClients = new Set<string>();
+    for (const c of state.clients) {
+      if (!c || typeof c !== "object") throw new Error("restore refused: client record is not an object");
+      if (typeof c.clientPubkey !== "string" || !HEX64.test(c.clientPubkey)) throw new Error("restore refused: client clientPubkey must be 64 hex characters");
+      const clientPubkey = c.clientPubkey.toLowerCase();
+      if (seenClients.has(clientPubkey)) throw new Error("restore refused: duplicate client");
+      seenClients.add(clientPubkey);
+      if (typeof c.connectedAt !== "number" || !Number.isFinite(c.connectedAt)) throw new Error("restore refused: client connectedAt must be a finite number");
+      const relays = relaysOf(c.relays, `client ${clientPubkey.slice(0, 8)}`);
+      if (c.secret === undefined) {
+        if (this.#opts.requireSecret) throw new Error("restore refused: a client needs the secret it paired with");
+      } else {
+        if (typeof c.secret !== "string") throw new Error("restore refused: client secret must be a string");
+        const bound = secrets.get(c.secret);
+        if (!bound || bound.clientPubkey !== clientPubkey || !bound.confirmed) {
+          throw new Error("restore refused: a client's secret must be in the state, bound to that client and confirmed");
+        }
+      }
+      clients.push({ clientPubkey, relays, connectedAt: c.connectedAt, ...(c.secret !== undefined ? { secret: c.secret } : {}) });
+    }
+    if (clients.length > this.#opts.maxClients) throw new Error(`restore refused: too many clients (limit ${this.#opts.maxClients})`);
+    return { secrets, clients };
   }
 
   /**
@@ -312,25 +415,62 @@ export class BunkerServer {
       // Re-minting a known secret (a host redisplaying a stored URI) keeps its binding.
       existing.relays = relays;
     } else {
+      if (this.#secrets.size >= this.#opts.maxSecrets) {
+        throw new Error(`too many secrets (limit ${this.#opts.maxSecrets}): revoke some or wait for unclaimed ones to lapse`);
+      }
       const record: SecretState = { relays, confirmed: false, pending: 0, origin: "bunker" };
-      if (ttl > 0) record.expiresAt = Date.now() + ttl;
+      if (ttl > 0) {
+        record.expiresAt = Date.now() + ttl;
+        this.#scheduleSweep(record.expiresAt);
+      }
       this.#secrets.set(secret, record);
     }
     this.#emit();
     return { uri: createBunkerUri({ pubkey: this.#pubkey, relays, secret }), secret };
   }
 
-  /** Drop unclaimed secrets past their expiry. Confirmed bindings are never touched. */
+  /**
+   * Drop unclaimed secrets past their expiry. Confirmed bindings and pending
+   * approvals are never touched. O(1) until the earliest expiry has passed,
+   * so calling it on every mint and export costs nothing in the common case;
+   * it is never called on behalf of an unauthenticated request.
+   */
   #sweep(): void {
     const now = Date.now();
+    if (now < this.#nextSweepAt) return;
+    let next = Number.POSITIVE_INFINITY;
     let changed = false;
     for (const [secret, r] of this.#secrets) {
-      if (!r.confirmed && r.pending === 0 && r.expiresAt !== undefined && r.expiresAt <= now) {
+      if (r.confirmed || r.expiresAt === undefined) continue;
+      if (r.pending === 0 && r.expiresAt <= now) {
         this.#secrets.delete(secret);
         changed = true;
+      } else if (r.expiresAt < next) {
+        next = r.pending === 0 ? r.expiresAt : Math.max(r.expiresAt, now + 1000);
       }
     }
+    this.#nextSweepAt = next;
     if (changed) this.#emit();
+  }
+
+  #scheduleSweep(expiresAt: number): void {
+    if (expiresAt < this.#nextSweepAt) this.#nextSweepAt = expiresAt;
+  }
+
+  /**
+   * The record for `secret` if it is still live: an unclaimed one past its
+   * expiry is dropped here, on the spot, so an unauthenticated `connect` pays
+   * for one lookup and never for a sweep of the whole set.
+   */
+  #liveSecret(secret: string): SecretState | undefined {
+    const record = this.#secrets.get(secret);
+    if (!record) return undefined;
+    if (!record.confirmed && record.pending === 0 && record.expiresAt !== undefined && record.expiresAt <= Date.now()) {
+      this.#secrets.delete(secret);
+      this.#emit();
+      return undefined;
+    }
+    return record;
   }
 
   #emit(): void {
@@ -352,8 +492,14 @@ export class BunkerServer {
    * sent and the rejection propagates to the caller.
    */
   async acceptNostrConnect(uri: string): Promise<NostrConnectPairing> {
-    const parsed = parseNostrConnectUri(uri);
-    this.#sweep();
+    const parsed = parseNostrConnectUri(uri, { maxRelays: this.#opts.maxRelaysPerClient });
+    this.#liveSecret(parsed.secret);
+    if (!this.#clients.has(parsed.clientPubkey) && this.#clients.size >= this.#opts.maxClients) {
+      throw new BunkerError("too many clients");
+    }
+    if (!this.#secrets.has(parsed.secret) && this.#secrets.size >= this.#opts.maxSecrets) {
+      throw new Error(`too many secrets (limit ${this.#opts.maxSecrets}): revoke some or wait for unclaimed ones to lapse`);
+    }
     // Bind the secret and register the client's relays before the handler runs,
     // so a concurrent accept with the same secret is refused, and an auth_url
     // sent during approval goes to the client's relays rather than the host's.
@@ -368,13 +514,22 @@ export class BunkerServer {
       method: "connect",
       params: [this.#pubkey, parsed.secret, parsed.perms.join(","), JSON.stringify(metadata)],
     };
+    this.#pendingApprovals += 1;
     try {
       await this.#runHandler(request, parsed.relays);
     } catch (err) {
+      this.#pendingApprovals -= 1;
       this.#unbind(record, parsed.secret);
       // Whatever record the secret came from, a socket an auth_url opened to the scanned relays has no owner now.
       for (const url of parsed.relays) this.#closeSocket(url);
       throw err;
+    }
+    this.#pendingApprovals -= 1;
+    if (this.#secrets.get(parsed.secret) !== record) {
+      // Revoked while the user was deciding: the approval is discarded.
+      record.pending -= 1;
+      for (const url of parsed.relays) this.#closeSocket(url);
+      throw new BunkerError("secret revoked");
     }
     record.pending -= 1;
     record.confirmed = true;
@@ -725,23 +880,32 @@ export class BunkerServer {
 
   async #connect(request: BunkerRequest, sourceRelay: string): Promise<string> {
     const secret = request.params[1] ?? "";
-    this.#sweep();
-    if (this.#opts.requireSecret && !(secret && this.#secrets.has(secret))) throw new BunkerError("invalid secret");
+    const live = secret ? this.#liveSecret(secret) : undefined;
+    if (this.#opts.requireSecret && !live) throw new BunkerError("invalid secret");
+    if (!this.#clients.has(request.clientPubkey) && this.#clients.size >= this.#opts.maxClients) {
+      throw new BunkerError("too many clients");
+    }
     // Bind before the approval await, so a second client presenting the same
     // secret while this one is pending is refused rather than raced in. The
     // binding is refcounted: it is released only when the client's last pending
     // approval is rejected and none was ever confirmed.
-    const record = secret && this.#secrets.has(secret)
-      ? this.#bind(secret, request.clientPubkey, undefined, "secret already used by another client")
-      : undefined;
+    const record = live ? this.#bind(secret, request.clientPubkey, undefined, "secret already used by another client") : undefined;
     const responseRelays = record?.relays ?? [sourceRelay];
+    this.#pendingApprovals += 1;
     try {
       await this.#runHandler(request, responseRelays);
     } catch (err) {
+      this.#pendingApprovals -= 1;
       if (record) this.#unbind(record, secret);
       throw err;
     }
+    this.#pendingApprovals -= 1;
     if (record) {
+      if (this.#secrets.get(secret) !== record) {
+        // Revoked while the user was deciding: the approval is discarded.
+        record.pending -= 1;
+        throw new BunkerError("secret revoked");
+      }
       record.pending -= 1;
       record.confirmed = true;
       delete record.expiresAt;

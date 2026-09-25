@@ -44,11 +44,13 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsup && node scripts/stamp-dist.mjs",
+    "build": "tsup",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:run": "vitest run"
+    "test:run": "vitest run",
+    "check:dist": "node scripts/check-dist.mjs",
+    "prepack": "npm run build"
   },
   "dependencies": {
     "@nostr-wot/relay": "^0.1.1"

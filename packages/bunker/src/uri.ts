@@ -24,7 +24,7 @@ export function createBunkerUri(params: { pubkey: string; relays: string[]; secr
  * non-empty secret (NIP-46 requires it in this flow; the client checks our
  * `connect` response against it).
  */
-export function parseNostrConnectUri(uri: string): NostrConnectUri {
+export function parseNostrConnectUri(uri: string, opts: { maxRelays?: number } = {}): NostrConnectUri {
   const match = uri.trim().match(NOSTRCONNECT);
   if (!match) throw new Error("nostrconnect URI: expected nostrconnect://<client-pubkey>?relay=...&secret=...");
   const clientPubkey = match[1].toLowerCase();
@@ -44,6 +44,9 @@ export function parseNostrConnectUri(uri: string): NostrConnectUri {
     if (!relays.includes(url)) relays.push(url);
   }
   if (relays.length === 0) throw new Error("nostrconnect URI: at least one relay is required");
+  if (opts.maxRelays !== undefined && relays.length > opts.maxRelays) {
+    throw new Error(`nostrconnect URI: too many relays (limit ${opts.maxRelays})`);
+  }
   const secret = (qs.get("secret") ?? "").trim();
   if (!secret) throw new Error("nostrconnect URI: secret is required");
   const perms = (qs.get("perms") ?? "")

@@ -128,6 +128,12 @@ export interface BunkerServerOptions {
    * {@link BunkerServer.restore} after a restart.
    */
   onStateChange?: (state: BunkerState) => void;
+  /** Ceiling on pairing secrets held at once, live and restored. Default 256. Minting past it throws. */
+  maxSecrets?: number;
+  /** Ceiling on connected clients, live and restored. Default 64. A `connect` past it is refused. */
+  maxClients?: number;
+  /** Ceiling on relays one client may bring (`nostrconnect://` URI or restored record). Default 8. */
+  maxRelaysPerClient?: number;
   /** Recent request ids and event ids remembered per client for deduplication. Default 256. */
   seenCapacity?: number;
   /** How many not-yet-connected senders keep a deduplication window at once. Default 256. */
@@ -167,8 +173,17 @@ export interface BunkerClientRecord {
  * connection key. Secrets carry their bindings, clients carry their relays.
  * Pending approvals are exported as bound but unconfirmed: the same client may
  * retry, another is refused.
+ *
+ * On the way back in it is untrusted input: `restore` validates the whole
+ * object against the same rules the pairing paths use and applies all of it
+ * or none. A client record is only accepted when it references a secret in
+ * the same state that is bound to it and confirmed (or, with
+ * `requireSecret: false`, without a secret), so a pairing cannot be forged by
+ * writing to storage.
  */
 export interface BunkerState {
+  /** The connection key this state belongs to. `restore` refuses a state minted under another key. */
+  connectionPubkey: string;
   secrets: BunkerSecretRecord[];
   clients: BunkerClientRecord[];
 }
