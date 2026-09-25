@@ -334,8 +334,14 @@ describe('a signEvent check without its kind', () => {
     expect(await permissions.check('a.com', 'signEvent', 1, 'acct')).toBe('deny');
     expect(await permissions.check('a.com', 'signEvent', undefined as never, 'acct')).toBe('ask');
 
+    // null and NaN are one value along from undefined and take the same path in permissionKey.
+    expect(await permissions.check('a.com', 'signEvent', null as never, 'acct')).toBe('ask');
+    expect(await permissions.check('a.com', 'signEvent', Number.NaN, 'acct')).toBe('ask');
+    expect(await permissions.check('a.com', 'signEvent', 1.5, 'acct')).toBe('ask');
+
     const denied = new Permissions(seeded({ 'b.com': { _default: { signEvent: 'deny' } } }));
     expect(await denied.check('b.com', 'signEvent', undefined as never, 'acct')).toBe('deny');
+    expect(await denied.check('b.com', 'signEvent', null as never, 'acct')).toBe('deny');
   });
 });
 

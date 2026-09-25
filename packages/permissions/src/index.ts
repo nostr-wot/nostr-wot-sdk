@@ -37,7 +37,7 @@ export {
   COMMON_PERM_KEYS,
 } from './constants.js';
 
-export { permissionKey, consultedKeys, resolve, resolveDetailed } from './key.js';
+export { permissionKey, consultedKeys, resolve, resolveDetailed, type KindFor, type KindForWrite } from './key.js';
 
 export { canonicalHostname, canonicalHttpOrigin, siteScopes, hasSiteScope, originPermissionBucket, storageLabel } from './scope.js';
 

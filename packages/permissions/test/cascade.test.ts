@@ -16,6 +16,7 @@ import {
   DM_SIGN_KINDS,
   type PermissionBucket,
   type PermissionDecision,
+  resolveDetailed,
 } from '../src/index.js';
 
 describe('permissionKey', () => {
@@ -144,5 +145,27 @@ describe('resolve', () => {
 
   test('an unknown key in the bucket changes nothing', () => {
     expect(resolve({ nonsense: 'deny' }, 'signEvent', 1)).toBe('ask');
+  });
+});
+
+describe('a signEvent read without an integer kind, at the exported functions', () => {
+  // Public API, one export below `check`: the same bug closes here too. A read that cannot
+  // name its kind answers from the deny levels alone, never from a wildcard allow.
+  const bucket = { '*': 'allow', 'signEvent:1': 'deny' } as const;
+  test.each([undefined, null, Number.NaN, 1.5, '1'])('resolve with kind %j answers ask, not the wildcard allow', (kind) => {
+    expect(resolve(bucket, 'signEvent', kind as never)).toBe('ask');
+    expect(resolveDetailed(bucket, 'signEvent', kind as never)).toEqual({ decision: 'ask' });
+  });
+
+  test('a blanket deny still wins for a kindless read', () => {
+    expect(resolve({ signEvent: 'deny' }, 'signEvent', null as never)).toBe('deny');
+    expect(resolve({ '*': 'deny' }, 'signEvent', Number.NaN)).toBe('deny');
+  });
+
+  test('permissionKey writes the blanket key for null and refuses anything else that is not an integer', () => {
+    expect(permissionKey('signEvent', null)).toBe('signEvent');
+    for (const kind of [Number.NaN, 1.5, '1', Infinity]) {
+      expect(() => permissionKey('signEvent', kind as never)).toThrow(/kind/i);
+    }
   });
 });

@@ -9,7 +9,7 @@
  */
 import { expectTypeOf, test } from 'vitest';
 import { MemoryStore } from '@nostr-wot/storage';
-import { Permissions } from '../src/index.js';
+import { Permissions, consultedKeys, permissionKey, resolve, resolveDetailed } from '../src/index.js';
 
 test('check, save, saveDirect, getAll, getForOrigin and clear all require an account id', () => {
   const permissions = new Permissions(new MemoryStore());
@@ -55,4 +55,33 @@ test('check needs the kind exactly when the method is signEvent', () => {
   expectTypeOf(permissions.getAll).parameter(0).toEqualTypeOf<string>();
   expectTypeOf(permissions.getForOrigin).parameter(1).toEqualTypeOf<string>();
   expectTypeOf(permissions.clear).parameter(1).toEqualTypeOf<string>();
+});
+
+test('the exported cascade functions need the kind exactly when the method is signEvent', () => {
+  const bucket = { '*': 'allow' } as const;
+  void resolve(bucket, 'signEvent', 1);
+  void resolve(bucket, 'getPublicKey');
+  void resolveDetailed(bucket, 'nip04Decrypt');
+  void consultedKeys('signEvent', 7);
+  void permissionKey('signEvent', 1);
+  void permissionKey('signEvent', null); // the blanket key, for a write
+  void permissionKey('getPublicKey');
+  // @ts-expect-error a signEvent read needs its kind
+  void resolve(bucket, 'signEvent');
+  // @ts-expect-error null is not a kind to read by
+  void resolve(bucket, 'signEvent', null);
+  // @ts-expect-error a signEvent read needs its kind
+  void resolveDetailed(bucket, 'signEvent');
+  // @ts-expect-error a signEvent read needs its kind
+  void consultedKeys('signEvent');
+  // @ts-expect-error a kind on anything but signEvent is a caller confusion
+  void resolve(bucket, 'getPublicKey', 1);
+  // @ts-expect-error the blanket key is a deliberate null, never an omission
+  void permissionKey('signEvent');
+  const permissions = new Permissions(new MemoryStore());
+  // @ts-expect-error null is not a kind to read by
+  void permissions.check('a.com', 'signEvent', null, 'acct');
+  // A write may name the blanket key with null; a read may not.
+  void permissions.save('a.com', 'signEvent', null, 'allow', 'acct');
+  void permissions.save('a.com', 'getPublicKey', undefined, 'allow', 'acct');
 });

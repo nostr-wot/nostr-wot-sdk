@@ -47,7 +47,7 @@ import {
   MIGRATION_VERSION_KEY,
   PERMISSIONS_STORAGE_KEY,
 } from './constants.js';
-import { permissionKey, resolveDetailed } from './key.js';
+import { permissionKey, resolveDetailed, type KindFor, type KindForWrite } from './key.js';
 import { AsyncLock } from './lock.js';
 import { originPermissionBucket, siteScopes, storageLabel } from './scope.js';
 import type {
@@ -174,33 +174,33 @@ export class Permissions {
    * @param origin - the caller: a web origin, an Android package name, a remote signer key
    * @param method - the wire method, for example `signEvent` or `nip44Decrypt`
    * @param kind - the event kind. Required when `method` is `signEvent` and forbidden
-   *   otherwise, at the type level: a `signEvent` check without its kind reads only the method
-   *   and wildcard levels, so `{ '*': 'allow', 'signEvent:1': 'deny' }` answers `allow` for
-   *   a kind-1 event that with its kind answers `deny`. A method only known at runtime has to
-   *   be narrowed first. Should one arrive anyway (JavaScript, a cast), it is answered from
-   *   the deny levels alone: `deny` if a blanket deny is in force, `ask` otherwise, never a
-   *   wildcard `allow`.
+   *   otherwise, at the type level (see `KindFor`): a `signEvent` check without its kind
+   *   reads only the method and wildcard levels, so `{ '*': 'allow', 'signEvent:1': 'deny' }`
+   *   answers `allow` for a kind-1 event that with its kind answers `deny`. A method only
+   *   known at runtime has to be narrowed first. Should a non-integer arrive anyway
+   *   (JavaScript, a cast, `null`, `NaN`), `resolveDetailed` answers from the deny levels
+   *   alone: `deny` if a blanket deny is in force, `ask` otherwise, never a wildcard `allow`.
    * @param accountId - the account the request is for. Required at the type level: a caller
    *   that forgets it compiles fine, works in global mode, and in per-account mode prompts
    *   forever while every remembered approval reads as an internal error. Ignored while
    *   global defaults are on, which is exactly why forgetting it goes unnoticed.
+   *
+   * **`origin` is read as given.** An http(s) origin is folded to its canonical spelling by
+   * `siteScopes`, but a bare hostname is not: `check('EXAMPLE.COM', …)` reads the label
+   * `EXAMPLE.COM` and misses a deny stored for `example.com`. `@nostr-wot/signer-core`
+   * canonicalises every identifier at its boundary before anything reaches here, so inside
+   * that pipeline this cannot happen; a host calling this directly has to canonicalise first
+   * (`canonicalHostname`, `canonicalHttpOrigin`). The browser extension is exactly such a
+   * direct caller, and this is carried to its migration.
    */
   async check<M extends string>(
     origin: string,
     method: M,
-    kind: M extends 'signEvent' ? number : undefined,
+    kind: KindFor<M>[0],
     accountId: string,
   ): Promise<PermissionDecision> {
     const bucket = await this.getForOrigin(origin, accountId);
-    if (method === 'signEvent' && kind === undefined) {
-      const blanket = resolveDetailed(bucket, method, undefined);
-      if (blanket.decision === 'deny') {
-        this.#logger?.warn('permission denied', { origin, key: blanket.key, method });
-        return 'deny';
-      }
-      return 'ask';
-    }
-    const { decision, key } = resolveDetailed(bucket, method, kind);
+    const { decision, key } = resolveDetailed(bucket, method, ...([kind] as KindFor<M>));
 
     if (decision === 'deny') {
       this.#logger?.warn('permission denied', { origin, key, method, kind });
@@ -266,14 +266,15 @@ export class Permissions {
    * Records a decision for a method, mapped through {@link permissionKey} — so approving
    * `signEvent` of a DM kind records `sendMessages`, covering the encrypt step too.
    */
-  async save(
+  async save<M extends string>(
     origin: string,
-    method: string,
-    kind: number | null,
+    method: M,
+    kind: KindForWrite<M>[0],
     decision: PermissionDecision,
     accountId: string,
   ): Promise<void> {
-    await this.saveDirect(origin, permissionKey(method, kind), decision, accountId);
+    // `null` is the blanket key, on purpose: what "remember for every kind" writes.
+    await this.saveDirect(origin, permissionKey(method, ...([kind] as KindForWrite<M>)), decision, accountId);
   }
 
   /**
