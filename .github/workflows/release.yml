@@ -62,8 +62,20 @@ jobs:
           # entry, and errors out without a token.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: check:dist must fail on a clean checkout
+        # dist/ is gitignored, so a checkout has none. A freshness check that passes here
+        # is vacuous, and that is exactly what an earlier attempt shipped. Required red.
+        run: |
+          if npm run check:dist; then
+            echo "check:dist passed with no build present: the guard is vacuous"
+            exit 1
+          fi
+
       - name: Build all packages
         run: npm run build
+
+      - name: check:dist passes on the build just made
+        run: npm run check:dist
 
       - name: Verify release
         run: npm run typecheck && npm run test:run

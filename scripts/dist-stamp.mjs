@@ -13,13 +13,48 @@
 //
 //   node scripts/dist-stamp.mjs stamp [package-dir]
 //   node scripts/dist-stamp.mjs check [package-dir]
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-/** Everything a build reads, in hash order. A change to any of these is a different build. */
+const require = createRequire(import.meta.url);
+
+/**
+ * Everything a build reads from the package, in hash order. Not the whole story: every
+ * package's tsconfig extends `../../tsconfig.base.json`, so the TypeScript config is also
+ * hashed as tsc resolves it, and the compiler and bundler versions are hashed too. Hashing
+ * `tsconfig.json` as a file let a base-config change pass on a stale dist; the bunker hit
+ * that and fixed it, and a fix applied in one package and not its neighbour is how this
+ * class survives.
+ */
 export const BUILD_INPUTS = ['src', 'tsup.config.ts', 'tsconfig.json', 'package.json'];
+
+/** The tools whose version changes the output of a build from identical inputs. */
+const TOOLS = ['tsup', 'esbuild', 'typescript'];
+
+/**
+ * The TypeScript config of the package at `pkg` as tsc sees it, `extends` followed. A
+ * package whose config cannot be resolved hashes as that failure, so a tsconfig that
+ * appears, disappears or breaks is a different build too.
+ */
+export function resolvedTsConfig(pkg) {
+  try {
+    return execFileSync(process.execPath, [require.resolve('typescript/lib/tsc.js'), '--showConfig', '-p', pkg], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (error) {
+    return `<unresolvable>${error.stdout ?? ''}${error.stderr ?? ''}`;
+  }
+}
+
+/** `tsup@x,esbuild@y,typescript@z`, as installed beside this script. */
+export function toolVersions() {
+  return TOOLS.map((name) => `${name}@${require(`${name}/package.json`).version}`).join(',');
+}
 
 /** What a build has to have produced for `dist/` to count as present. */
 const OUTPUTS = ['index.js', 'index.d.ts'];
@@ -48,14 +83,16 @@ function hashPath(hash, root) {
   }
 }
 
-/** One hex hash over every build input of the package at `pkg`. */
-export function hashBuildInputs(pkg) {
+/** One hex hash over every build input of the package at `pkg`, the resolved tsconfig and the toolchain. */
+export function hashBuildInputs(pkg, { tools = toolVersions() } = {}) {
   const hash = createHash('sha256');
   for (const input of BUILD_INPUTS) {
     hash.update(input + ':');
     hashPath(hash, join(pkg, input));
     hash.update('\n');
   }
+  hash.update('tsconfig(resolved):' + resolvedTsConfig(pkg) + '\n');
+  hash.update('tools:' + tools + '\n');
   return hash.digest('hex');
 }
 

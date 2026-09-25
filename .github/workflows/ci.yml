@@ -26,8 +26,33 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: check:dist must fail on a clean checkout
+        # dist/ is gitignored, so a checkout has none. A freshness check that passes here
+        # is vacuous, and that is exactly what an earlier attempt shipped. Required red.
+        run: |
+          if npm run check:dist; then
+            echo "check:dist passed with no build present: the guard is vacuous"
+            exit 1
+          fi
+
       - name: Build
         run: npm run build
+
+      - name: check:dist passes on the build just made
+        run: npm run check:dist
+
+      - name: check:dist must fail on a base-config edit
+        # Every package extends tsconfig.base.json. A semantic edit to it, no file in any
+        # package touched, has to read as a stale dist; then the edit is reverted and the
+        # check has to pass again.
+        run: |
+          node -e "const fs=require('fs');const f='tsconfig.base.json';const j=JSON.parse(fs.readFileSync(f,'utf8'));j.compilerOptions.removeComments=!j.compilerOptions.removeComments;fs.writeFileSync(f,JSON.stringify(j,null,2)+'\n')"
+          if npm run check:dist; then
+            echo "check:dist passed on a stale dist: the base config is not hashed"
+            exit 1
+          fi
+          git checkout -- tsconfig.base.json
+          npm run check:dist
 
       - name: Type check
         run: npm run typecheck

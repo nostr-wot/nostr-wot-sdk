@@ -20,7 +20,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { BUILD_INPUTS, checkDist, hashBuildInputs, stampDist } from '../../../scripts/dist-stamp.mjs';
+import { BUILD_INPUTS, checkDist, hashBuildInputs, resolvedTsConfig, stampDist, toolVersions } from '../../../scripts/dist-stamp.mjs';
 
 const ROOT = join(import.meta.dirname, '..', '..', '..');
 const SCRIPT = join(ROOT, 'scripts', 'dist-stamp.mjs');
@@ -35,7 +35,10 @@ function fixture(): string {
   writeFileSync(join(dir, 'src', 'index.ts'), 'export const one = 1;\n');
   writeFileSync(join(dir, 'src', 'inner', 'two.ts'), 'export const two = 2;\n');
   writeFileSync(join(dir, 'tsup.config.ts'), "export default { entry: ['src/index.ts'] };\n");
-  writeFileSync(join(dir, 'tsconfig.json'), '{ "compilerOptions": { "strict": true } }\n');
+  // Extends a base outside the package, as every real package extends ../../tsconfig.base.json.
+  mkdirSync(join(dir, 'base'));
+  writeFileSync(join(dir, 'base', 'tsconfig.base.json'), '{ "compilerOptions": { "strict": true, "target": "es2022" } }\n');
+  writeFileSync(join(dir, 'tsconfig.json'), '{ "extends": "./base/tsconfig.base.json", "compilerOptions": { "outDir": "dist" } }\n');
   writeFileSync(join(dir, 'package.json'), '{ "name": "fixture", "version": "1.0.0" }\n');
   mkdirSync(join(dir, 'dist'));
   writeFileSync(join(dir, 'dist', 'index.js'), 'export const one = 1;\n');
@@ -99,6 +102,21 @@ describe('the check can fail', () => {
     expect(hashBuildInputs(pkg)).not.toBe(added);
     rmSync(join(pkg, 'src', 'tres.ts'));
     expect(hashBuildInputs(pkg)).toBe(before);
+  });
+
+  test('a change to the base config the package extends fails, though no file in the package changed', () => {
+    // The bunker's fourteenth verification failure: tsconfig.json was hashed as a file, so
+    // an edit to ../../tsconfig.base.json passed on a stale dist. The config is hashed as
+    // tsc resolves it, `extends` followed, so the base counts.
+    writeFileSync(join(pkg, 'base', 'tsconfig.base.json'), '{ "compilerOptions": { "strict": false, "target": "es2022" } }\n');
+    expect(checkDist(pkg)).toMatchObject({ ok: false, reason: 'stale' });
+    expect(resolvedTsConfig(pkg)).toContain('"strict": false');
+  });
+
+  test('the toolchain is part of the hash: tsup, esbuild and typescript versions', () => {
+    expect(toolVersions()).toMatch(/^tsup@\d+\.\d+\.\d+,esbuild@\d+\.\d+\.\d+,typescript@\d+\.\d+\.\d+$/);
+    const stamped = readFileSync(join(pkg, 'dist', '.src-hash'), 'utf8').trim();
+    expect(hashBuildInputs(pkg, { tools: 'tsup@0.0.0,esbuild@0.0.0,typescript@0.0.0' })).not.toBe(stamped);
   });
 
   test('a build input that disappears or appears changes the hash', () => {
