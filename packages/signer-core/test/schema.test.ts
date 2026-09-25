@@ -4,6 +4,10 @@
  */
 import { describe, test, expect } from 'vitest';
 import {
+  MAX_ORIGIN_DISPLAY_NAME_LENGTH,
+  MAX_ORIGIN_ICON_LENGTH,
+  MAX_ORIGIN_IDENTIFIER_LENGTH,
+  MAX_REQUEST_ID_LENGTH,
   validateRequest,
   SignerError,
   MAX_EVENT_TAGS,
@@ -36,6 +40,32 @@ const invalid = (input: unknown) => {
   }
   throw new Error('unreachable');
 };
+
+describe('the request envelope is bounded', () => {
+  // The origin fields and the id are written verbatim into every persisted activity entry,
+  // denied requests included, so an unbounded one is a storage-filling primitive for any
+  // connected page. The limits bite before anything is copied.
+  test.each([
+    ['id', MAX_REQUEST_ID_LENGTH, (v: string) => ({ id: v })],
+    ['origin.identifier', MAX_ORIGIN_IDENTIFIER_LENGTH, (v: string) => ({ origin: { kind: 'web', identifier: v } })],
+    ['origin.displayName', MAX_ORIGIN_DISPLAY_NAME_LENGTH, (v: string) => ({ origin: { kind: 'web', identifier: 'example.com', displayName: v } })],
+    ['origin.icon', MAX_ORIGIN_ICON_LENGTH, (v: string) => ({ origin: { kind: 'web', identifier: 'example.com', icon: v } })],
+  ] as Array<[string, number, (v: string) => Record<string, unknown>]>)('%s is capped at its limit', (_field, limit, build) => {
+    expect(limit).toBeGreaterThan(0);
+    const at = { ...base('getPublicKey', {}), ...build('a'.repeat(limit)) };
+    const over = { ...base('getPublicKey', {}), ...build('a'.repeat(limit + 1)) };
+    expect(() => validateRequest(at)).not.toThrow();
+    expect(invalid(over)).toMatch(/at most/i);
+  });
+
+  test('a multi-megabyte icon is refused quickly and the error names the limit, not the value', () => {
+    const icon = 'x'.repeat(5 * 1024 * 1024);
+    const started = performance.now();
+    const message = invalid({ ...base('getPublicKey', {}), origin: { kind: 'web', identifier: 'example.com', icon } });
+    expect(performance.now() - started).toBeLessThan(50);
+    expect(message).not.toContain('xxxx');
+  });
+});
 
 describe('the envelope', () => {
   test('accepts a well-formed request and copies it', () => {
@@ -93,6 +123,15 @@ describe('the envelope', () => {
     }
     for (const identifier of ['example.com/', 'user@example.com', 'exa mple.com', 'example..com', 'ex\tample.com', '256.1.1.1']) {
       expect(invalid({ ...base('getPublicKey', {}), origin: { kind: 'web', identifier } })).toMatch(/origin|hostname/i);
+    }
+  });
+
+  test('an opaque origin is refused: `null` is what a sandboxed iframe, a data: page and file:// report', () => {
+    // Every such page reports the same `location.origin`, so a bucket keyed on it would be
+    // shared by all of them and one remembered allow would cover every one. There is no
+    // identity here to grant to, so there is no grant.
+    for (const identifier of ['null', 'NULL', 'null.']) {
+      expect(invalid({ ...base('getPublicKey', {}), origin: { kind: 'web', identifier } })).toMatch(/opaque|null/i);
     }
   });
 

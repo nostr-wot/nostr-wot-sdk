@@ -88,6 +88,13 @@ a `:` is refused, so a web caller cannot spell another transport's namespace; th
 bare `localhost:3000` or `[::1]`, which arrive as `http://localhost:3000` and `http://[::1]:8080`
 anyway. A `nip46` identifier is a lowercase hex pubkey.
 
+The envelope is bounded too, before anything is copied: `id` at 256 characters,
+`origin.identifier` at 512, `origin.displayName` at 128 and `origin.icon` at 2048. All four are
+written verbatim into every activity entry, denied requests included, so an unbounded one would
+let any connected page fill the user's storage. An opaque origin (`location.origin === 'null'`:
+a sandboxed iframe, a `data:` page, Chrome's `file://`) is refused as a web identifier, because
+every such page reports the same string and one remembered allow would cover all of them.
+
 ## Optional ports
 
 | Port | Without it |

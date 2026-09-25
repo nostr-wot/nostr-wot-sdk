@@ -209,6 +209,22 @@ describe('the vault\'s clock is the pipeline\'s clock', () => {
 
 // ── The thinnest points, named by the whole-branch review ──
 
+describe('an oversized origin never reaches the activity log', () => {
+  test('a huge displayName, icon or id is refused at the boundary and nothing is recorded', async () => {
+    const { core, activity, approval } = await fixture(true);
+    const big = 'a'.repeat(1024 * 1024);
+    for (const request of [
+      { ...req('getPublicKey'), id: big },
+      { ...req('getPublicKey'), origin: { kind: 'web' as const, identifier: 'example.com', displayName: big } },
+      { ...req('getPublicKey'), origin: { kind: 'web' as const, identifier: 'example.com', icon: big } },
+    ]) {
+      await expect(core.handle(request)).rejects.toMatchObject({ code: 'invalid_request' });
+    }
+    expect(activity.entries).toHaveLength(0);
+    expect(approval.presented).toHaveLength(0);
+  });
+});
+
 describe('a lock landing inside the signing step', () => {
   test('between the last identity check and withPrivkey: vault_locked, and no result', async () => {
     // The identity port is the last thing awaited before the key is read. A lock that lands

@@ -15,6 +15,10 @@ import {
   MAX_CRYPTO_PLAINTEXT_BYTES,
   MAX_EVENT_BYTES,
   MAX_EVENT_TAGS,
+  MAX_ORIGIN_DISPLAY_NAME_LENGTH,
+  MAX_ORIGIN_ICON_LENGTH,
+  MAX_ORIGIN_IDENTIFIER_LENGTH,
+  MAX_REQUEST_ID_LENGTH,
   MAX_TAG_VALUES,
   ORIGIN_KINDS,
   SIGNER_METHODS,
@@ -50,6 +54,17 @@ function requireString(value: unknown, what: string): string {
 function requireNonEmptyString(value: unknown, what: string): string {
   const text = requireString(value, what);
   if (text.length === 0) throw invalid(`${what} must not be empty`);
+  return text;
+}
+
+/**
+ * A string no longer than `max` characters, checked by `.length` before it is read any
+ * further: the envelope fields are persisted verbatim on every request, so the bound is the
+ * first thing that happens to them and the error names the limit, never the value.
+ */
+function requireBoundedString(value: unknown, what: string, max: number): string {
+  const text = requireString(value, what);
+  if (text.length > max) throw invalid(`${what} may be at most ${max} characters`);
   return text;
 }
 
@@ -137,6 +152,12 @@ function canonicalIdentifier(kind: RequestOrigin['kind'], identifier: string): s
       const origin = canonicalHttpOrigin(identifier);
       if (origin !== null) return origin;
       const host = canonicalHostname(identifier);
+      // `location.origin` is the string "null" for a sandboxed iframe, a data: page and, in
+      // Chrome, a file:// page. Every such page reports the same one, so a bucket keyed on it
+      // is shared by all of them and one remembered allow covers every one. There is no
+      // identity to grant to, so there is no grant: refused, rather than given a bucket that
+      // cannot tell them apart. The extension inherits the shared bucket; raised against it.
+      if (host === 'null') throw invalid('origin.identifier is an opaque origin (null) and cannot hold permissions');
       if (host !== null) return host;
       if (identifier.replace(/\.+$/, '').length === 0) throw invalid('origin.identifier must not be empty');
       throw invalid('origin.identifier for a web origin must be an exact http(s) origin or a bare hostname');
@@ -155,17 +176,18 @@ function validateOrigin(value: unknown): RequestOrigin {
     throw invalid(`origin.kind must be one of ${ORIGIN_KINDS.join(', ')}`);
   }
   const originKind = kind as RequestOrigin['kind'];
+  // Bounded first, before canonicalisation reads a character of it.
+  const identifier = requireBoundedString(value['identifier'], 'origin.identifier', MAX_ORIGIN_IDENTIFIER_LENGTH);
   const origin: RequestOrigin = {
     kind: originKind,
-    identifier: canonicalIdentifier(
-      originKind,
-      requireNonEmptyString(value['identifier'], 'origin.identifier'),
-    ),
+    identifier: canonicalIdentifier(originKind, requireNonEmptyString(identifier, 'origin.identifier')),
   };
   if (value['displayName'] !== undefined) {
-    origin.displayName = requireString(value['displayName'], 'origin.displayName');
+    origin.displayName = requireBoundedString(value['displayName'], 'origin.displayName', MAX_ORIGIN_DISPLAY_NAME_LENGTH);
   }
-  if (value['icon'] !== undefined) origin.icon = requireString(value['icon'], 'origin.icon');
+  if (value['icon'] !== undefined) {
+    origin.icon = requireBoundedString(value['icon'], 'origin.icon', MAX_ORIGIN_ICON_LENGTH);
+  }
   return origin;
 }
 
@@ -280,7 +302,7 @@ export function validateRequest(input: unknown): ValidatedRequest {
 
 function validate(input: unknown): ValidatedRequest {
   if (!isRecord(input)) throw invalid('request must be an object');
-  const id = requireNonEmptyString(input['id'], 'id');
+  const id = requireNonEmptyString(requireBoundedString(input['id'], 'id', MAX_REQUEST_ID_LENGTH), 'id');
   const origin = validateOrigin(input['origin']);
   const method = input['method'];
   if (typeof method !== 'string' || !(SIGNER_METHODS as readonly string[]).includes(method)) {

@@ -34,6 +34,24 @@ export const MAX_IN_FLIGHT_PER_ORIGIN = 64;
 /** Every pending entry of every kind, across every origin. */
 export const MAX_IN_FLIGHT_GLOBAL = 256;
 
+// ── The envelope ──
+//
+// `id`, `origin.identifier`, `origin.displayName` and `origin.icon` are written verbatim into
+// every persisted activity entry, denied requests included, so an unbounded one is a
+// storage-filling primitive for any connected page. These bite before anything is copied.
+
+/** Request id, in characters. A NIP-46 id is client chosen; the extension's is a counter. */
+export const MAX_REQUEST_ID_LENGTH = 256;
+
+/** `origin.identifier`, in characters. A hostname is at most 253; an origin a little more. */
+export const MAX_ORIGIN_IDENTIFIER_LENGTH = 512;
+
+/** `origin.displayName`, in characters. Rendered on the approval screen, so also a UI bound. */
+export const MAX_ORIGIN_DISPLAY_NAME_LENGTH = 128;
+
+/** `origin.icon`, in characters: a URL, not an image. */
+export const MAX_ORIGIN_ICON_LENGTH = 2048;
+
 /** The whole event as JSON, in UTF-8 bytes, tags included; accommodates large contact lists. */
 export const MAX_EVENT_BYTES = 1024 * 1024;
 
