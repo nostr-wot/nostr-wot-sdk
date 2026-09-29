@@ -119,6 +119,20 @@ function deriveScryptKey(password: string, salt: Uint8Array, logN: number): Uint
       dkLen: 32,
       maxmem: scryptMaxMem(logN),
     });
+  } catch (cause) {
+    // Hosts render `error.message` straight into the UI, so a library's internal message
+    // reaches the user as-is: the original form of this bug showed them
+    // `"maxmem" limit was hit: memUsed(128*r*(N+p+1))=67110912`. Keep the cause for debugging
+    // and say something a person can act on.
+    //
+    // Deliberately not the wrong-password message. A backup this build cannot stretch at all
+    // is a different problem from a password that does not match, and telling someone to
+    // retype a password that was right is its own kind of harm. `decodeV2` keeps its
+    // wrong-password catch around the AEAD open only, so this passes through it untouched.
+    //
+    // The wording is the extension's, from `c7d0ec8`, so a host that migrates onto this
+    // package shows the string its users have already been shown.
+    throw new Error("Could not derive a key from this backup's scrypt parameters", { cause });
   } finally {
     passwordBytes.fill(0);
   }
