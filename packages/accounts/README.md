@@ -121,6 +121,28 @@ anything lower is refused. A backup leaves the device and can be guessed at offl
 indefinitely, so the cost of a guess is its whole protection. `decryptNcryptsec` still opens a
 backup another client wrote at a lower cost, since that file is theirs to have written weakly.
 
+### The scrypt memory bound
+
+`scryptMaxMem(logN)` is the `maxmem` handed to `@noble/hashes`, and it is deliberately a few
+blocks above what the algorithm needs rather than equal to what any one noble version checks.
+It has been equal twice, and broke twice. `128·r·(N + p)` is 2.0.1's expression, and 2.2.0
+started counting a scratch block it had always allocated, so every encode and decode threw
+`"maxmem" limit was hit` for anyone who resolved from the declared range instead of a lockfile.
+The repair, `128·r·(N + p + 1)`, is 2.4.0's expression: same coupling, one version along, zero
+room for the next revision.
+
+`SCRYPT_MAXMEM_SLACK_BLOCKS` is that room, four blocks, which is 4 KiB beside a `V` table of N
+blocks. It is a compatibility bound and not a safety one: it is computed from the cost factor
+in the payload, so it can never reject an expensive backup. `MAX_LOG_N` is what bounds that.
+
+The general rule this leaves behind: a numeric bound handed to a library must be derived from
+what the algorithm or format requires, never copied from what a particular version of that
+library happens to check, and never pinned exactly to it. The two agree right up until the
+library revises its own accounting, and a lockfile-pinned suite cannot tell you when that
+happens. `test/scrypt-maxmem.test.ts` asks the installed library what it requires instead of
+restating anyone's arithmetic, and `.github/workflows/deps-in-range.yml` runs the suite against
+the newest version each declared range admits.
+
 ## The committed derivation fixture
 
 `test/fixtures/nip06-vectors.json` pins the NIP-06 mnemonic and the derived keys for indexes 0,
