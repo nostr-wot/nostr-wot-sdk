@@ -11,6 +11,7 @@ import {
   LEGACY_PBKDF2_ITERATIONS,
   MIN_LOG_N,
   MAX_LOG_N,
+  SCRYPT_MAXMEM_SLACK_BLOCKS,
   SCRYPT_P,
   SCRYPT_R,
   VERSION_LEGACY,
@@ -215,25 +216,35 @@ describe('NIP-49 ncryptsec', () => {
   });
 
   /**
-   * A lockfile-pinned suite cannot see a break in a version its own range allows: `maxmem`
-   * was set exactly at the line `@noble/hashes` 2.0.1 checks (`V + B`), and 2.4.0 checks
+   * A lockfile-pinned suite cannot see a break in a version its own range allows: `maxmem` was
+   * set exactly at the line `@noble/hashes` 2.0.1 checks (`V + B`), and 2.2.0 onwards checks
    * `V + B + tmp`, so every consumer on a fresh install got a NIP-49 path that threw while
-   * this suite stayed green. So the value is pinned here to what the algorithm allocates,
-   * derived independently of the installed version: any noble that checks against its real
-   * allocation, or against less, accepts it.
+   * this suite stayed green.
+   *
+   * What this test used to assert was the next version of that mistake. It required the bound
+   * to equal `V + B + tmp` exactly, which is 2.4.0's expression rather than 2.0.1's: coupled
+   * to a library version all the same, one release from breaking again, and actively blocking
+   * the headroom that fixes it. The bound now carries
+   * {@link SCRYPT_MAXMEM_SLACK_BLOCKS} blocks of slack, and the contract that matters is in
+   * `test/scrypt-maxmem.test.ts`, which asks the installed library what it requires instead of
+   * restating any version's arithmetic. What is left here is the window the bound must fall
+   * in, stated without naming a noble version at all.
+   *
+   * From the extension's `c7d0ec8`, "Fix NIP-49 scrypt bounds and guard dependency
+   * compatibility".
    */
-  test('maxmem is what scrypt actually allocates, not what one noble version happens to check', () => {
+  test('maxmem is what scrypt actually allocates plus fixed headroom, not what one noble version happens to check', () => {
     for (let logN = MIN_LOG_N; logN <= MAX_LOG_N; logN++) {
       const N = 2 ** logN;
       const blockSize = 128 * SCRYPT_R;
-      const vTable = blockSize * N;
-      const bBlock = blockSize * SCRYPT_P;
-      const tmpBlock = blockSize;
-      expect(scryptMaxMem(logN)).toBe(vTable + bBlock + tmpBlock);
-      // Strictly above the 2.0.1 line, by exactly the scratch block 2.4.0 started counting.
-      expect(scryptMaxMem(logN) - blockSize * (N + SCRYPT_P)).toBe(blockSize);
+      const algorithmNeeds = blockSize * (N + SCRYPT_P);
+      const spareBlocks = (scryptMaxMem(logN) - algorithmNeeds) / blockSize;
+      // Above the V table and the B block, by a fixed number of blocks that never scales with
+      // N: log_n comes out of the payload, so slack that grew with it would authorise a
+      // multiple of the V table to anyone who writes a backup.
+      expect(spareBlocks).toBe(SCRYPT_MAXMEM_SLACK_BLOCKS);
     }
-    expect(scryptMaxMem(16)).toBe(67_110_912);
+    expect(scryptMaxMem(16)).toBe(67_113_984);
   });
 
   test('the decoder still opens a v2 backup another client wrote below the floor', () => {

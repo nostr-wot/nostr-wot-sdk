@@ -40,6 +40,24 @@ export const MIN_LOG_N = 16;
 export const MAX_LOG_N = 22;
 export const SCRYPT_R = 8;
 export const SCRYPT_P = 1;
+/**
+ * Blocks of headroom added to scrypt's `maxmem` beyond the `N + p` blocks the algorithm needs
+ * for its `V` table and `B` block.
+ *
+ * `@noble/hashes` charges `maxmem` for its own scratch space as well, and says so in its
+ * source: "Node requires more headroom here, so this accounting is intentionally
+ * noble-specific". That accounting has already moved once. 2.0.1 charged `128·r·(N + p)` and
+ * 2.2.0 onwards charges one block more, so a bound sitting exactly on either line is one
+ * release away from refusing every key backup this package can write or read.
+ *
+ * Four blocks is 4 KiB at r = 8, next to a `V` table of N blocks: too little to matter, enough
+ * to absorb the next revision. `maxmem` is not the defence against an expensive backup, since
+ * it is computed from the cost factor in the payload and so can never reject it; MAX_LOG_N is.
+ *
+ * From the extension's `c7d0ec8`, "Fix NIP-49 scrypt bounds and guard dependency
+ * compatibility".
+ */
+export const SCRYPT_MAXMEM_SLACK_BLOCKS = 4;
 /** key_security_byte 0x02 = "client does not track this data" per NIP-49. */
 export const KEY_SECURITY_UNKNOWN = 0x02;
 /** 91 bytes. */
@@ -49,28 +67,53 @@ export const LEGACY_PBKDF2_ITERATIONS = 210000;
 const PRIVKEY_BYTES = 32;
 
 /**
- * The memory scrypt allocates for a cost of `2^logN`, in bytes, and therefore the `maxmem`
- * to hand `@noble/hashes`.
+ * The `maxmem` to hand `@noble/hashes` for a scrypt cost of `2^logN`, in bytes: the `N + p`
+ * blocks the algorithm itself needs, plus {@link SCRYPT_MAXMEM_SLACK_BLOCKS} blocks of
+ * headroom for the library's own scratch space.
  *
- * Computed from what the algorithm allocates rather than from what any one noble version
- * checks: the `V` table (`128·r·N`), the `B` block (`128·r·p`) and the one scratch block
- * `tmp` (`128·r`). `@noble/hashes` 2.0.1 checked `maxmem` against `V + B`; 2.4.0 checks it
- * against `V + B + tmp`, which it had always allocated. A `maxmem` set exactly at the 2.0.1
- * line — which this was — throws under 2.4.0 by one block, and the declared range admits
- * both, so a consumer's fresh install got a NIP-49 path that could neither write nor read a
- * backup while this repository's lockfile-pinned suite stayed green.
+ * The headroom is the whole point, so it is worth being exact about what this number is and
+ * is not. It is not a measurement of scrypt's true heap, because noble also allocates PBKDF2
+ * and HMAC state it does not charge here. It is a budget chosen to sit above whatever any
+ * `@noble/hashes` in the declared range charges against `maxmem`, on the standing assumption
+ * that the charge may rise again.
+ *
+ * It has already risen twice, and this package was caught by both:
+ *
+ * 1. The bound was once `128·r·(N + p)`, character for character the expression 2.0.1
+ *    validates against. 2.2.0 onwards validates against `128·r·(N + p + 1)`, counting a
+ *    scratch block it had always allocated, so every `encryptNcryptsec` and
+ *    `decryptNcryptsec` threw `"maxmem" limit was hit` on a resolved 2.2.0 or later.
+ * 2. The repair was `128·r·(N + p + 1)`, which is 2.4.0's expression, character for
+ *    character. It moved the coupling one version along rather than removing it, and it left
+ *    exactly zero blocks spare: the next noble that charges one more block breaks every
+ *    backup again, and the declared `^2.4.0` admits that release the day it appears.
+ *
+ * Sitting a few blocks clear of the line, rather than on it, is what stops the next revision
+ * doing the same thing. `maxmem` is a compatibility bound, not a safety one: it is derived
+ * from the cost factor in the payload, so it can never reject an expensive backup.
+ * {@link MAX_LOG_N} is what bounds that.
+ *
+ * From the extension's `c7d0ec8`, "Fix NIP-49 scrypt bounds and guard dependency
+ * compatibility".
+ *
+ * @see test/scrypt-maxmem.test.ts, which probes the installed library for what it actually
+ *      requires instead of restating any version's expression.
  */
 export function scryptMaxMem(logN: number): number {
-  const N = 2 ** logN;
   const blockSize = 128 * SCRYPT_R;
-  return blockSize * N + blockSize * SCRYPT_P + blockSize;
+  return blockSize * (2 ** logN + SCRYPT_P + SCRYPT_MAXMEM_SLACK_BLOCKS);
 }
 
 function deriveScryptKey(password: string, salt: Uint8Array, logN: number): Uint8Array {
   const passwordBytes = new TextEncoder().encode(password.normalize('NFKC'));
   try {
     return scrypt(passwordBytes, salt, {
-      N: 1 << logN,
+      // `2 ** logN`, not `1 << logN`: the same value for every cost this package accepts, but
+      // the shift is signed 32-bit and turns negative at logN 31, so the two expressions stop
+      // agreeing the moment MAX_LOG_N is raised. scryptMaxMem already uses `2 **`, and a
+      // maxmem computed for one N while scrypt runs at another is the bug this whole comment
+      // block is about. Same change as the extension's `c7d0ec8`.
+      N: 2 ** logN,
       r: SCRYPT_R,
       p: SCRYPT_P,
       dkLen: 32,
