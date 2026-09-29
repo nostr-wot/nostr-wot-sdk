@@ -57,6 +57,7 @@
     "@scure/bip39": "^2.0.1"
   },
   "devDependencies": {
+    "nostr-tools": "^2.24.1",
     "tsup": "^8.0.1",
     "typescript": "^5.3.0",
     "vitest": "^4.0.18"
