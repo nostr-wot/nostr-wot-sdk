@@ -1,0 +1,116 @@
+name: Dependencies in range
+
+# `packages.yml` runs `npm ci`, so it only ever exercises the versions `package-lock.json`
+# pins. The lockfile is the pin and it works. This job is not about protecting builds in this
+# repository.
+#
+# It is about the semver ranges in each package's `package.json` being a published promise
+# that the code works with anything they admit. Nobody who installs `@nostr-wot/accounts` or
+# `@nostr-wot/vault` gets this repository's lockfile: they resolve from the ranges, and get
+# software nobody here has run.
+#
+# The promise has already been broken twice, both times in the same place:
+#
+#   * `scryptMaxMem` returned `128*r*(N + p)`, the expression `@noble/hashes` 2.0.1 validates
+#     against. 2.2.0 raised the accounting by one block, the declared range admitted it, and
+#     every ncryptsec encode and decode threw `"maxmem" limit was hit`.
+#   * The repair was `128*r*(N + p + 1)`, which is 2.4.0's expression. It moved the coupling
+#     one version along and left zero blocks spare, so the next noble that counts one more
+#     block would have done it again.
+#
+# Both were invisible to `npm ci`. This job floats the crypto dependencies to the newest
+# version each declared range admits and re-runs the packages that derive keys with them,
+# plus a build and typecheck so a floated library cannot break the bundle unnoticed.
+#
+# Red here means the declared ranges no longer describe working software. Fix the code to be
+# correct on every admitted version where that is possible, since a range we cannot satisfy is
+# a range we should not be declaring; otherwise narrow the range and say why. It is
+# deliberately not `continue-on-error`: a package that cannot read its own key backups should
+# not reach npm.
+#
+# If it is red for a reason unrelated to the pull request in front of you, the fix belongs in
+# its own commit rather than bolted onto yours. The weekly schedule exists to make that the
+# uncommon case, by finding breakage on main before a contributor finds it for us.
+#
+# Scope note: the obvious recipe, `npm install --no-package-lock`, floats everything at once.
+# It cannot be used here. npm 10.9.8 crashes with `Cannot read properties of null (reading
+# 'edgesOut')` while resolving vitest's optional peer set in this workspace, both with
+# `--no-package-lock` and on a plain install with the lockfile removed, so this repository
+# currently has no way to install from its own ranges in one step. Floating the named crypto
+# packages on top of a locked install reaches the dependencies that matter without waiting on
+# that. Widen it if the crash is fixed upstream.
+#
+# Supply chain: this deliberately installs unpinned dependencies and runs them. It is a plain
+# `pull_request`, so forks get no secrets and a read-only token, and the job uploads nothing.
+# The blast radius of a malicious release is a red job and some CI minutes.
+
+on:
+  pull_request:
+  # For this job only. It detects upstream releases, which arrive on their own schedule rather
+  # than ours; without this it would fire on whatever unrelated pull request came next and
+  # hold that one hostage.
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  crypto-latest-in-range:
+    name: Crypto suites on newest dependencies in range
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The ranges are read out of each package.json rather than written here, so this cannot
+      # drift from what is actually published. `--no-save` leaves package.json and the lockfile
+      # untouched; the resolution still comes from the range, not from the lockfile entry.
+      - name: Float the crypto dependencies to the newest version each range admits
+        run: |
+          set -euo pipefail
+          for pkg in accounts vault; do
+            name=$(node -p "require('./packages/$pkg/package.json').name")
+            specs=$(node -p "
+              const d = require('./packages/$pkg/package.json').dependencies || {};
+              Object.entries(d)
+                .filter(([k]) => k.startsWith('@noble/') || k.startsWith('@scure/'))
+                .map(([k, v]) => k + '@' + v)
+                .join(' ')
+            ")
+            echo "floating $name: $specs"
+            npm install --no-save -w "$name" $specs
+          done
+
+      # --all, not --depth=0: the maxmem regression turned on a nested copy of @noble/hashes,
+      # and a top-level-only listing is exactly what hides those.
+      - name: Report resolved versions
+        run: npm ls --all @noble/hashes @noble/curves @noble/ciphers @scure/base @scure/bip32 @scure/bip39 || true
+
+      - name: Typecheck
+        run: npm run typecheck -w @nostr-wot/accounts -w @nostr-wot/vault
+
+      # The whole workspace, because a floated library that breaks a downstream package's
+      # build is the same failure one step later.
+      - name: Build
+        run: npm run build
+
+      # accounts owns NIP-49 and vault owns the password stretching. These are the two suites a
+      # library changing its own accounting under a caret range strands a user in.
+      - name: Run the crypto suites
+        run: npm run test:run -w @nostr-wot/accounts -w @nostr-wot/vault
+        timeout-minutes: 15
