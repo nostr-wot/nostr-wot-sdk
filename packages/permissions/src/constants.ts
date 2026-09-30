@@ -39,6 +39,38 @@ export const DEFAULT_BUCKET = '_default';
  */
 export const DM_SIGN_KINDS: ReadonlySet<number> = new Set<number>([4, 13, 14, 1059]);
 
+/**
+ * Where the destination-scoped authentication grants live in the injected store.
+ *
+ * Wire format, like every other key in this file: the browser extension has already written
+ * `authenticationGrants` into its local storage, so a host migrating onto this package keeps
+ * the consents its users gave. Do not rename it.
+ */
+export const AUTHENTICATION_GRANTS_KEY = 'authenticationGrants';
+
+/** NIP-42 relay authentication. */
+export const NIP42_KIND = 22242;
+
+/** NIP-98 HTTP authentication. */
+export const NIP98_KIND = 27235;
+
+/**
+ * Event kinds that are an AUTHENTICATION event rather than a publication.
+ *
+ * These two are different in kind from everything else a site asks to have signed: the event
+ * names a DESTINATION it will be presented to, and the signature is a credential for that
+ * destination. A permission keyed by method and event kind cannot express a destination, so a
+ * remembered `signEvent:22242 = allow` is a credential for every relay any caller names, and
+ * `signEvent:27235 = allow` one for every HTTP service. That is GHSA-vx4h-56qj-wcp7.
+ *
+ * `authentication.ts` holds the destination model that answers these properly. Everything in
+ * this package that could otherwise hand out an unbounded credential consults this set.
+ *
+ * From the extension's `6db46fa`, "Bind Nostr authentication permissions to destinations and
+ * accounts".
+ */
+export const AUTHENTICATION_SIGN_KINDS: ReadonlySet<number> = new Set<number>([NIP42_KIND, NIP98_KIND]);
+
 /** The three answers, for UIs that render a chip per decision. */
 export const DECISIONS = ['allow', 'deny', 'ask'] as const;
 

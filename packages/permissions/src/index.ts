@@ -36,7 +36,25 @@ export {
   DECISIONS,
   READ_ONLY_KEYS,
   COMMON_PERM_KEYS,
+  AUTHENTICATION_GRANTS_KEY,
+  AUTHENTICATION_SIGN_KINDS,
+  NIP42_KIND,
+  NIP98_KIND,
 } from './constants.js';
+
+export type {
+  AuthenticationProtocol,
+  AuthenticationScope,
+  AuthenticationEventInput,
+  AuthenticationRequest,
+  AuthenticationGrant,
+} from './authentication.js';
+
+export {
+  parseAuthentication,
+  authenticationKey,
+  validAuthenticationScope,
+} from './authentication.js';
 
 export {
   permissionKey,

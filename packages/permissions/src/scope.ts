@@ -19,7 +19,16 @@
  */
 import type { PermissionBucket, PermissionDecision, PermissionMap } from './types.js';
 
-const DEFAULT_PORT: Record<string, number> = { http: 80, https: 443 };
+const HTTP_PORTS: Record<string, number> = { http: 80, https: 443 };
+/**
+ * The WebSocket schemes and their default ports, for a NIP-42 relay destination.
+ *
+ * Separate from {@link HTTP_PORTS} rather than merged into one table, because the two are not
+ * interchangeable: `siteScopes` must keep treating a `wss://` label as an opaque caller name
+ * with no hostname fallback, and a NIP-98 destination must keep being refused when it names a
+ * relay scheme. One table would quietly make both true of each other.
+ */
+const WEB_SOCKET_PORTS: Record<string, number> = { ws: 80, wss: 443 };
 /** `scheme://authority`, and nothing after the authority: no path, query or fragment. */
 const ORIGIN_SHAPE = /^([a-zA-Z][a-zA-Z0-9+.-]*):\/\/([^/?#]*)$/;
 /** A domain label set as a page reports it: ASCII, already punycoded, a trailing dot allowed. */
@@ -132,10 +141,27 @@ function canonicalIpv6(inner: string): string | null {
  * is a different origin from `example.com` in every browser.
  */
 export function canonicalHttpOrigin(value: string): string | null {
+  return canonicalOrigin(value, HTTP_PORTS);
+}
+
+/**
+ * The one spelling of a `ws(s)` origin, or null when `value` is not one.
+ *
+ * Exactly {@link canonicalHttpOrigin}'s rules against the WebSocket schemes, for the relay a
+ * NIP-42 authentication event names. Package-internal on purpose, and deliberately NOT routed
+ * through `siteScopes` or `storageLabel`: a relay is a signing DESTINATION, never a caller, and
+ * giving it a hostname fallback would let a rule stored for one relay answer for another on the
+ * same host.
+ */
+export function canonicalWebSocketOrigin(value: string): string | null {
+  return canonicalOrigin(value, WEB_SOCKET_PORTS);
+}
+
+function canonicalOrigin(value: string, defaultPorts: Record<string, number>): string | null {
   const shape = ORIGIN_SHAPE.exec(value);
   if (!shape) return null;
   const scheme = shape[1]!.toLowerCase();
-  const defaultPort = DEFAULT_PORT[scheme];
+  const defaultPort = defaultPorts[scheme];
   if (defaultPort === undefined) return null;
   const authority = shape[2]!;
   if (authority.includes('@')) return null;
@@ -196,8 +222,14 @@ export function canonicalHostname(value: string): string | null {
   return ipv4 ?? lowered;
 }
 
-/** The bare hostname of a canonical origin: what older stores keyed on. */
-function hostnameOf(canonical: string): string {
+/**
+ * The bare hostname of a canonical origin: what older stores keyed on.
+ *
+ * Package-internal (not re-exported from `index.ts`). `authentication.ts` uses it to answer
+ * the one question the canonical string cannot answer on its own: is this host a loopback
+ * address, which is the only host allowed to speak plain `http:` or `ws:`.
+ */
+export function hostnameOf(canonical: string): string {
   const authority = canonical.slice(canonical.indexOf('//') + 2);
   if (authority.startsWith('[')) return authority.slice(0, authority.indexOf(']') + 1);
   const colon = authority.indexOf(':');
