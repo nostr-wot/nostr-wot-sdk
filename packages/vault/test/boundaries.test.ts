@@ -41,6 +41,12 @@ const SHARED = ['storage', 'vault', 'accounts', 'permissions', 'signer-core'] as
 const PLATFORM_BOUND = [
   'auth',
   'blossom',
+  // `bunker` is the NIP-46 responder. It holds open relay sockets through
+  // `@nostr-wot/relay`, which is itself platform-bound, and it runs where a signer is
+  // hosted rather than inside one, so it is not in the shared signer family and is not
+  // declared `platform-neutral`. Listed here so it is scanned by nothing rather than
+  // going unclassified.
+  'bunker',
   'data',
   'dm',
   'graph',
