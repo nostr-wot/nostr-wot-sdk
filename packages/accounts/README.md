@@ -115,6 +115,12 @@ Decoding also accepts the legacy local-only `0x01` format the extension used to 
 (PBKDF2-SHA256 at 210 000 iterations plus AES-256-GCM), so older backups still import. Nothing
 writes that format any more.
 
+`privkey` is **borrowed**: the bytes are not zeroed here, because an export runs inside a
+`withPrivkey` scope that owns the copy and zeroes it, and zeroing it here as well would blank
+that scope's key underneath it. Bytes are the only accepted form, and `decryptNcryptsec` returns
+bytes too, so nothing rounds a key through a string: a string cannot be overwritten, so building
+one leaves a second copy of the key in the heap that nothing can zero.
+
 The `logn` argument on `encryptNcryptsec` can only raise the scrypt cost above the default
 (`MIN_LOG_N = DEFAULT_LOG_N = 16`, 64 MiB, what the extension writes and NIP-49 recommends);
 anything lower is refused. A backup leaves the device and can be guessed at offline

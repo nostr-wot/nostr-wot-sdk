@@ -190,6 +190,38 @@ describe('NIP-49 ncryptsec', () => {
   test('only 32-byte keys can be encrypted', () => {
     // Checked before any derivation, so this costs nothing.
     expect(() => encryptNcryptsec(new Uint8Array(31), 'hunter22', 16)).toThrow();
+    expect(() => encryptNcryptsec(new Uint8Array(16), 'hunter22', 16)).toThrow(/private key length/i);
+  });
+
+  /**
+   * The encoder BORROWS its key bytes.
+   *
+   * An export runs inside a `withPrivkey` scope, which owns the copy and zeroes it on every path
+   * out. Zeroing it here as well would blank the scope's key underneath it mid-flight, and the
+   * extension had to stop doing exactly that (`ncryptsecEncode` no longer zeroes a borrowed
+   * array). Without this test the encoder could start zeroing its input and every suite would
+   * still pass, because nothing else looks at the array afterwards.
+   */
+  test('the key bytes are borrowed: intact after the call, and usable again', { timeout: 60_000 }, () => {
+    const privkey = new Uint8Array(KEY);
+    const encoded = encryptNcryptsec(privkey, 'hunter22', 16);
+
+    expect(privkey).toEqual(KEY);
+    expect(privkey.some((byte) => byte !== 0)).toBe(true);
+    expect(decryptNcryptsec(encoded, 'hunter22')).toEqual(KEY);
+    // Still the same key, so a second encode of the same borrowed array is the same key.
+    expect(decryptNcryptsec(encryptNcryptsec(privkey, 'hunter22', 16), 'hunter22')).toEqual(KEY);
+  });
+
+  test('a key is never routed through a string: bytes in, bytes out', () => {
+    // The extension's encoder also takes hex, and documents it as the form not to prefer: a
+    // string cannot be overwritten, so building one leaves a second, unzeroable copy of the key
+    // in the heap. This package offers only the safe half. The signature refuses hex for a
+    // TypeScript caller; the cast is what a JavaScript one gets, and it is refused at runtime
+    // too rather than silently encrypting the ASCII of a key.
+    const hex = bytesToHex(KEY) as unknown as Uint8Array;
+    expect(() => encryptNcryptsec(hex, 'hunter22', 16)).toThrow(/private key length/i);
+    expect(decryptNcryptsec(encryptNcryptsec(KEY, 'hunter22', 16), 'hunter22')).toBeInstanceOf(Uint8Array);
   });
 
   // The two tests below run their KDFs at the shipping work factor: scrypt at N = 2^16 twice,

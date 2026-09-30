@@ -144,6 +144,29 @@ function deriveScryptKey(password: string, salt: Uint8Array, logN: number): Uint
  * `logn` is the scrypt cost exponent, {@link DEFAULT_LOG_N} unless a host chooses to stretch
  * harder; anything below {@link MIN_LOG_N} is refused, because the cost of a guess is the
  * only thing standing between a backup file and the key inside it.
+ *
+ * ## `privkey` is BORROWED, never owned
+ *
+ * The bytes belong to the caller and are not zeroed here. That is the contract, not an
+ * oversight, and it exists so the key can stay in exactly one place: an export runs inside a
+ * `withPrivkey` scope, which owns the copy and zeroes it on every path out, and zeroing it here
+ * as well would blank the scope's key underneath it mid-flight. The derived scrypt key IS owned
+ * by this function and is zeroed in its `finally`.
+ *
+ * Bytes are also the ONLY accepted form, and this is where this package deliberately stops
+ * short of the extension's `ncryptsecEncode`, which takes `Uint8Array | string`. The extension
+ * needs the hex branch for its own older callers and documents it as the form not to prefer,
+ * because building a hex string puts a second copy of the key in the heap that nothing can
+ * overwrite: a string cannot be zeroed, and the garbage collector reaches it whenever it feels
+ * like it. A new API has no such callers to carry, so it never offers the unsafe half rather
+ * than offering it with a warning attached. A host holding hex converts at its own call site
+ * and zeroes the array it made; `decryptNcryptsec` likewise returns bytes, not hex, so nothing
+ * in this package rounds a key through a string.
+ *
+ * From the extension's `0eba181`/`1aa7ce4` line of work, which changed `ncryptsecEncode` to
+ * accept bytes and stop zeroing a borrowed array for exactly this reason.
+ *
+ * @param privkey - the 32-byte key. Borrowed: NOT zeroed, and still intact when this returns.
  */
 export function encryptNcryptsec(privkey: Uint8Array, password: string, logn: number = DEFAULT_LOG_N): string {
   if (privkey.length !== PRIVKEY_BYTES) throw new Error('Invalid private key length');
@@ -170,6 +193,7 @@ export function encryptNcryptsec(privkey: Uint8Array, password: string, logn: nu
 
     return bech32Encode('ncryptsec', payload);
   } finally {
+    // The derived key only. `privkey` is the caller's, and the scope it came from zeroes it.
     key?.fill(0);
   }
 }
