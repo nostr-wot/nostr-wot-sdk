@@ -47,7 +47,12 @@
  */
 import type { SafeAccount } from '@nostr-wot/accounts';
 import { PrivateKeySigner } from '@nostr-wot/signers';
-import { canonicalHostname, canonicalHttpOrigin, siteScopes } from '@nostr-wot/permissions';
+import {
+  AUTHENTICATION_SIGN_KINDS,
+  canonicalHostname,
+  canonicalHttpOrigin,
+  siteScopes,
+} from '@nostr-wot/permissions';
 import { PQC_KIND, buildAttestationTags } from '@nostr-wot/pq';
 import { GET_PUBLIC_KEY_COOLDOWN_MS, KEY_METHODS, ORIGIN_KINDS } from './constants.js';
 import { SignerError, errorMessage } from './errors.js';
@@ -1051,14 +1056,40 @@ export class SignerCore {
     return null;
   }
 
+  /**
+   * Whether a remembered ALLOW for this rule would be an unbounded credential.
+   *
+   * A kind-22242 or kind-27235 event is addressed to the relay or HTTP service named in its own
+   * tags, and a permission keyed by method and kind names neither. So "remember this" on an
+   * authentication prompt stores "may authenticate to ANY destination this caller subsequently
+   * names", which is not the consent the user was shown and is GHSA-vx4h-56qj-wcp7. The
+   * extension refuses the same write (`6db46fa`: `approved.remember && !authentication`) and
+   * records a destination-scoped grant instead.
+   *
+   * Only the allow. A remembered DENY under one of these keys is a refusal in force, deny wins
+   * over everything, and `@nostr-wot/permissions` keeps honouring it — so dropping that as well
+   * would lose a real refusal and replace it with nothing.
+   *
+   * `rememberKind: false` is caught too: it widens the write to the blanket `signEvent` key,
+   * which is broader again.
+   */
+  #wouldBeUnboundedCredential(
+    { method, kind }: Asked,
+    decision: 'allow' | 'deny',
+  ): boolean {
+    return decision === 'allow' && method === 'signEvent' && kind !== undefined && AUTHENTICATION_SIGN_KINDS.has(kind);
+  }
+
   /** Persist a prompt's decision, scoped to the event kind unless the host said otherwise. */
   async #remember(
     originKey: string,
-    { method, kind }: Asked,
+    rule: Asked,
     outcome: ApprovalDecision,
     decision: 'allow' | 'deny',
     account: SafeAccount,
   ): Promise<void> {
+    if (this.#wouldBeUnboundedCredential(rule, decision)) return;
+    const { method, kind } = rule;
     const rememberedKind = outcome.rememberKind !== false && kind !== undefined ? kind : null;
     await this.#permissions.save(originKey, method, rememberedKind, decision, account.id);
   }
@@ -1076,6 +1107,9 @@ export class SignerCore {
   ): Promise<void> {
     const saved = new Set<string>();
     for (const { method, kind } of asked) {
+      // Per item, not per batch: a batch mixing notes with an authentication event still
+      // remembers the notes. See `#wouldBeUnboundedCredential`.
+      if (this.#wouldBeUnboundedCredential({ method, kind }, decision)) continue;
       const rememberedKind = outcome.rememberKind !== false && kind !== undefined ? kind : null;
       const rule = `${method}\u0000${rememberedKind ?? ''}`;
       if (saved.has(rule)) continue;

@@ -356,6 +356,18 @@ A web identifier is stored as itself: the exact origin (`https://example.com`), 
 hostname older stores used. Every other origin kind is prefixed: `nip46:<pubkey>`,
 `nip55:<package>`, `lan:<device>`, `local:<id>`. See `permissionOrigin`.
 
+An approved **authentication** event (kind 22242 for NIP-42, kind 27235 for NIP-98) is never
+remembered as a permission, however `remember` and `rememberKind` are set, and whether it arrived
+alone or in a batch. Such an event is a credential for the relay or HTTP service named in its own
+tags, and a permission keyed by method and kind names neither, so storing one grants "may
+authenticate to any destination this caller subsequently names":
+[GHSA-vx4h-56qj-wcp7][ghsa]. A remembered **refusal** is still stored, because deny wins and
+there is nothing broader to replace it with. The consent that can be remembered safely is a
+destination grant, on `Permissions.authentication` in
+[`@nostr-wot/permissions`](../permissions#authentication-destinations).
+
+[ghsa]: https://github.com/advisories/GHSA-vx4h-56qj-wcp7
+
 ## Host requirements
 
 The `@nostr-wot` shared packages (`storage`, `accounts`, `vault`, `permissions`, `signer-core`)

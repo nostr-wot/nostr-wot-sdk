@@ -770,6 +770,55 @@ describe('remember', () => {
     await core.handle(req('getPublicKey'));
     expect(await permissions.check('example.com', 'getPublicKey', undefined, 'acct_1')).toBe('allow');
   });
+
+  /**
+   * GHSA-vx4h-56qj-wcp7. A kind-22242 or kind-27235 event is a credential for the relay or HTTP
+   * service named in its own tags, and a permission keyed by method and kind names neither. So
+   * remembering an allow for one stores "may authenticate to any destination this caller
+   * subsequently names", which is not the consent that was shown.
+   */
+  describe('an authentication approval is never remembered as a broad permission', () => {
+    for (const [protocol, kind] of [['NIP-42 relay', 22242], ['NIP-98 HTTP', 27235]] as const) {
+      test(`a remembered ${protocol} allow stores nothing, and the next request asks again`, async () => {
+        const { core, approval, permissions } = await fixture(true);
+        const save = vi.spyOn(permissions, 'save');
+        approval.decide = async () => ({ allow: true, remember: true });
+
+        await core.handle(req('signEvent', { kind }));
+        expect(save).not.toHaveBeenCalled();
+        expect(await permissions.check('example.com', 'signEvent', kind, 'acct_1')).toBe('ask');
+        await core.handle(req('signEvent', { kind }));
+        expect(approval.presented).toHaveLength(2);
+      });
+
+      test(`rememberKind false on a ${protocol} approval does not widen it to every kind either`, async () => {
+        // The broader write: the blanket `signEvent` key, which would allow kind 1 as well.
+        const { core, approval, permissions } = await fixture(true);
+        approval.decide = async () => ({ allow: true, remember: true, rememberKind: false });
+        await core.handle(req('signEvent', { kind }));
+        expect(await permissions.check('example.com', 'signEvent', 1, 'acct_1')).toBe('ask');
+        expect(await permissions.checkBlanketSignEvent('example.com', 'acct_1')).toBe('ask');
+      });
+
+      test(`a remembered ${protocol} REFUSAL is still persisted, because deny wins`, async () => {
+        // Only the allow is dropped. A remembered deny is a refusal in force and the
+        // destination model has nothing broader to replace it with.
+        const { core, approval, permissions } = await fixture(false);
+        approval.decide = async () => ({ allow: false, remember: true });
+        await expect(core.handle(req('signEvent', { kind }))).rejects.toThrow(/rejected/i);
+        expect(await permissions.check('example.com', 'signEvent', kind, 'acct_1')).toBe('deny');
+        await expect(core.handle(req('signEvent', { kind }))).rejects.toThrow(/denied/i);
+        expect(approval.presented).toHaveLength(1);
+      });
+    }
+
+    test('an ordinary kind is still remembered, so the guard is not a blanket refusal', async () => {
+      const { core, approval, permissions } = await fixture(true);
+      approval.decide = async () => ({ allow: true, remember: true });
+      await core.handle(req('signEvent', { kind: 22243 }));
+      expect(await permissions.check('example.com', 'signEvent', 22243, 'acct_1')).toBe('allow');
+    });
+  });
 });
 
 // ── Validation at the boundary ──
@@ -1315,6 +1364,30 @@ describe('the permission cascade applies per item', () => {
       ['nip44Encrypt', null, 'allow'],
     ]);
     expect(await permissions.check('example.com', 'signEvent', 30023, 'acct_1')).toBe('allow');
+  });
+
+  test('a batch remembers its ordinary kinds and not its authentication ones', async () => {
+    // Per item, not per batch: dropping the whole write would lose the notes' approval, and
+    // keeping it would store the unbounded credential. See GHSA-vx4h-56qj-wcp7.
+    const { core, approval, permissions } = await fixture(true);
+    const save = vi.spyOn(permissions, 'save');
+    approval.decideBatch = async () => ({ allow: true, remember: true });
+    await core.handleBatch(batchReq([sign(1), sign(22242), sign(27235), sign(7)]));
+    expect(save.mock.calls.map((call) => [call[1], call[2], call[3]])).toEqual([
+      ['signEvent', 1, 'allow'],
+      ['signEvent', 7, 'allow'],
+    ]);
+    expect(await permissions.check('example.com', 'signEvent', 22242, 'acct_1')).toBe('ask');
+    expect(await permissions.check('example.com', 'signEvent', 27235, 'acct_1')).toBe('ask');
+  });
+
+  test('rememberKind false on a batch holding an authentication item stores no blanket allow', async () => {
+    const { core, approval, permissions } = await fixture(true);
+    const save = vi.spyOn(permissions, 'save');
+    approval.decideBatch = async () => ({ allow: true, remember: true, rememberKind: false });
+    await core.handleBatch(batchReq([sign(22242)]));
+    expect(save).not.toHaveBeenCalled();
+    expect(await permissions.checkBlanketSignEvent('example.com', 'acct_1')).toBe('ask');
   });
 
   test('an item authored by another key refuses the batch before anyone is asked', async () => {
