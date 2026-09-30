@@ -69,7 +69,10 @@ import { siteScopes, storageLabel } from './scope.js';
  */
 export const SHARED_SITES_ORIGIN = '*';
 
-/** Which grants to remove. An omitted field means "any". An empty filter removes all of them. */
+/**
+ * Which grants to remove. An omitted field means "any", and an omitted filter removes all of
+ * them. An EMPTY STRING in any field throws: see {@link AuthenticationGrants.revoke}.
+ */
 export interface AuthenticationGrantFilter {
   /** One exact grant, by {@link AuthenticationGrant.id}. */
   id?: string;
@@ -239,6 +242,19 @@ export class AuthenticationGrants {
    * "forget every remembered decision" means.
    */
   async revoke(filter: AuthenticationGrantFilter = {}): Promise<void> {
+    // `''` in a filter field is a caller bug, not a wildcard, and here it is the WORST kind:
+    // every field is skipped when falsy, so `revoke({ id: '' })` matches every grant there is
+    // and silently deletes the lot. A UI that took a grant id off a list item and got an empty
+    // string would revoke a user's every remembered consent and report success. Omitting the
+    // whole filter is how "all of them" is said, and it has to be said on purpose.
+    // The extension guards this at its RPC boundary; the guard belongs on the method.
+    for (const [what, value] of [
+      ['grant id', filter.id],
+      ['account id', filter.accountId],
+      ['origin', filter.origin],
+    ] as const) {
+      if (value !== undefined) requireLabel(value, what);
+    }
     const origin = filter.origin === undefined ? undefined : storageLabel(filter.origin);
     await this.#lock.run(async () => {
       const grants = await this.list();

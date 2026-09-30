@@ -436,10 +436,22 @@ export class Permissions {
    */
   async clear(origin: string | undefined, accountId: string): Promise<void> {
     if (origin !== undefined) requireLabel(origin, 'origin');
+    // The bucket is resolved BEFORE any side effect. In per-account mode an empty accountId has
+    // nowhere to write, and that has to stay an error rather than becoming a revocation followed
+    // by one. Not on the clear-everything branch, which is not bucket-scoped.
+    if (origin !== undefined) await this.#writeBucket(accountId);
     // Before the lock, and before anything else: a destination grant is a permission, and
     // clearing the rules for a site or an account while leaving its credentials behind is the
     // resurrection case. Its own lock is separate, so there is no cycle to deadlock on.
-    await this.authentication.revoke({ ...(origin === undefined ? {} : { origin }), accountId });
+    //
+    // `accountId` is omitted when empty rather than passed through. In global mode an empty one
+    // is legal and means the shared bucket; grants have no shared bucket, so the conservative
+    // reading is every account's grants for this origin, and an empty string is never handed to
+    // a filter that treats it as a wildcard.
+    await this.authentication.revoke({
+      ...(origin === undefined ? {} : { origin }),
+      ...(accountId ? { accountId } : {}),
+    });
     if (!origin) {
       await this.#lock.run(async () => {
         try {

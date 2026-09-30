@@ -401,6 +401,18 @@ describe('revocation', () => {
     expect(await grants.isAllowed('acct2', SITE, httpAuth())).toBe(true);
   });
 
+  test('an empty string in a filter field throws instead of matching everything', async () => {
+    // The dangerous default: every field is skipped when falsy, so `{ id: '' }` would match
+    // every grant and delete the lot while reporting success. A UI reading an id off a list
+    // item and getting an empty one would wipe a user's every remembered consent.
+    const { grants } = fresh();
+    await grants.save('acct1', SITE, httpAuth(), 'site', current);
+    for (const filter of [{ id: '' }, { accountId: '' }, { origin: '' }]) {
+      await expect(grants.revoke(filter)).rejects.toThrow(/must not be empty/);
+    }
+    expect(await grants.list()).toHaveLength(1);
+  });
+
   test('an empty filter forgets every remembered decision', async () => {
     const { grants } = fresh();
     await grants.save('acct1', SITE, httpAuth(), 'site', current);
@@ -458,6 +470,31 @@ describe('Permissions cannot forget to revoke them', () => {
     await permissions.clearForAccount('acct1');
     expect(await permissions.authentication.isAllowed('acct1', OTHER, relayAuth())).toBe(false);
     expect(await permissions.authentication.isAllowed('acct2', OTHER, relayAuth())).toBe(true);
+  });
+
+  test('clearing a site in global mode revokes every account\'s grants for it, not none', async () => {
+    // In global mode an empty accountId is legal and means the shared bucket. Grants have no
+    // shared bucket, so the conservative reading is every account's grants for this origin --
+    // and an empty string is never handed to a filter that would treat it as a wildcard.
+    const store = new MemoryStore({ signerUseGlobalDefaults: true });
+    const permissions = new Permissions(store);
+    await permissions.authentication.save('acct1', SITE, httpAuth(), 'site', current);
+    await permissions.authentication.save('acct2', SITE, httpAuth(), 'site', current);
+    await permissions.authentication.save('acct1', OTHER, httpAuth(), 'site', current);
+    await permissions.clear(SITE, '');
+    expect(await permissions.authentication.isAllowed('acct1', SITE, httpAuth())).toBe(false);
+    expect(await permissions.authentication.isAllowed('acct2', SITE, httpAuth())).toBe(false);
+    expect(await permissions.authentication.isAllowed('acct1', OTHER, httpAuth())).toBe(true);
+  });
+
+  test('a clear with nowhere to write revokes nothing before it refuses', async () => {
+    // Per-account mode, empty accountId: the refusal has to come before the revocation, or a
+    // call that fails has already taken the user's credentials away.
+    const store = new MemoryStore({ signerUseGlobalDefaults: false });
+    const permissions = new Permissions(store);
+    await permissions.authentication.save('acct1', SITE, httpAuth(), 'site', current);
+    await expect(permissions.clear(SITE, '')).rejects.toThrow(/accountId/);
+    expect(await permissions.authentication.isAllowed('acct1', SITE, httpAuth())).toBe(true);
   });
 
   test('the refusal to wipe the shared bucket applies to grants too', async () => {
