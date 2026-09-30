@@ -51,6 +51,7 @@ export type {
 } from './authentication.js';
 
 export {
+  ENDPOINT_GRANT_VERSION,
   parseAuthentication,
   authenticationKey,
   validAuthenticationScope,

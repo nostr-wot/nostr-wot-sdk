@@ -8,6 +8,11 @@
  * **this account, this requesting site, this protocol, this destination, this method.** All
  * five, or no match.
  *
+ * For NIP-98 the destination is narrower still: the exact signed URL, not the service's origin,
+ * because a user shown `POST https://api.example/login` did not consent to
+ * `POST https://api.example/transfer`. See {@link ENDPOINT_GRANT_VERSION} for what that means
+ * for a record written before endpoint scoping existed.
+ *
  * ## The ordering properties, which are the whole security argument
  *
  * 1. **Deny wins.** A site-specific `deny` beats a shared relay `allow`, because the user
@@ -51,6 +56,7 @@
  */
 import type { KeyValueStore } from '@nostr-wot/storage';
 import {
+  ENDPOINT_GRANT_VERSION,
   validAuthenticationScope,
   type AuthenticationGrant,
   type AuthenticationRequest,
@@ -102,30 +108,55 @@ function requireLabel(value: string, what: string): string {
  * comparison is `===` on two possibly-undefined values, which is exactly right — NIP-42 has no
  * method, so undefined matches undefined, and a NIP-98 `GET` consent does not answer a `DELETE`.
  */
+function governs(
+  grant: AuthenticationGrant,
+  accountId: string,
+  origin: string,
+  auth: AuthenticationRequest,
+): boolean {
+  if (
+    grant.accountId !== accountId ||
+    grant.protocol !== auth.protocol ||
+    grant.destination !== auth.destination ||
+    grant.method !== auth.method ||
+    !(grant.origin === origin || (auth.protocol === 'nip42' && grant.origin === SHARED_SITES_ORIGIN))
+  ) {
+    return false;
+  }
+  // A NIP-42 grant is already as narrow as it gets: `destination` is the canonical relay URL,
+  // path and query included, so matching it is matching the endpoint.
+  if (auth.protocol === 'nip42') return true;
+  // A v2 NIP-98 grant binds one endpoint, so it answers that URL and no other on the origin.
+  if (grant.version === ENDPOINT_GRANT_VERSION && typeof grant.resource === 'string') {
+    return grant.resource === auth.url;
+  }
+  // Legacy NIP-98, written before endpoint scoping: its ALLOW is never honoured again, so its
+  // holder is asked once more at the narrower scope rather than having an origin-wide consent
+  // silently reinterpreted as one they gave for this endpoint. The record stays listed and
+  // revocable. Its DENY keeps the broader reach it was written with, because narrowing a
+  // refusal is the one direction that loses protection.
+  return grant.decision === 'deny';
+}
+
 function governing(
   grants: readonly AuthenticationGrant[],
   accountId: string,
   origin: string,
   auth: AuthenticationRequest,
 ): AuthenticationGrant[] {
-  return grants.filter(
-    (grant) =>
-      grant.accountId === accountId &&
-      grant.protocol === auth.protocol &&
-      grant.destination === auth.destination &&
-      grant.method === auth.method &&
-      (grant.origin === origin ||
-        (auth.protocol === 'nip42' && grant.origin === SHARED_SITES_ORIGIN)),
-  );
+  return grants.filter((grant) => governs(grant, accountId, origin, auth));
 }
 
-/** The stable identity of a grant: the five fields it is keyed by, so a re-save replaces it. */
-function grantId(
-  accountId: string,
-  origin: string,
-  auth: AuthenticationRequest,
-): string {
-  return JSON.stringify([accountId, origin, auth.protocol, auth.destination, auth.method ?? '']);
+/**
+ * The stable identity of a grant, so a re-save replaces it rather than piling up.
+ *
+ * The scope field is what each protocol is actually keyed by: the exact signed URL for NIP-98,
+ * the canonical relay URL for NIP-42. Using `destination` for both would give one HTTP origin a
+ * single record, and the second endpoint approved on it would overwrite the first.
+ */
+function grantId(accountId: string, origin: string, auth: AuthenticationRequest): string {
+  const scope = auth.protocol === 'nip98' ? auth.url : auth.destination;
+  return JSON.stringify([accountId, origin, auth.protocol, scope, auth.method ?? '']);
 }
 
 /** Remembered consents for authenticating to a destination, over an injected store. */
@@ -227,6 +258,11 @@ export class AuthenticationGrants {
         origin: grantOrigin,
         protocol: auth.protocol,
         destination: auth.destination,
+        // `destination` stays on the record for display; `resource` is what a NIP-98 lookup
+        // matches. A NIP-42 record needs neither field, its destination IS the endpoint.
+        ...(auth.protocol === 'nip98'
+          ? { version: ENDPOINT_GRANT_VERSION as typeof ENDPOINT_GRANT_VERSION, resource: auth.url }
+          : {}),
         ...(auth.method ? { method: auth.method } : {}),
         id: grantId(accountId, grantOrigin, auth),
       };

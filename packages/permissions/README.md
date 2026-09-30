@@ -139,7 +139,18 @@ if (auth) {
 backslash, surrounding whitespace, a non-loopback plain-`http`/`ws` destination, competing tags,
 non-empty content, a bad HTTP method or payload digest, and an event older than 600 seconds
 (NIP-42) or 60 (NIP-98). It refuses a requesting origin that is not already canonical, because a
-host that passes a page URL through has not resolved the caller's identity.
+host that passes a page URL through has not resolved the caller's identity. An `origin` or
+`client-origin` tag is metadata and never evidence, but it must not contradict the origin the
+host derived: otherwise one string is shown while the other is authorised.
+
+**Scope.** A NIP-42 grant is keyed by the canonical relay URL, path and query kept. A NIP-98
+grant is keyed by the **exact signed URL**, query bytes included and nothing normalised or
+sorted, because a user shown `POST https://api.example/login` did not consent to
+`POST https://api.example/transfer`. Such a record carries `version: 2` and a `resource`; a
+NIP-98 record written before endpoint scoping has neither, and its `allow` is never honoured
+again — its holder is asked once more at the narrower scope, and the record stays listed and
+revocable rather than being silently upgraded. A legacy `deny` keeps its broad reach, since
+narrowing a refusal is the one direction that loses protection.
 
 Three ordering properties hold, and each has its own test:
 

@@ -267,6 +267,48 @@ describe('the single-tag rule', () => {
   });
 });
 
+describe('an origin the caller states about itself', () => {
+  /** A NIP-98 event carrying a self-declared origin tag. */
+  function tagged(name: string, value: string): AuthenticationEventInput {
+    return http(undefined, {
+      tags: [['u', 'https://api.test/login'], ['method', 'POST'], [name, value]],
+    });
+  }
+
+  test('an agreeing tag is accepted and grants nothing extra', () => {
+    // Accepted, not trusted: the request is exactly as cross-origin as it was without the tag.
+    for (const name of ['origin', 'client-origin']) {
+      expect(parse(tagged(name, SITE))!.crossOrigin).toBe(true);
+    }
+  });
+
+  test('a contradicting tag is refused', () => {
+    // Otherwise one string is shown to a user or sent to a server while the other is authorised,
+    // and the event goes out with both in it.
+    for (const name of ['origin', 'client-origin']) {
+      for (const claimed of ['https://evil.test', 'https://CLIENT.TEST', 'client.test', '']) {
+        expect(() => parse(tagged(name, claimed))).toThrow(new RegExp(`Invalid authentication ${name} tag`));
+      }
+    }
+  });
+
+  test('two of them are refused even when one agrees', () => {
+    expect(() =>
+      parse(http(undefined, {
+        tags: [['u', 'https://api.test/login'], ['method', 'POST'], ['origin', SITE], ['origin', 'https://evil.test']],
+      })),
+    ).toThrow(/Invalid authentication origin tag/);
+  });
+
+  test('the check applies to a relay event too', () => {
+    expect(() =>
+      parse(relay(undefined, {
+        tags: [['relay', 'wss://relay.test/'], ['challenge', 'c'], ['client-origin', 'https://evil.test']],
+      })),
+    ).toThrow(/Invalid authentication client-origin tag/);
+  });
+});
+
 describe('the rest of the event', () => {
   test('the age window is 600 seconds for a relay and 60 for HTTP', () => {
     expect(parse({ ...relay(), created_at: NOW - 600 })).toBeDefined();

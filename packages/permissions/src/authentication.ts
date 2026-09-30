@@ -88,13 +88,15 @@ export interface AuthenticationEventInput {
 export interface AuthenticationRequest {
   protocol: AuthenticationProtocol;
   /**
-   * The destination EXACTLY as signed, for the approval screen to show. Canonicalisation is
-   * for permission lookup only: the user is shown the string the site actually wrote.
+   * The destination EXACTLY as signed: what the approval screen shows, and, for NIP-98, what a
+   * remembered consent is keyed by, query bytes included. Canonicalisation is for the
+   * destination ORIGIN only; the user is shown, and bound to, the string the site wrote.
    */
   url: string;
   /**
-   * The canonical destination a grant is keyed by: the relay's `scheme://host[:port]/path`
-   * for NIP-42, the service's origin for NIP-98.
+   * The canonical destination: the relay's `scheme://host[:port]/path` for NIP-42, which is
+   * what a NIP-42 grant is keyed by, and the service's ORIGIN for NIP-98, which is what a
+   * NIP-98 grant displays while {@link url} is what it is keyed by.
    */
   destination: string;
   /** The HTTP method, for NIP-98 only. Part of the grant key: a `GET` consent is not a `DELETE` one. */
@@ -120,9 +122,34 @@ export interface AuthenticationGrant {
   accountId: string;
   origin: string;
   protocol: AuthenticationProtocol;
+  /** The destination origin, kept for display on every record whatever its version. */
   destination: string;
   method?: string;
+  /**
+   * {@link ENDPOINT_GRANT_VERSION} on a NIP-98 record: this grant binds {@link resource}, the
+   * exact signed URL, and not merely the destination origin. Absent on a NIP-42 record, which
+   * is keyed by the canonical relay URL in `destination` and needs no second field, and absent
+   * on a NIP-98 record written before endpoint scoping existed.
+   */
+  version?: typeof ENDPOINT_GRANT_VERSION;
+  /** The exact signed URL a v2 NIP-98 grant is for, query bytes included. */
+  resource?: string;
 }
+
+/**
+ * The version marking a NIP-98 grant as bound to one endpoint rather than to an origin.
+ *
+ * An origin-wide HTTP consent is much broader than what a user was shown: they approved
+ * `POST https://api.example/login` and it answered `POST https://api.example/transfer` just as
+ * well. So a NIP-98 grant now records the exact signed URL, and a record without this version
+ * is a LEGACY one whose `allow` is never honoured again: its holder is asked once more, at the
+ * narrower scope, and the record stays visible and revocable rather than being silently
+ * upgraded into an endpoint consent nobody gave. A legacy DENY keeps its broad reach, because
+ * narrowing a refusal is the one direction that loses protection.
+ *
+ * From the extension's `5659678`, "Harden authentication boundaries".
+ */
+export const ENDPOINT_GRANT_VERSION = 2;
 
 /**
  * NIP-42's window is wider than NIP-98's because a relay challenge is answered over a
@@ -141,6 +168,12 @@ const LOOPBACK_HOSTS = ['localhost', '127.0.0.1', '[::1]'];
 
 /** RFC 9110 `token`, uppercase only: a method is a case-sensitive token and ours are canonical. */
 const HTTP_METHOD = /^[0-9A-Z!#$%&'*+.^_`|~-]+$/;
+
+/**
+ * Tag names by which a caller may state its own origin. Checked for agreement with the
+ * browser-derived origin, never trusted in place of it.
+ */
+const ORIGIN_METADATA_TAGS = ['origin', 'client-origin'];
 
 /** NIP-98's `payload` tag is a SHA-256 of the request body, lowercase hex. */
 const SHA256_HEX = /^[0-9a-f]{64}$/;
@@ -248,6 +281,18 @@ export function parseAuthentication(
 ): AuthenticationRequest | undefined {
   if (event.kind !== NIP98_KIND && event.kind !== NIP42_KIND) return undefined;
   const relay = event.kind === NIP42_KIND;
+  // A caller may state which origin it believes it is. That is metadata and never evidence:
+  // the browser-derived origin is the only authenticated statement of who is asking, and
+  // nothing here is relaxed because a tag agrees with it. What a tag must not do is CONTRADICT
+  // it, because then one of the two strings is being shown to a user or sent to a server while
+  // the other is being authorised, and the event would be signed with both in it. `tag` also
+  // refuses two of them, so a matching tag beside a lying one is not a way through.
+  // From the extension's `5659678`, "Harden authentication boundaries".
+  for (const name of ORIGIN_METADATA_TAGS) {
+    if (event.tags?.some((item) => item[0] === name) && tag(event, name) !== origin) {
+      throw new Error(`Invalid authentication ${name} tag`);
+    }
+  }
   const raw = tag(event, relay ? 'relay' : 'u');
 
   const destination = destinationOf(raw, origin, relay);

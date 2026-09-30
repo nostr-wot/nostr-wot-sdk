@@ -16,6 +16,7 @@ import { MemoryStore, type KeyValueStore } from '@nostr-wot/storage';
 import {
   AUTHENTICATION_GRANTS_KEY,
   AuthenticationGrants,
+  ENDPOINT_GRANT_VERSION,
   NIP42_KIND,
   NIP98_KIND,
   Permissions,
@@ -103,8 +104,100 @@ describe('a grant binds all five of account, site, protocol, destination and met
     // A different port is a different service, and a different method a different act.
     expect(await grants.isAllowed('acct1', SITE, httpAuth('https://api.test:8443/login'))).toBe(false);
     expect(await grants.isAllowed('acct1', SITE, httpAuth('https://api.test/login', 'GET'))).toBe(false);
-    // Same origin, different path: NIP-98 keys on the origin, so this one IS covered.
-    expect(await grants.isAllowed('acct1', SITE, httpAuth('https://api.test/other'))).toBe(true);
+  });
+
+  test('a NIP-98 grant binds the exact signed URL, not the service origin', async () => {
+    // A user shown `POST https://api.test/login` did not consent to `POST /transfer`, and an
+    // origin-wide HTTP consent answered both. Query bytes count too: they are not normalised or
+    // sorted, so a different query is a different resource and asks again.
+    const { grants } = fresh();
+    await grants.save('acct1', SITE, httpAuth('https://api.test/login'), 'site', current);
+
+    expect(await grants.isAllowed('acct1', SITE, httpAuth('https://api.test/login'))).toBe(true);
+    for (const url of [
+      'https://api.test/transfer',
+      'https://api.test/',
+      'https://api.test/login?x=1',
+      'https://API.TEST/login',
+    ]) {
+      expect(await grants.isAllowed('acct1', SITE, httpAuth(url))).toBe(false);
+    }
+  });
+
+  test('two endpoints on one origin are two records, not one overwriting the other', async () => {
+    const { store, grants } = fresh();
+    await grants.save('acct1', SITE, httpAuth('https://api.test/login'), 'site', current);
+    await grants.save('acct1', SITE, httpAuth('https://api.test/refresh'), 'site', current);
+    expect(await stored(store)).toHaveLength(2);
+    expect(await grants.isAllowed('acct1', SITE, httpAuth('https://api.test/login'))).toBe(true);
+    expect(await grants.isAllowed('acct1', SITE, httpAuth('https://api.test/refresh'))).toBe(true);
+  });
+
+  test('a NIP-98 record carries the endpoint version and keeps the origin for display', async () => {
+    const { store, grants } = fresh();
+    await grants.save('acct1', SITE, httpAuth('https://api.test/login?next=%2F'), 'site', current);
+    const [grant] = await stored(store);
+    expect(grant).toMatchObject({
+      version: 2,
+      resource: 'https://api.test/login?next=%2F',
+      destination: 'https://api.test',
+      method: 'POST',
+    });
+    expect(ENDPOINT_GRANT_VERSION).toBe(2);
+  });
+
+  test('a NIP-42 record carries neither field, because its destination IS the endpoint', async () => {
+    const { store, grants } = fresh();
+    await grants.save('acct1', SITE, relayAuth('wss://relay.test/team-a'), 'site', current);
+    const [grant] = await stored(store);
+    expect(grant!.version).toBeUndefined();
+    expect(grant!.resource).toBeUndefined();
+    expect(grant!.destination).toBe('wss://relay.test/team-a');
+  });
+
+  describe('a legacy NIP-98 record, written before endpoint scoping', () => {
+    /** An origin-wide HTTP record: no version, no resource. */
+    function legacy(decision?: 'allow' | 'deny'): Record<string, unknown> {
+      const auth = httpAuth();
+      return {
+        id: 'legacy-http',
+        ...(decision ? { decision } : {}),
+        accountId: 'acct1',
+        origin: SITE,
+        protocol: auth.protocol,
+        destination: auth.destination,
+        method: auth.method,
+      };
+    }
+
+    test('its allow is never honoured again, so the user is asked at the narrower scope', async () => {
+      for (const record of [legacy('allow'), legacy()]) {
+        const { grants } = fresh({ authenticationGrants: [record] });
+        // Not even for the URL it was presumably written from: an origin-wide consent is not
+        // an endpoint consent, and reinterpreting it as one would grant what nobody gave.
+        expect(await grants.decisionFor('acct1', SITE, httpAuth())).toBeUndefined();
+        expect(await grants.decisionFor('acct1', SITE, httpAuth('https://api.test/transfer'))).toBeUndefined();
+        // It stays listed, so it is still visible and revocable rather than quietly dropped.
+        expect(await grants.list()).toHaveLength(1);
+      }
+    });
+
+    test('its deny keeps the broad reach it was written with', async () => {
+      // Narrowing a refusal is the one direction that loses protection.
+      const { grants } = fresh({ authenticationGrants: [legacy('deny')] });
+      expect(await grants.decisionFor('acct1', SITE, httpAuth())).toBe('deny');
+      expect(await grants.decisionFor('acct1', SITE, httpAuth('https://api.test/transfer'))).toBe('deny');
+      // Still bound to the method and the account, which were always part of the record.
+      expect(await grants.decisionFor('acct1', SITE, httpAuth('https://api.test/x', 'GET'))).toBeUndefined();
+      expect(await grants.decisionFor('acct2', SITE, httpAuth())).toBeUndefined();
+    });
+
+    test('a legacy deny still beats a fresh endpoint allow for the same URL', async () => {
+      const { grants } = fresh({ authenticationGrants: [legacy('deny')] });
+      await expect(
+        grants.save('acct1', SITE, httpAuth(), 'site', current),
+      ).rejects.toThrow(/Authentication permission denied/);
+    });
   });
 
   test('a relay grant keeps path, port and query apart', async () => {
