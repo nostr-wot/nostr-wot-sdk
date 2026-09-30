@@ -51,6 +51,7 @@ import {
   cores,
   vaultIdentity,
   fixture,
+  remoteSigned,
   req,
   settle,
   nextId,
@@ -917,7 +918,7 @@ describe('execution', () => {
       calls: [] as Array<{ accountId: string; method: string }>,
       async execute(acct: SafeAccount, request: SignerRequest) {
         remote.calls.push({ accountId: acct.id, method: request.method });
-        return 'remote-result';
+        return remoteSigned({ kind: 1 });
       },
     };
     const { core, approval } = await fixture(true, {
@@ -925,9 +926,153 @@ describe('execution', () => {
       remote,
     });
     // The bunker runs its own approval, so an unset permission does not prompt locally.
-    expect(await core.handle(req('signEvent', { kind: 1 }))).toBe('remote-result');
+    const signed = await core.handle(req('signEvent', { kind: 1 })) as Record<string, unknown>;
+    expect(signed).toMatchObject({ kind: 1, content: '', tags: [], pubkey: PUBKEY_2 });
+    expect(typeof signed['sig']).toBe('string');
     expect(approval.presented).toHaveLength(0);
     expect(remote.calls).toEqual([{ accountId: 'acct_1', method: 'signEvent' }]);
+  });
+
+  /**
+   * A bunker is a separate process reached over relays. Its answer used to be returned verbatim,
+   * so it could hand back a signature over a DIFFERENT event than the one the request named: the
+   * caller publishes it believing it asked for it, and every reader believes the account behind
+   * the key said it. From the extension's `5659678`.
+   */
+  describe('a remote signer cannot substitute the event it was asked to sign', () => {
+    /** A remote account whose bunker answers with whatever `answer` builds. */
+    async function withBunker(answer: (template: Record<string, unknown>) => unknown) {
+      return fixture(true, {
+        accounts: [account('acct_1', null, { type: 'nip46', readOnly: false })],
+        remote: {
+          async execute(_acct: SafeAccount, _request: SignerRequest, params: ValidatedParams) {
+            return answer((params as { event: Record<string, unknown> }).event);
+          },
+        },
+      });
+    }
+
+    const asked = { kind: 1, content: 'hello', tags: [['t', 'nostr']] };
+
+    /**
+     * The message matters as much as the refusal, and is what makes each field's check
+     * load-bearing. Rebuilding the event from the TEMPLATE means the signature check alone
+     * already refuses every substitution -- so a missing structural check would still refuse,
+     * while telling the host "invalid signature" about a bunker that had in fact altered the
+     * event. Those are different things for a host to report and to act on.
+     */
+    test('a changed kind, content or tag list is reported as a changed event, not a bad signature', async () => {
+      for (const substitute of [
+        { ...asked, kind: 22242 },
+        { ...asked, content: 'goodbye' },
+        { ...asked, tags: [['t', 'other']] },
+        { ...asked, tags: [] },
+        { ...asked, tags: [['t', 'nostr'], ['p', PUBKEY_1]] },
+      ]) {
+        const { core } = await withBunker(() => remoteSigned(substitute));
+        await expect(core.handle(req('signEvent', asked))).rejects.toMatchObject({
+          code: 'operation_failed',
+          message: 'Remote signer changed the approved event',
+        });
+      }
+    });
+
+    test('another key\'s signature is refused as an author mismatch, not a generic failure', async () => {
+      // A different thing for a host to report: the user approved as one identity.
+      const { core } = await withBunker(() => remoteSigned(asked, PRIVKEY_1));
+      await expect(core.handle(req('signEvent', asked))).rejects.toMatchObject({
+        code: 'author_mismatch',
+        message: 'Event author does not match the active account',
+      });
+    });
+
+    test('a stated created_at must come back unchanged', async () => {
+      const stated = { ...asked, created_at: 1_700_000_000 };
+      const { core } = await withBunker(() => remoteSigned({ ...stated, created_at: 1_700_000_001 }));
+      await expect(core.handle(req('signEvent', stated))).rejects.toMatchObject({
+        code: 'operation_failed',
+        message: 'Remote signer changed the approved event',
+      });
+      const { core: honest } = await withBunker(() => remoteSigned(stated));
+      expect(await honest.handle(req('signEvent', stated))).toMatchObject({ created_at: 1_700_000_000 });
+    });
+
+    test('an unstated created_at is the remote\'s to choose, but must be a plausible integer', async () => {
+      const { core } = await withBunker(() => ({ ...remoteSigned(asked), created_at: -1 }));
+      await expect(core.handle(req('signEvent', asked))).rejects.toMatchObject({
+        code: 'operation_failed',
+        message: 'Remote signer changed the approved event',
+      });
+      // A plausible one it chose itself is honoured and handed back.
+      const { core: honest } = await withBunker(() => remoteSigned({ ...asked, created_at: 1_600_000_000 }));
+      expect(await honest.handle(req('signEvent', asked))).toMatchObject({ created_at: 1_600_000_000 });
+    });
+
+    test('a forged id is refused even though nostr-tools would call it verified', async () => {
+      // The trap this test exists for: `nostr-tools` memoises verification on a module-private
+      // symbol that `finalizeEvent` stamps, and an object spread copies own symbol properties.
+      // So a remote port that uses nostr-tools, as every NIP-46 client does, can sign one event,
+      // spread it with a different `id` and hand back something `verifyEvent` returns true for.
+      // Verified here on a freshly built plain object, which carries no such stamp.
+      const forged = { ...remoteSigned(asked), id: 'f'.repeat(64) };
+      expect(verifyEvent(forged as never)).toBe(true);
+
+      const { core } = await withBunker(() => forged);
+      await expect(core.handle(req('signEvent', asked))).rejects.toMatchObject({
+        code: 'operation_failed',
+        message: 'Remote signer returned an invalid signature',
+      });
+    });
+
+    test('a tampered signature over the right event is refused', async () => {
+      const tampered = { ...remoteSigned(asked), sig: '0'.repeat(128) };
+      expect(verifyEvent(tampered as never)).toBe(true);
+      const { core } = await withBunker(() => tampered);
+      await expect(core.handle(req('signEvent', asked))).rejects.toMatchObject({
+        code: 'operation_failed',
+        message: 'Remote signer returned an invalid signature',
+      });
+    });
+
+    test('anything that is not a signed event at all is refused, and named as such', async () => {
+      const cases: Array<[unknown, string, string]> = [
+        ['remote-result', 'operation_failed', 'Remote signer did not return an event'],
+        [null, 'operation_failed', 'Remote signer did not return an event'],
+        [42, 'operation_failed', 'Remote signer did not return an event'],
+        [[], 'author_mismatch', 'Event author does not match the active account'],
+        [{}, 'author_mismatch', 'Event author does not match the active account'],
+      ];
+      for (const [answer, code, message] of cases) {
+        const { core } = await withBunker(() => answer);
+        await expect(core.handle(req('signEvent', asked))).rejects.toMatchObject({ code, message });
+      }
+    });
+
+    test('a right event with a missing or non-string id or sig is named as unsigned', async () => {
+      for (const missing of [{ sig: undefined }, { id: undefined }, { sig: 1 }, { id: [] }]) {
+        const { core } = await withBunker(() => ({ ...remoteSigned(asked), ...missing }));
+        await expect(core.handle(req('signEvent', asked))).rejects.toMatchObject({
+          code: 'operation_failed',
+          message: 'Remote signer did not return a signed event',
+        });
+      }
+    });
+
+    test('only the fields a signature covers are handed back', async () => {
+      // A remote is free to decorate its reply; passing the extras on would give a caller
+      // unverified data inside an object it treats as verified.
+      const { core } = await withBunker(() => ({ ...remoteSigned(asked), relay: 'wss://evil.test', ok: true }));
+      const signed = await core.handle(req('signEvent', asked)) as Record<string, unknown>;
+      expect(Object.keys(signed).sort()).toEqual(['content', 'created_at', 'id', 'kind', 'pubkey', 'sig', 'tags']);
+    });
+
+    test('a remote crypto method is still returned as-is, since there is no event to check', async () => {
+      const { core } = await fixture(true, {
+        accounts: [account('acct_1', null, { type: 'nip46', readOnly: false })],
+        remote: { async execute() { return 'cipher-text'; } },
+      });
+      expect(await core.handle(req('nip04Encrypt', { pubkey: PUBKEY_1, plaintext: 'x' }))).toBe('cipher-text');
+    });
   });
 
   test('a remote account with no remote port is refused', async () => {

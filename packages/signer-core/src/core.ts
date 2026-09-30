@@ -58,6 +58,7 @@ import { GET_PUBLIC_KEY_COOLDOWN_MS, KEY_METHODS, ORIGIN_KINDS } from './constan
 import { SignerError, errorMessage } from './errors.js';
 import { needsPqKeys, remotePqRefusal, withPqKeys, type PqKeyScope } from './pq.js';
 import { ApprovalQueue } from './queue.js';
+import { verifyRemoteSignedEvent } from './remoteEvent.js';
 import { disclosedBatch, disclosedRequest, validateBatchRequest, validateRequest } from './schema.js';
 import type { PermissionsPort, VaultPort } from './ports.js';
 import type {
@@ -884,10 +885,17 @@ export class SignerCore {
     }
     if (remote) {
       const port = this.#remote as RemoteSignerPort;
-      return this.#queue.track(
+      const answer = await this.#queue.track(
         { id: request.id, kind: 'remote', origin: originKey, accountId: account.id },
         (signal) => port.execute(account, request, params, signal),
       );
+      // A bunker is a separate process reached over relays, and the only thing known about its
+      // answer is that it arrived. Returned verbatim, it could be a signature over a DIFFERENT
+      // event than the one this request named, which the caller then publishes believing the
+      // account said it. See `remoteEvent.ts`.
+      return params.method === 'signEvent'
+        ? verifyRemoteSignedEvent(answer, params.event, account.pubkey)
+        : answer;
     }
     return this.#signLocally(account, prepared);
   }

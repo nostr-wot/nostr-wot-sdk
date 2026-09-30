@@ -327,6 +327,28 @@ Every item lands in the activity log under its own id with `batchId` set, whatev
 `onActiveAccountChanged` rejects a queued batch as it rejects a single request, and the
 port's `cancel` names the batch id.
 
+## Remote signers
+
+A remote (`nip46`) account's `signEvent` goes out through `RemoteSignerPort.execute`, and what
+comes back is verified before the caller sees it: the author is the account the request was
+resolved for, the kind, content and tags are the ones the request named, a stated `created_at`
+came back unchanged (an unstated one is the remote's to choose, as it is locally), and the
+signature verifies. Only the seven fields a signature covers are returned, so a decorated reply
+cannot smuggle unverified data into an object a caller treats as verified. A bunker is a separate
+process reached over relays; unverified, it can return a signature over a different event than
+the one asked for, which the caller then publishes as the account's own words.
+
+The refusals are named separately, because they are different things for a host to report:
+`author_mismatch` for another key's signature, and `operation_failed` with
+`Remote signer changed the approved event`, `... did not return an event`,
+`... did not return a signed event` or `... returned an invalid signature`.
+
+One trap worth knowing if you write your own verification: `nostr-tools` memoises verification on
+a module-private symbol that `finalizeEvent` stamps, and an object spread copies own symbol
+properties. A port that uses `nostr-tools` itself can sign one event, spread it with a different
+`id`, and hand back something `verifyEvent` returns `true` for. Verification here runs on a
+freshly built plain object, which carries no such stamp.
+
 ## Optional ports
 
 | Port | Without it |

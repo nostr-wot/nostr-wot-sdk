@@ -8,7 +8,7 @@
  * `fixture` and restores real timers.
  */
 import { afterEach, vi } from 'vitest';
-import { getPublicKey } from 'nostr-tools';
+import { finalizeEvent, getPublicKey } from 'nostr-tools';
 import { hexToBytes } from '@noble/hashes/utils.js';
 import type { Account, SafeAccount } from '@nostr-wot/accounts';
 import { toSafeAccount } from '@nostr-wot/accounts';
@@ -35,6 +35,28 @@ export const PUBKEY_1 = getPublicKey(hexToBytes(PRIVKEY_1));
 export const PRIVKEY_2 = '11'.repeat(32);
 export const PUBKEY_2 = getPublicKey(hexToBytes(PRIVKEY_2));
 export const PASSWORD = 'correct horse battery staple';
+
+/**
+ * A real signed event, for a fake remote signer to answer with.
+ *
+ * `SignerCore` verifies what a bunker returns against the template it asked for, so a fake that
+ * answers with a string or a hand-built object is refused, as a real bunker doing the same would
+ * be. Defaults to `PRIVKEY_2`, which is the key behind a `nip46` account built by `account()`.
+ */
+export function remoteSigned(
+  template: { kind: number; content?: string; tags?: string[][]; created_at?: number },
+  privkey: string = PRIVKEY_2,
+): Record<string, unknown> {
+  return finalizeEvent(
+    {
+      kind: template.kind,
+      content: template.content ?? '',
+      tags: template.tags ?? [],
+      created_at: template.created_at ?? Math.floor(Date.now() / 1000),
+    },
+    hexToBytes(privkey),
+  ) as unknown as Record<string, unknown>;
+}
 
 export function account(id: string, privkey: string | null, extra: Partial<Account> = {}): Account {
   return {

@@ -62,6 +62,7 @@ export { SignerError, type SignerErrorCode } from './errors.js';
 export { validateRequest, validateBatchRequest, utf8ByteLength, disclosedRequest, disclosedBatch } from './schema.js';
 export { ApprovalQueue, type ApprovalQueueOptions, type TrackInput } from './queue.js';
 export { SignerCore, permissionOrigin } from './core.js';
+export { verifyRemoteSignedEvent, type VerifiedRemoteEvent } from './remoteEvent.js';
 export { withPqKeys, PQ_SEED_WORD_COUNT, type PqKeyScope } from './pq.js';
 /**
  * The attestation kind, and the check for someone else's attestation: kind, secp256k1
