@@ -6,4 +6,6 @@ A scrypt derivation this build cannot perform now throws `Could not derive a key
 
 Hosts render `error.message` in front of the user, so the `maxmem` regression showed people holding an unreadable key backup the string `"maxmem" limit was hit: memUsed(128*r*(N+p+1))=67110912`. The message is deliberately not the wrong-password one: a backup that cannot be stretched at all is a different problem from a password that does not match, and sending someone to retype a password that was right sends them nowhere.
 
-Ported from the browser extension's `c7d0ec8`.
+Ported from the browser extension's `deriveScryptKey` in `src/lib/crypto/nip49.ts`, which
+throws the same string from the same catch. Upstream commit `c7d0ec8` is where it landed;
+that SHA no longer resolves from the extension's `main`, so it is provenance only.

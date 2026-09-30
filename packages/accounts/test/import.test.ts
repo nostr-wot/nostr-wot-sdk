@@ -262,8 +262,9 @@ describe('NIP-49 ncryptsec', () => {
    * restating any version's arithmetic. What is left here is the window the bound must fall
    * in, stated without naming a noble version at all.
    *
-   * From the extension's `c7d0ec8`, "Fix NIP-49 scrypt bounds and guard dependency
-   * compatibility".
+   * The bound and the constant it uses come from the extension's `scryptMaxMem` and
+   * `SCRYPT_MAXMEM_SLACK_BLOCKS`, in `src/lib/crypto/nip49.ts` and
+   * `src/constants/crypto/nip49.ts`.
    */
   test('maxmem is what scrypt actually allocates plus fixed headroom, not what one noble version happens to check', () => {
     for (let logN = MIN_LOG_N; logN <= MAX_LOG_N; logN++) {

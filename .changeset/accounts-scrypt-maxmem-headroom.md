@@ -10,4 +10,7 @@ The bound was `128·r·(N + p + 1)`, which is 2.4.0's expression character for c
 
 `deriveScryptKey` also computes `N` as `2 ** logN` rather than `1 << logN`, matching `scryptMaxMem`, so the two cannot diverge if `MAX_LOG_N` is ever raised past 30.
 
-Ported from the browser extension's `c7d0ec8`.
+Ported from the browser extension's `scryptMaxMem` and `SCRYPT_MAXMEM_SLACK_BLOCKS`, in
+`src/lib/crypto/nip49.ts` and `src/constants/crypto/nip49.ts`. Upstream commit `c7d0ec8` is
+where it landed; that SHA no longer resolves from the extension's `main`, so it is
+provenance only.

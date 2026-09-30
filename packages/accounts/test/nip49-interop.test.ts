@@ -13,7 +13,9 @@
  * its own nested 2.4.0 and `nostr-tools` resolves the hoisted copy, so these tests put two
  * versions of the library on the two ends of the same backup.
  *
- * Ported from the extension's `tests/crypto/nip49.test.ts`, added in `c7d0ec8`.
+ * Ported from the extension's `tests/crypto/nip49.test.ts`, which round-trips its own
+ * `ncryptsecEncode` and `ncryptsecDecode` across the same key-security bytes and cost
+ * factors.
  */
 import { describe, expect, test } from 'vitest';
 import { bytesToHex } from '@noble/hashes/utils.js';

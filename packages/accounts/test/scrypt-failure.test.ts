@@ -18,8 +18,8 @@
  * arithmetic. `test/scrypt-maxmem.test.ts` covers the arithmetic, and it deliberately mocks
  * nothing.
  *
- * Ported from the extension's `c7d0ec8`, "Fix NIP-49 scrypt bounds and guard dependency
- * compatibility".
+ * Ported from the extension, whose `deriveScryptKey` in `src/lib/crypto/nip49.ts` wraps the
+ * same failure in the same message with the library's error as `cause`.
  */
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { bech32 } from '@scure/base';

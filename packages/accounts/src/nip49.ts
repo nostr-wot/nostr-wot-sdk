@@ -54,8 +54,8 @@ export const SCRYPT_P = 1;
  * to absorb the next revision. `maxmem` is not the defence against an expensive backup, since
  * it is computed from the cost factor in the payload and so can never reject it; MAX_LOG_N is.
  *
- * From the extension's `c7d0ec8`, "Fix NIP-49 scrypt bounds and guard dependency
- * compatibility".
+ * From the extension, where the same constant under the same name lives in
+ * `src/constants/crypto/nip49.ts` and carries the same four-block budget.
  */
 export const SCRYPT_MAXMEM_SLACK_BLOCKS = 4;
 /** key_security_byte 0x02 = "client does not track this data" per NIP-49. */
@@ -93,11 +93,12 @@ const PRIVKEY_BYTES = 32;
  * from the cost factor in the payload, so it can never reject an expensive backup.
  * {@link MAX_LOG_N} is what bounds that.
  *
- * From the extension's `c7d0ec8`, "Fix NIP-49 scrypt bounds and guard dependency
- * compatibility".
+ * From the extension's `scryptMaxMem` in `src/lib/crypto/nip49.ts`, which computes the same
+ * budget from the same constant.
  *
  * @see test/scrypt-maxmem.test.ts, which probes the installed library for what it actually
- *      requires instead of restating any version's expression.
+ *      requires instead of restating any version's expression. The extension's equivalent is
+ *      `tests/crypto/scrypt-maxmem.test.ts`.
  */
 export function scryptMaxMem(logN: number): number {
   const blockSize = 128 * SCRYPT_R;
@@ -112,7 +113,8 @@ function deriveScryptKey(password: string, salt: Uint8Array, logN: number): Uint
       // the shift is signed 32-bit and turns negative at logN 31, so the two expressions stop
       // agreeing the moment MAX_LOG_N is raised. scryptMaxMem already uses `2 **`, and a
       // maxmem computed for one N while scrypt runs at another is the bug this whole comment
-      // block is about. Same change as the extension's `c7d0ec8`.
+      // block is about. The extension's `deriveScryptKey` in `src/lib/crypto/nip49.ts` does
+      // the same.
       N: 2 ** logN,
       r: SCRYPT_R,
       p: SCRYPT_P,
@@ -130,8 +132,9 @@ function deriveScryptKey(password: string, salt: Uint8Array, logN: number): Uint
     // retype a password that was right is its own kind of harm. `decodeV2` keeps its
     // wrong-password catch around the AEAD open only, so this passes through it untouched.
     //
-    // The wording is the extension's, from `c7d0ec8`, so a host that migrates onto this
-    // package shows the string its users have already been shown.
+    // The wording is the extension's: its `deriveScryptKey` in `src/lib/crypto/nip49.ts`
+    // throws this same string from the same catch. Kept identical so a host that migrates
+    // onto this package shows its users the string they have already been shown.
     throw new Error("Could not derive a key from this backup's scrypt parameters", { cause });
   } finally {
     passwordBytes.fill(0);
@@ -163,8 +166,11 @@ function deriveScryptKey(password: string, salt: Uint8Array, logN: number): Uint
  * and zeroes the array it made; `decryptNcryptsec` likewise returns bytes, not hex, so nothing
  * in this package rounds a key through a string.
  *
- * From the extension's `0eba181`/`1aa7ce4` line of work, which changed `ncryptsecEncode` to
- * accept bytes and stop zeroing a borrowed array for exactly this reason.
+ * The borrowing contract comes from the extension's `ncryptsecEncode` in
+ * `src/lib/crypto/nip49.ts`, which tracks a `borrowed` flag and zeroes only the array it
+ * decoded itself, for exactly this reason. That signature still takes `Uint8Array | string`
+ * on the extension's current main, so the narrowing to bytes is this package's, not a change
+ * upstream has made.
  *
  * @param privkey - the 32-byte key. Borrowed: NOT zeroed, and still intact when this returns.
  */

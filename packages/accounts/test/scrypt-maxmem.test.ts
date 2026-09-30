@@ -24,7 +24,8 @@
  * handful of fixed blocks: slack that scaled with `N` would quietly authorise a multiple of
  * the V table, and `logN` comes from the payload.
  *
- * Ported from the extension's `tests/crypto/scrypt-maxmem.test.ts`, added in `c7d0ec8`.
+ * Ported from the extension's `tests/crypto/scrypt-maxmem.test.ts`, which probes the
+ * installed `@noble/hashes` the same way rather than restating its expression.
  */
 import { describe, expect, test } from 'vitest';
 import { readFileSync } from 'node:fs';
