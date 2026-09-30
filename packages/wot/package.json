@@ -58,6 +58,8 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:run": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
@@ -68,5 +70,8 @@
       "optional": true
     }
   },
-  "sideEffects": false
+  "sideEffects": false,
+  "devDependencies": {
+    "vitest": "^4.0.18"
+  }
 }

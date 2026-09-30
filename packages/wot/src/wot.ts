@@ -18,6 +18,9 @@ import {
   DEFAULT_MAX_HOPS,
   DEFAULT_TIMEOUT,
   MAX_BATCH_SIZE,
+  ORACLE_MAX_BATCH_TARGETS,
+  ORACLE_MAX_HOPS,
+  clampMaxHops,
   isValidPubkey,
   isValidOracleUrl,
   normalizePubkey,
@@ -26,10 +29,56 @@ import {
 } from './utils';
 
 /**
+ * `bfs::DistanceResult` as nostr-wot-oracle serializes it, from `src/graph/bfs.rs`.
+ *
+ * `hops` is an `Option<u32>`, `path_count` a `u64` and `mutual_follow` a `bool`,
+ * all always present; `bridges` is skipped when absent.
+ */
+interface OracleDistance {
+  from: string;
+  to: string;
+  hops: number | null;
+  path_count: number;
+  mutual_follow: boolean;
+  bridges?: string[];
+}
+
+/** `BatchDistanceResponse` from `src/api/http.rs`. */
+interface OracleBatchDistance {
+  from: string;
+  results: OracleDistance[];
+}
+
+/**
  * WoT (Web of Trust) SDK for querying Nostr trust relationships
  *
  * Queries are answered by the oracle API, which computes hop distance
  * over the public kind-3 follow graph.
+ *
+ * The wire shapes below are nostr-wot-oracle's, taken from that repository's
+ * `docs/API.md` table, `src/api/http.rs` and `src/graph/bfs.rs`, not from this
+ * client's assumptions. `DEFAULT_ORACLE` runs that server, and the two had
+ * drifted so far that no request this client sent reached a route:
+ *
+ * | | this client sent or read | nostr-wot-oracle serves |
+ * |---|---|---|
+ * | distance | `GET /api/distance/FROM/TO?maxHops=` | `GET /distance?from=&to=&max_hops=` |
+ * | distance field | `distance` | `hops` |
+ * | details | `GET /api/details/FROM/TO` | no such route; `/distance` carries the detail |
+ * | path count | `paths` | `path_count` |
+ * | mutual follow | `mutual` | `mutual_follow` |
+ * | batch | `GET /api/batch/FROM?targets=a,b` | `POST /distance/batch` with a JSON body |
+ * | batch target key | `pubkey` | `to` |
+ * | `max_hops` | never sent | accepted, 1..5, server default 3 |
+ *
+ * Every one of those failed silently. A field the oracle does not send reads as
+ * `undefined` rather than raising, and a path it does not route answers 404,
+ * which this client converted into "not reachable": the honest answer for an
+ * absent route and an absent answer looked identical. A 404 is now raised,
+ * because nostr-wot-oracle reports "no route found within the depth searched" as
+ * `hops: null` on a 200 and never as a 404, so a 404 means this client is not
+ * talking to the server it thinks it is. Each row is pinned by a test in
+ * `test/oracle-contract.test.ts`.
  */
 export class WoT {
   private readonly oracle: string;
@@ -56,7 +105,10 @@ export class WoT {
     if (!isValidOracleUrl(oracleUrl)) {
       throw new ValidationError('oracle must be a valid HTTPS URL', 'oracle');
     }
-    this.oracle = oracleUrl;
+    // A self-hosted oracle can sit under a path on a shared host, so the base is
+    // a prefix rather than just an origin. Trailing slashes are dropped so that
+    // joining a route onto it cannot produce a doubled separator.
+    this.oracle = oracleUrl.replace(/\/+$/, '');
     this.maxHops = options.maxHops ?? this.fallbackOptions?.maxHops ?? DEFAULT_MAX_HOPS;
     this.timeout = options.timeout ?? this.fallbackOptions?.timeout ?? DEFAULT_TIMEOUT;
   }
@@ -76,22 +128,35 @@ export class WoT {
   }
 
   /**
-   * Makes an API request to the oracle
+   * Makes an API request to the oracle.
+   *
+   * `create_router` mounts `/distance`, `/distance/batch`, `/follows`,
+   * `/common-follows`, `/path`, `/mutes`, `/trust` and `/stats` at the root, so
+   * there is no `/api` prefix to add. Passing `body` makes the request the POST
+   * that `/distance/batch` is.
    */
   private async apiRequest<T>(
     endpoint: string,
-    options: QueryOptions = {}
+    params: Record<string, string> = {},
+    options: QueryOptions = {},
+    body?: unknown
   ): Promise<T> {
     const timeout = options.timeout ?? this.timeout;
-    const url = `${this.oracle}/api${endpoint}`;
+    const target = new URL(`${this.oracle}/${endpoint}`);
+    for (const [key, value] of Object.entries(params)) {
+      target.searchParams.set(key, value);
+    }
+    const url = target.href;
 
     let response: Response;
     try {
       response = await fetchWithTimeout(url, {
         timeout,
+        method: body === undefined ? 'GET' : 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
     } catch (error) {
       if (error instanceof Error) {
@@ -105,7 +170,13 @@ export class WoT {
 
     if (!response.ok) {
       if (response.status === 404) {
-        throw new NotFoundError('', `Resource not found: ${endpoint}`);
+        // nostr-wot-oracle reports an unreached target as `hops: null` on a 200,
+        // never as a 404, so a 404 is a route this server does not serve. It is
+        // raised rather than read as an answer about the graph.
+        throw new NotFoundError(
+          '',
+          `Oracle has no route ${endpoint}: ${url} is not a nostr-wot-oracle endpoint`
+        );
       }
       throw new NetworkError(
         `HTTP ${response.status}: ${response.statusText}`,
@@ -134,10 +205,78 @@ export class WoT {
   }
 
   /**
+   * Reads `hops` from a `bfs::DistanceResult`.
+   *
+   * The field is `hops`, not `distance`; the oracle has never sent a `distance`
+   * member, so reading one yielded `undefined` for every answer.
+   *
+   * `null` is the oracle saying no route was found within the depth it searched,
+   * which its documentation is careful is "not proof of no connection across
+   * Nostr". It stays `null` rather than becoming a distance of zero.
+   */
+  private readHops(result: OracleDistance): number | null {
+    const hops = result.hops ?? null;
+    if (hops === null) {
+      return null;
+    }
+    if (!Number.isInteger(hops) || hops < 0 || hops > ORACLE_MAX_HOPS) {
+      throw new NetworkError(
+        `Oracle sent an out-of-range hop count: ${String(hops)}`,
+        undefined,
+        this.oracle
+      );
+    }
+    return hops;
+  }
+
+  /**
+   * Reads `path_count` from a `bfs::DistanceResult`.
+   *
+   * docs/API.md: "Counts saturate at the maximum unsigned 64-bit integer rather
+   * than overflowing", and that maximum is well past `Number.MAX_SAFE_INTEGER`,
+   * so refusing an unsafe integer would refuse a documented answer. It is clamped
+   * instead. `path_count` is a non-optional `u64`, so a missing or non-numeric
+   * one is a server this client is not talking to.
+   */
+  private readPathCount(value: unknown): number {
+    if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+      throw new NetworkError(
+        `Oracle sent an invalid path_count: ${String(value)}`,
+        undefined,
+        this.oracle
+      );
+    }
+    return Math.min(value, Number.MAX_SAFE_INTEGER);
+  }
+
+  /**
+   * `GET /distance`: `from`, `to`, optional `max_hops` (1..5, default 3) and
+   * `include_bridges` (docs/API.md). Answers with `bfs::DistanceResult`.
+   */
+  private async fetchDistance(
+    from: string,
+    to: string,
+    options?: QueryOptions
+  ): Promise<OracleDistance> {
+    const params: Record<string, string> = {
+      from,
+      to,
+      max_hops: String(clampMaxHops(options?.maxHops ?? this.maxHops)),
+    };
+    // `include_bridges` defaults to false on the server and the field is skipped
+    // when absent, so it is sent only when the caller asked for bridges.
+    if (options?.includeBridges) {
+      params.include_bridges = 'true';
+    }
+    return this.apiRequest<OracleDistance>('distance', params, options);
+  }
+
+  /**
    * Get shortest path length to target pubkey
    * @param target - Target pubkey (hex)
    * @param options - Query options
-   * @returns Number of hops or null if not reachable
+   * @returns Number of hops, or null when no route was found within `maxHops`
+   * @throws NotFoundError when the configured oracle does not serve `/distance`
    */
   async getDistance(
     target: string,
@@ -151,24 +290,10 @@ export class WoT {
     }
 
     const myPubkey = this.getEffectivePubkey();
-    const maxHops = options?.maxHops ?? this.maxHops;
 
-    interface DistanceResponse {
-      distance: number | null;
-    }
-
-    try {
-      const result = await this.apiRequest<DistanceResponse>(
-        `/distance/${myPubkey}/${normalizedTarget}?maxHops=${maxHops}`,
-        options
-      );
-      return result.distance;
-    } catch (error) {
-      if (error instanceof NotFoundError) {
-        return null;
-      }
-      throw error;
-    }
+    return this.readHops(
+      await this.fetchDistance(myPubkey, normalizedTarget, options)
+    );
   }
 
   /**
@@ -205,24 +330,9 @@ export class WoT {
     const normalizedFrom = this.validatePubkey(from, 'from');
     const normalizedTo = this.validatePubkey(to, 'to');
 
-    const maxHops = options?.maxHops ?? this.maxHops;
-
-    interface DistanceResponse {
-      distance: number | null;
-    }
-
-    try {
-      const result = await this.apiRequest<DistanceResponse>(
-        `/distance/${normalizedFrom}/${normalizedTo}?maxHops=${maxHops}`,
-        options
-      );
-      return result.distance;
-    } catch (error) {
-      if (error instanceof NotFoundError) {
-        return null;
-      }
-      throw error;
-    }
+    return this.readHops(
+      await this.fetchDistance(normalizedFrom, normalizedTo, options)
+    );
   }
 
   /**
@@ -254,34 +364,30 @@ export class WoT {
     const myPubkey = this.getEffectivePubkey();
     const results = new Map<string, BatchResult>();
 
-    // Process in batches of 50 to avoid URL length limits
-    const batches = chunk(normalizedTargets, 50);
+    // `batch_distance` refuses a request carrying more than ORACLE_MAX_BATCH_TARGETS
+    // targets with code TOO_MANY_TARGETS. The body is a POST, so the old chunk of 50
+    // "to avoid URL length limits" no longer describes the bound that applies.
+    const batches = chunk(normalizedTargets, ORACLE_MAX_BATCH_TARGETS);
 
     for (const batch of batches) {
-      interface BatchResponse {
-        results: Array<{
-          pubkey: string;
-          distance: number | null;
-          paths?: number;
-          mutual?: boolean;
-        }>;
-      }
-
+      // Only the request is guarded. Reading the answer is deliberately outside
+      // the catch: a malformed body is not a transient failure, and swallowing
+      // one as "no distance" is the class of silence this client is being fixed
+      // for.
+      let response: OracleBatchDistance;
       try {
-        const response = await this.apiRequest<BatchResponse>(
-          `/batch/${myPubkey}?targets=${batch.join(',')}&maxHops=${maxHops}`,
-          options
+        // `POST /distance/batch` takes `BatchDistanceRequest` as a JSON body and
+        // answers with `from` plus ordered `results`, duplicates preserved.
+        response = await this.apiRequest<OracleBatchDistance>(
+          'distance/batch',
+          {},
+          options,
+          {
+            from: myPubkey,
+            targets: batch,
+            max_hops: clampMaxHops(maxHops),
+          }
         );
-
-        for (const item of response.results) {
-          const inWoT = item.distance !== null && item.distance <= maxHops;
-
-          results.set(item.pubkey, {
-            pubkey: item.pubkey,
-            distance: item.distance,
-            inWoT,
-          });
-        }
       } catch (error) {
         // If batch fails, fill with null results
         for (const pubkey of batch) {
@@ -298,6 +404,28 @@ export class WoT {
         if (!(error instanceof NetworkError)) {
           throw error;
         }
+        continue;
+      }
+
+      for (const item of response.results) {
+        // The endpoints are `from` and `to`. `bfs::DistanceResult` has no
+        // `pubkey` member, so keying by one filed every result under
+        // "undefined" and no target was ever found in the map.
+        if (typeof item?.to !== 'string') {
+          throw new NetworkError(
+            'Oracle batch result is missing its target pubkey',
+            undefined,
+            this.oracle
+          );
+        }
+        const distance = this.readHops(item);
+        const inWoT = distance !== null && distance <= maxHops;
+
+        results.set(item.to, {
+          pubkey: item.to,
+          distance,
+          inWoT,
+        });
       }
     }
 
@@ -306,9 +434,17 @@ export class WoT {
 
   /**
    * Get distance and path count details
+   *
+   * nostr-wot-oracle has no `/details` route: its endpoint list is `/health`,
+   * `/ready`, `/stats`, `/distance`, `/distance/batch`, `/path`, `/follows`,
+   * `/common-follows`, `/mutes` and `/trust`. `GET /distance` already carries the
+   * detail, so this asks that route and renames its fields onto
+   * {@link DistanceResult}: `path_count` to `paths`, `mutual_follow` to `mutual`.
+   *
    * @param target - Target pubkey (hex)
-   * @param options - Query options
-   * @returns Distance result or null if not reachable
+   * @param options - Query options; pass `includeBridges` to ask for `bridges`
+   * @returns Details, or null when no route was found within `maxHops`
+   * @throws NotFoundError when the configured oracle does not serve `/distance`
    */
   async getDetails(
     target: string,
@@ -317,27 +453,27 @@ export class WoT {
     const normalizedTarget = this.validatePubkey(target, 'target');
 
     const myPubkey = this.getEffectivePubkey();
-    const maxHops = options?.maxHops ?? this.maxHops;
 
-    interface DetailsResponse {
-      hops: number;
-      paths: number;
-      bridges?: string[];
-      mutual?: boolean;
+    const response = await this.fetchDistance(
+      myPubkey,
+      normalizedTarget,
+      options
+    );
+
+    const hops = this.readHops(response);
+    if (hops === null) {
+      return null;
     }
 
-    try {
-      const response = await this.apiRequest<DetailsResponse>(
-        `/details/${myPubkey}/${normalizedTarget}?maxHops=${maxHops}`,
-        options
-      );
-      return response;
-    } catch (error) {
-      if (error instanceof NotFoundError) {
-        return null;
-      }
-      throw error;
+    const result: DistanceResult = {
+      hops,
+      paths: this.readPathCount(response.path_count),
+      mutual: response.mutual_follow,
+    };
+    if (response.bridges !== undefined) {
+      result.bridges = response.bridges;
     }
+    return result;
   }
 
   /**
