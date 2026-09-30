@@ -47,9 +47,19 @@
  * cost is an extra approval prompt and never an unintended credential. Merging is the failure
  * that would matter.
  *
- * Ported from the extension's `src/domain/signing/authentication.ts`, commits `6db46fa`
- * ("Bind Nostr authentication permissions to destinations and accounts") and `ecac8ae`
- * ("Simplify authentication review and remember scoped rejections").
+ * ## Where this came from
+ *
+ * Ported from the extension's `src/domain/signing/authentication.ts`, which on the
+ * extension's current main still carries `parseAuthentication`, `authenticationKey`
+ * (keyed on protocol, exact signed URL and method), `validAuthenticationScope`
+ * (`connected-sites` only for NIP-42) and the `AuthenticationGrant` record. The storage
+ * half lives in its `src/services/permissions/authentication.ts`.
+ *
+ * The upstream commits were `6db46fa` ("Bind Nostr authentication permissions to
+ * destinations and accounts") and `ecac8ae` ("Simplify authentication review and remember
+ * scoped rejections"). Both are kept here as provenance only and neither resolves from the
+ * extension's main any more, which was squashed and force-rewritten. The files above are
+ * the reference.
  *
  * @see https://github.com/nostr-protocol/nips/blob/master/42.md NIP-42
  * @see https://github.com/nostr-protocol/nips/blob/master/98.md NIP-98
@@ -147,7 +157,12 @@ export interface AuthenticationGrant {
  * upgraded into an endpoint consent nobody gave. A legacy DENY keeps its broad reach, because
  * narrowing a refusal is the one direction that loses protection.
  *
- * From the extension's `5659678`, "Harden authentication boundaries".
+ * From the extension, which spells the same rule out inline rather than as a constant: its
+ * `AuthenticationGrant.version?: 2` in `src/domain/signing/authentication.ts`, and
+ * `matchesGrant` in `src/services/permissions/authentication.ts`, which honours an HTTP
+ * grant only on `grant.version === 2 && typeof grant.resource === 'string'` and otherwise
+ * falls through to `grant.decision === 'deny'`. A reader opening those files will find no
+ * `ENDPOINT_GRANT_VERSION`; the name is this package's.
  */
 export const ENDPOINT_GRANT_VERSION = 2;
 
@@ -287,7 +302,8 @@ export function parseAuthentication(
   // it, because then one of the two strings is being shown to a user or sent to a server while
   // the other is being authorised, and the event would be signed with both in it. `tag` also
   // refuses two of them, so a matching tag beside a lying one is not a way through.
-  // From the extension's `5659678`, "Harden authentication boundaries".
+  // The extension's `parseAuthentication` in `src/domain/signing/authentication.ts` runs the
+  // same loop over `['origin', 'client-origin']` and throws the same way.
   for (const name of ORIGIN_METADATA_TAGS) {
     if (event.tags?.some((item) => item[0] === name) && tag(event, name) !== origin) {
       throw new Error(`Invalid authentication ${name} tag`);

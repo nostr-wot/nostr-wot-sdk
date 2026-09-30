@@ -43,7 +43,15 @@ plain web, and it is the scope of this design.
 
 ## 3. Prior art being ported
 
-Recovered from the extension git history at commit `1e9c410` (before the WoT sunset):
+Recovered from the extension's `lib/scoring.ts`, `lib/graph.ts`, `lib/sync.ts` and
+`lib/storage.ts`, which the WoT sunset deleted: none of these paths exist on the
+extension's `main` today, so the table below is the only description of them that is still
+in a working tree. The commit they were read out of is `1e9c410`, and unlike every other
+extension SHA this repo quotes that one is still reachable from `main` at the time of
+writing, so `git -C ../nostr-wot-extension show 1e9c410:lib/graph.ts` recovers the
+original. Treat it as a bonus rather than the reference: it is one squash away from going
+the way of the others, and the ported files named in the right-hand column are what a
+reader should be reading.
 
 | Extension file | LOC | Ported into `@nostr-wot/graph` as |
 |---|---|---|

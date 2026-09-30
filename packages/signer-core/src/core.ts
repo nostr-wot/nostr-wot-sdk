@@ -1071,8 +1071,10 @@ export class SignerCore {
    * tags, and a permission keyed by method and kind names neither. So "remember this" on an
    * authentication prompt stores "may authenticate to ANY destination this caller subsequently
    * names", which is not the consent the user was shown and is GHSA-vx4h-56qj-wcp7. The
-   * extension refuses the same write (`6db46fa`: `approved.remember && !authentication`) and
-   * records a destination-scoped grant instead.
+   * The extension refuses the same write: `src/services/signing/signer.ts` guards its
+   * `permissions.save` with `approved.remember && !authentication`, and the authentication
+   * path records a destination-scoped grant through `saveAuthenticationGrant` instead. That
+   * expression is still there verbatim on the extension's current main.
    *
    * Only the allow. A remembered DENY under one of these keys is a refusal in force, deny wins
    * over everything, and `@nostr-wot/permissions` keeps honouring it — so dropping that as well

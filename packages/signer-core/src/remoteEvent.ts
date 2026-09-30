@@ -10,8 +10,10 @@
  * the key said it.
  *
  * So the result is verified against the template, field by field, and only the canonical signed
- * fields are returned. Ported from the extension's `services/signing/remoteEventVerifier.ts`
- * (`5659678`, "Harden authentication boundaries").
+ * fields are returned. Ported from the extension's
+ * `src/services/signing/remoteEventVerifier.ts` and its `signVerifiedRemoteEvent`, reached
+ * from `src/services/signing/remoteSigner.ts` and covered upstream by
+ * `tests/remote-signer-integrity.test.ts`.
  *
  * Two deliberate differences from the extension's version:
  *

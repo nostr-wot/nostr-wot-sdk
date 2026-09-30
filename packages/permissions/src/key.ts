@@ -136,8 +136,14 @@ export function resolveDetailed<M extends string>(
    * read has to refuse it too.
    *
    * Only for 22242, not for 27235. NIP-42 is always cross-origin, so the extension's pipeline
-   * never honours a stored allow for it (`6db46fa`: `requiresDestination` is unconditionally
-   * true for nip42). NIP-98 to the page's OWN origin is a different case, one the extension
+   * never honours a stored allow for it. Upstream has since REPLACED the shape this used to
+   * cite: there is no `requiresDestination` on the extension's main any more. What expresses
+   * it now is `AuthenticationRequest.crossOrigin` in
+   * `src/domain/signing/authentication.ts`, which `parseAuthentication` sets to a literal
+   * `true` on the NIP-42 branch while computing `url.origin !== origin` on the NIP-98 one,
+   * and `src/services/signing/signer.ts`, which swaps the bucket key for
+   * `authenticationKey(authentication)` as soon as a request parses as authentication.
+   * NIP-98 to the page's OWN origin is a different case, one the extension
    * does honour from a stored rule, and the cascade cannot tell same-origin from cross-origin
    * because it is not given the origin. Refusing 27235 here would therefore diverge in the
    * restrictive direction on a legitimate path; `SignerCore` closes that half by never

@@ -66,8 +66,13 @@ export const NIP98_KIND = 27235;
  * `authentication.ts` holds the destination model that answers these properly. Everything in
  * this package that could otherwise hand out an unbounded credential consults this set.
  *
- * From the extension's `6db46fa`, "Bind Nostr authentication permissions to destinations and
- * accounts".
+ * From the extension, which has no such set: it spells the two kinds inline wherever the
+ * question comes up. `src/domain/signing/requestOrigin.ts` treats
+ * `kind === 27235 || kind === 22242` on a `nip07_signEvent` as an authentication request,
+ * `parseAuthentication` in `src/domain/signing/authentication.ts` returns `undefined` for
+ * anything else, and `src/screens/Settings/GlobalRules.tsx` keeps `signEvent:22242` and
+ * `signEvent:27235` out of the keys a rule can be added for. Naming the set is this
+ * package's change, so a reader will not find the constant upstream.
  */
 export const AUTHENTICATION_SIGN_KINDS: ReadonlySet<number> = new Set<number>([NIP42_KIND, NIP98_KIND]);
 

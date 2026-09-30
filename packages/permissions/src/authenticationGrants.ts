@@ -51,8 +51,14 @@
  * - **A stored value that is not an array reads as no grants**, which fails closed: a corrupt
  *   blob authorises nothing rather than throwing into a signing path.
  *
- * From the extension's `6db46fa` ("Bind Nostr authentication permissions to destinations and
- * accounts") and `ecac8ae` ("Simplify authentication review and remember scoped rejections").
+ * Ported from the extension's `src/services/permissions/authentication.ts`, which on the
+ * extension's current main still carries `listAuthenticationGrants`,
+ * `getAuthenticationDecision` (a site rejection beating a shared relay allowance),
+ * `matchesGrant`, `saveAuthenticationGrant` (refusing to overwrite a deny saved while an
+ * approval waited on the lock) and `revokeAuthenticationGrants`.
+ *
+ * The upstream commits were `6db46fa` and `ecac8ae`; both are provenance only and neither
+ * resolves from the extension's main, which was squashed and force-rewritten.
  */
 import type { KeyValueStore } from '@nostr-wot/storage';
 import {

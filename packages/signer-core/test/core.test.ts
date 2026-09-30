@@ -937,7 +937,9 @@ describe('execution', () => {
    * A bunker is a separate process reached over relays. Its answer used to be returned verbatim,
    * so it could hand back a signature over a DIFFERENT event than the one the request named: the
    * caller publishes it believing it asked for it, and every reader believes the account behind
-   * the key said it. From the extension's `5659678`.
+   * the key said it. From the extension's `signVerifiedRemoteEvent` in
+   * `src/services/signing/remoteEventVerifier.ts`, whose own suite is
+   * `tests/remote-signer-integrity.test.ts`.
    */
   describe('a remote signer cannot substitute the event it was asked to sign', () => {
     /** A remote account whose bunker answers with whatever `answer` builds. */
