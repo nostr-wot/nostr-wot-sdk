@@ -78,13 +78,24 @@ export interface WoTOptions {
  */
 export interface QueryOptions {
   /**
-   * Maximum search depth for this query
+   * Maximum search depth for this query.
+   *
+   * Clamped to the 1..5 the Oracle accepts before it is sent, because a value
+   * outside that range is refused with a 400 rather than answered at a
+   * different depth.
    */
   maxHops?: number;
   /**
    * Request timeout in milliseconds for this query
    */
   timeout?: number;
+  /**
+   * Ask the Oracle for the `bridges` on a details query.
+   *
+   * Off by default, matching the Oracle's own `include_bridges`, since it is
+   * extra graph work for a field most callers do not read.
+   */
+  includeBridges?: boolean;
 }
 
 /**
@@ -106,17 +117,22 @@ export interface DistanceResult {
    */
   hops: number;
   /**
-   * Number of distinct paths to target
+   * Number of shortest directed paths to the target, from the Oracle's
+   * `path_count`. It counts shortest paths whether or not bridges were
+   * requested, and saturates rather than overflowing.
    */
   paths: number;
   /**
-   * Pubkeys that bridge to the target (first hop on paths)
-   * Note: Only available from oracle API.
+   * The Oracle's `bridges`: the meeting nodes of its bidirectional search, which
+   * its documentation is explicit are "not the entire path or disjoint-path
+   * certificates".
+   *
+   * Present only when the query passed `includeBridges`, since the Oracle omits
+   * the field unless it was asked for.
    */
   bridges?: string[];
   /**
-   * Whether target follows source back
-   * Note: Only available from oracle API.
+   * Whether target follows source back, from the Oracle's `mutual_follow`.
    */
   mutual?: boolean;
 }

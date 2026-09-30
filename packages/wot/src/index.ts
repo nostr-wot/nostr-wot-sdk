@@ -30,4 +30,8 @@ export {
   DEFAULT_MAX_HOPS,
   DEFAULT_TIMEOUT,
   MAX_BATCH_SIZE,
+  ORACLE_MIN_HOPS,
+  ORACLE_MAX_HOPS,
+  ORACLE_MAX_BATCH_TARGETS,
+  clampMaxHops,
 } from './utils';

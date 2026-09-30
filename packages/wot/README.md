@@ -4,6 +4,30 @@ Web-of-Trust distance queries for Nostr. Computes hop distance between npubs
 over the public kind-3 follow graph via a WoT **Oracle** HTTP API, with a
 vanilla `WoT` class and thin React hooks on top.
 
+## Which Oracle
+
+[nostr-wot-oracle](https://github.com/nostr-wot/nostr-wot-oracle), the Rust service
+behind the project's public instance at `https://wot-oracle.mappingbitcoin.com`, which
+is this package's default. Point `oracle` at your own deployment of that same service
+to self-host; the base may include a path prefix.
+
+The wire shapes come from that repository's
+[`docs/API.md`](https://github.com/nostr-wot/nostr-wot-oracle/blob/main/docs/API.md) and
+`src/api/http.rs`. Three of its guarantees shape this API:
+
+- **`hops: null` is not "no connection".** It means no route was found within the depth
+  searched in the currently indexed graph. `getDistance` returns `null` and `getDetails`
+  returns `null` for it.
+- **A 404 is not an answer.** The Oracle reports an unreached target on a 200, so a 404
+  is a route it does not serve. It raises `NotFoundError` rather than being read as "not
+  in the web of trust", because a wrong base URL would otherwise look like an empty
+  graph.
+- **`maxHops` is clamped to 1..5.** Outside that range the Oracle answers 400, so a
+  requested depth is brought into range before it is sent rather than failing the query.
+
+Requests go to `GET /distance` and `POST /distance/batch`. Nothing is sent to a path
+under `/api`.
+
 ## Install
 
 ```bash
@@ -46,6 +70,8 @@ new WoT({
 });
 ```
 
+Per-query options are `{ maxHops?, timeout?, includeBridges? }`.
+
 ## API surface
 
 ```ts
@@ -67,7 +93,8 @@ class WoT {
   // Keep only the pubkeys within your WoT.
   filterByWoT(pubkeys: string[], options?: QueryOptions): Promise<string[]>;
 
-  // Distance + path/bridge details (oracle-provided).
+  // Distance, path count and mutual-follow flag. Pass `includeBridges` to also
+  // ask for the Oracle's `bridges`, which it omits unless requested.
   getDetails(target: string, options?: QueryOptions): Promise<DistanceResult | null>;
 
   // Batch hop distances (optionally with path counts).
