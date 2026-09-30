@@ -54,6 +54,7 @@ import {
   type KindFor,
   type KindForWrite,
 } from './key.js';
+import { AuthenticationGrants } from './authenticationGrants.js';
 import { AsyncLock } from './lock.js';
 import { originPermissionBucket, siteScopes, storageLabel } from './scope.js';
 import type {
@@ -142,6 +143,19 @@ const BLANKET_KEYS = [
  * anywhere else — a second extension context, another process, another instance.
  */
 export class Permissions {
+  /**
+   * Remembered consents for authenticating to a DESTINATION: the question a permission keyed
+   * by method and event kind cannot ask. See `authenticationGrants.ts`.
+   *
+   * Owned here rather than injected, and non-optional, for one reason: every path that clears a
+   * site's or an account's permissions has to revoke its authentication grants too, and a
+   * collaborator a host can forget to pass is a collaborator a host will forget to pass. A
+   * grant that outlives the disconnection of the site it was given to is exactly the
+   * resurrection this class already guards against for ordinary rules. It shares this store, so
+   * a host that has one has both.
+   */
+  readonly authentication: AuthenticationGrants;
+
   readonly #store: KeyValueStore;
   readonly #logger: PermissionLogger | undefined;
   readonly #lock = new AsyncLock();
@@ -153,6 +167,7 @@ export class Permissions {
   constructor(store: KeyValueStore, options: PermissionsOptions = {}) {
     this.#store = store;
     this.#logger = options.logger;
+    this.authentication = new AuthenticationGrants(store);
 
     // A store that cannot report changes simply does not get us this; our own writes
     // invalidate the cache directly, so only out-of-band edits are missed.
@@ -402,6 +417,10 @@ export class Permissions {
    */
   async clear(origin: string | undefined, accountId: string): Promise<void> {
     if (origin !== undefined) requireLabel(origin, 'origin');
+    // Before the lock, and before anything else: a destination grant is a permission, and
+    // clearing the rules for a site or an account while leaving its credentials behind is the
+    // resurrection case. Its own lock is separate, so there is no cycle to deadlock on.
+    await this.authentication.revoke({ ...(origin === undefined ? {} : { origin }), accountId });
     if (!origin) {
       await this.#lock.run(async () => {
         try {
@@ -434,6 +453,8 @@ export class Permissions {
    */
   async clearAllForOrigin(origin: string): Promise<void> {
     requireLabel(origin, 'origin');
+    // Every account's, because disconnecting a site is a full revocation.
+    await this.authentication.revoke({ origin });
     await this.#lock.run(async () => {
       const perms = await this.#draft();
       for (const scope of siteScopes(origin)) delete perms[scope];
@@ -453,6 +474,9 @@ export class Permissions {
     // Refusing _default is deliberate, not a swallowed bug: the shared bucket is not one
     // account's overrides, and deleting an account must never wipe every account's rules.
     if (accountId === DEFAULT_BUCKET) return;
+    // Including the shared-sites relay grants, which no per-site revocation reaches: deleting
+    // an account has to take every credential that was held under it.
+    await this.authentication.revoke({ accountId });
     await this.#lock.run(async () => {
       const perms = await this.#draft();
       let changed = false;

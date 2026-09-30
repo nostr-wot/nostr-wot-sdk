@@ -108,6 +108,53 @@ Dormant data survives a switch: only the active mode's bucket is read or written
 account's shared rules into its own bucket **before** switching to per-account mode, so the
 existing accounts keep what they had and only the new account starts fresh.
 
+## Authentication destinations
+
+A kind-22242 (NIP-42) or kind-27235 (NIP-98) event is not a publication, it is a **credential**,
+addressed to the relay or HTTP service named in its `relay` or `u` tag. A permission keyed by
+method and event kind cannot express that, so a remembered `signEvent:22242 = allow` is a
+credential for every relay a caller subsequently names: [GHSA-vx4h-56qj-wcp7][ghsa].
+
+So those events get their own question, with five parts instead of two.
+
+```ts
+import { parseAuthentication, Permissions } from '@nostr-wot/permissions';
+
+const permissions = new Permissions(store);
+
+// Throws for an authentication event that is invalid; undefined for an ordinary event.
+const auth = parseAuthentication(event, origin);
+if (auth) {
+  const decision = await permissions.authentication.decisionFor(accountId, origin, auth);
+  if (decision === 'deny') throw new Error('Authentication permission denied');
+  if (decision !== 'allow') {
+    // Prompt, naming auth.destination and auth.method. The scope the user picked must pass
+    // validAuthenticationScope: 'once', 'site', or 'connected-sites' for a relay only.
+    await permissions.authentication.save(accountId, origin, auth, scope, () => assertSession());
+  }
+}
+```
+
+`parseAuthentication` refuses credentials in the address, a fragment, control characters, a
+backslash, surrounding whitespace, a non-loopback plain-`http`/`ws` destination, competing tags,
+non-empty content, a bad HTTP method or payload digest, and an event older than 600 seconds
+(NIP-42) or 60 (NIP-98). It refuses a requesting origin that is not already canonical, because a
+host that passes a page URL through has not resolved the caller's identity.
+
+Three ordering properties hold, and each has its own test:
+
+- **Deny wins.** A site-specific `deny` beats a shared relay `allow`. Only an explicit
+  revocation lifts it.
+- **`*` is NIP-42 only.** `connected-sites` stores the origin `*`, honoured for a relay and never
+  for an HTTP service, whatever a stored record claims.
+- **A queued approval re-checks.** The deny check runs inside the write lock, after the read, so an
+  approval waiting on the lock cannot overwrite a rejection saved while it waited.
+
+`Permissions` owns the grant store rather than taking one, so `clear`, `clearAllForOrigin` and
+`clearForAccount` cannot forget to revoke the credentials they leave behind.
+
+[ghsa]: https://github.com/advisories/GHSA-vx4h-56qj-wcp7
+
 ## Storage compatibility
 
 Keys and shape are the browser extension's, unchanged, so a migrated extension reads its own data:
@@ -117,7 +164,17 @@ Keys and shape are the browser extension's, unchanged, so a migrated extension r
   "signerPermissions": {
     "example.com": { "_default": { "signEvent:1": "allow" }, "acct_abc": { "*": "deny" } }
   },
-  "signerUseGlobalDefaults": true
+  "signerUseGlobalDefaults": true,
+  "authenticationGrants": [
+    {
+      "id": "[\"acct_abc\",\"*\",\"nip42\",\"wss://relay.example/\",\"\"]",
+      "decision": "allow",
+      "accountId": "acct_abc",
+      "origin": "*",
+      "protocol": "nip42",
+      "destination": "wss://relay.example/"
+    }
+  ]
 }
 ```
 

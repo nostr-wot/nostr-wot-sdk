@@ -69,4 +69,10 @@ export {
 
 export { canonicalHostname, canonicalHttpOrigin, siteScopes, hasSiteScope, originPermissionBucket, storageLabel } from './scope.js';
 
+export {
+  AuthenticationGrants,
+  SHARED_SITES_ORIGIN,
+  type AuthenticationGrantFilter,
+} from './authenticationGrants.js';
+
 export { Permissions, type PermissionsOptions } from './store.js';
