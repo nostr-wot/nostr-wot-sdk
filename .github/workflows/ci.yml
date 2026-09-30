@@ -54,6 +54,21 @@ jobs:
           git checkout -- tsconfig.base.json
           npm run check:dist
 
+      - name: bunker check:dist must fail on a tampered or incomplete copy
+        # The repo-wide check:dist above proves the guard passes on a good build. These
+        # prove it actually rejects a bad one, which is what a vendored tarball needs.
+        run: |
+          cp -R packages/bunker/dist /tmp/tampered && echo "garbage" >> /tmp/tampered/index.js
+          if node packages/bunker/scripts/check-dist.mjs --dist /tmp/tampered; then echo "check:dist passed a tampered copy" && exit 1; fi
+          cp -R packages/bunker/dist /tmp/partial && rm /tmp/partial/index.cjs /tmp/partial/index.d.ts
+          if node packages/bunker/scripts/check-dist.mjs --dist /tmp/partial; then echo "check:dist passed a partial copy" && exit 1; fi
+
+      - name: The packed bunker tarball carries a dist that matches this tree
+        run: |
+          tarball=$(cd packages/bunker && npm pack --silent | tail -1)
+          mkdir -p /tmp/vendored && tar -xzf "packages/bunker/$tarball" -C /tmp/vendored
+          node packages/bunker/scripts/check-dist.mjs --dist /tmp/vendored/package/dist
+
       - name: Type check
         run: npm run typecheck
 
