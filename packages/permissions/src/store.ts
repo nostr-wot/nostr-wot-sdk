@@ -42,6 +42,7 @@ import type { KeyValueStore } from '@nostr-wot/storage';
 import {
   DEFAULT_BUCKET,
   DM_SIGN_KINDS,
+  NIP42_KIND,
   GLOBAL_DEFAULTS_KEY,
   MIGRATION_VERSION,
   MIGRATION_VERSION_KEY,
@@ -126,6 +127,14 @@ const RETIRED_FORWARD = 'forward' as PermissionDecision;
  * because the cascade still consults the bare method and the wildcard, so it is a refusal
  * in force, and one a remembered "deny, every kind" writes today.
  */
+/**
+ * The permission key for a NIP-42 relay-authentication event.
+ *
+ * Named rather than spelled inline so the write refusal and `resolveDetailed`'s read refusal
+ * cannot drift apart, and derived from the kind so it cannot drift from `permissionKey` either.
+ */
+const RELAY_AUTH_KEY = `signEvent:${NIP42_KIND}`;
+
 const BLANKET_KEYS = [
   'signEvent',
   'nip04Encrypt',
@@ -347,6 +356,16 @@ export class Permissions {
     if (DM_PERMISSION_KEYS.includes(key)) {
       throw new Error(
         `${key} is never consulted: DM sign kinds resolve to "sendMessages". Write that key instead.`,
+      );
+    }
+    // A kind-22242 allow is an unbounded credential: the key has no destination in it, so the
+    // rule means "authenticate to every relay this site names". `resolveDetailed` already
+    // refuses to honour one, which covers buckets already in the field; this refuses to add
+    // another, for the same reason DM-kind keys are refused. A `deny` is a refusal in force and
+    // is written as normal. The destination-scoped question lives on `authentication`.
+    if (key === RELAY_AUTH_KEY && decision === 'allow') {
+      throw new Error(
+        `${RELAY_AUTH_KEY} cannot be allowed: it names no relay, so an allow there is a credential for every relay. Record a destination grant on \`authentication\` instead.`,
       );
     }
     // Written under the canonical spelling, so the label a read consults is the one a write

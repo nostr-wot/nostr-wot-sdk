@@ -6,7 +6,7 @@
  * total: given a bucket, a method and a kind there is exactly one answer, and the answer
  * does not depend on anything outside the arguments.
  */
-import { DM_SIGN_KINDS } from './constants.js';
+import { DM_SIGN_KINDS, NIP42_KIND } from './constants.js';
 import type { PermissionBucket, PermissionDecision } from './types.js';
 
 /**
@@ -123,6 +123,30 @@ export function resolveDetailed<M extends string>(
     if (bucket[key] === 'deny') return { decision: 'deny', key };
   }
   if (method === 'signEvent' && !isKind(kind)) return { decision: 'ask' };
+  /**
+   * A kind-22242 event is a credential for the relay it names, and nothing in this bucket
+   * names a relay. So no rule here can authorise one: `ask` is the strongest answer available,
+   * whatever the bucket says, and `@nostr-wot/permissions`' `AuthenticationGrants` is what
+   * answers the question that has a destination in it.
+   *
+   * This is GHSA-vx4h-56qj-wcp7 in the small. `signEvent:22242 = allow` reads as "this site may
+   * authenticate to relays" and behaves as "this site may authenticate to EVERY relay it names
+   * from now on, as this account" — an unbounded credential from a rule the user believed was
+   * bounded. Buckets in the field already hold one, so refusing the write is not enough; the
+   * read has to refuse it too.
+   *
+   * Only for 22242, not for 27235. NIP-42 is always cross-origin, so the extension's pipeline
+   * never honours a stored allow for it (`6db46fa`: `requiresDestination` is unconditionally
+   * true for nip42). NIP-98 to the page's OWN origin is a different case, one the extension
+   * does honour from a stored rule, and the cascade cannot tell same-origin from cross-origin
+   * because it is not given the origin. Refusing 27235 here would therefore diverge in the
+   * restrictive direction on a legitimate path; `SignerCore` closes that half by never
+   * WRITING an allow for either kind.
+   *
+   * Deny still wins, above: a refusal in force is a refusal, and a remembered "deny, every
+   * kind" writes exactly one of these keys.
+   */
+  if (method === 'signEvent' && kind === NIP42_KIND) return { decision: 'ask' };
   for (const key of consulted) {
     if (bucket[key]) return { decision: bucket[key], key };
   }

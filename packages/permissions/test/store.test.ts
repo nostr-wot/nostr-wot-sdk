@@ -1129,3 +1129,33 @@ describe('writing a retired key', () => {
     );
   });
 });
+
+describe('a relay-authentication allow cannot be written either', () => {
+  test('saveDirect refuses an allow under signEvent:22242 and says where it belongs', async () => {
+    const permissions = new Permissions(new MemoryStore());
+    await expect(permissions.saveDirect('example.com', 'signEvent:22242', 'allow', '_default')).rejects.toThrow(
+      /credential for every relay/,
+    );
+    // Through `save`, which is the path a "remember this" actually takes.
+    await expect(permissions.save('example.com', 'signEvent', 22242, 'allow', '_default')).rejects.toThrow(
+      /credential for every relay/,
+    );
+  });
+
+  test('a deny and an ask are written as normal, because a refusal in force is a refusal', async () => {
+    const store = new MemoryStore();
+    const permissions = new Permissions(store);
+    await permissions.save('example.com', 'signEvent', 22242, 'deny', '_default');
+    await permissions.saveDirect('other.com', 'signEvent:22242', 'ask', '_default');
+    expect(await permissions.check('example.com', 'signEvent', 22242, '_default')).toBe('deny');
+    expect((await raw(store))['other.com']!['_default']!['signEvent:22242']).toBe('ask');
+  });
+
+  test('nothing stops an existing bucket being read, it just cannot answer allow', async () => {
+    // The refusal above stops a new one being written; buckets in the field already hold one,
+    // and this is the half that makes those inert.
+    const permissions = new Permissions(seeded({ 'example.com': { _default: { 'signEvent:22242': 'allow' } } }));
+    expect(await permissions.check('example.com', 'signEvent', 22242, '_default')).toBe('ask');
+    expect(await permissions.getForOrigin('example.com', '_default')).toEqual({ 'signEvent:22242': 'allow' });
+  });
+});

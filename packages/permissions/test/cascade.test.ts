@@ -17,6 +17,7 @@ import {
   type PermissionBucket,
   type PermissionDecision,
   resolveDetailed,
+  resolveBlanketSignEvent,
 } from '../src/index.js';
 
 describe('permissionKey', () => {
@@ -167,5 +168,53 @@ describe('a signEvent read without an integer kind, at the exported functions', 
     for (const kind of [Number.NaN, 1.5, '1', Infinity]) {
       expect(() => permissionKey('signEvent', kind as never)).toThrow(/kind/i);
     }
+  });
+});
+
+/**
+ * GHSA-vx4h-56qj-wcp7, in the one place the cascade can answer it.
+ *
+ * A kind-22242 event is a credential for the relay it names, and a bucket keyed by method and
+ * kind names no relay. So an `allow` under `signEvent:22242` reads to a user as "this site may
+ * authenticate to relays" and behaves as "to EVERY relay it names, as this account". Buckets in
+ * the field already hold one, so refusing the write would not be enough on its own.
+ */
+describe('a stored relay-authentication allow is not a credential', () => {
+  const kinds = { relay: 22242, http: 27235 } as const;
+
+  test('an allow at the kind, method or wildcard level all answer ask for kind 22242', () => {
+    for (const bucket of [
+      { 'signEvent:22242': 'allow' },
+      { signEvent: 'allow' },
+      { '*': 'allow' },
+      { 'signEvent:22242': 'allow', signEvent: 'allow', '*': 'allow' },
+      { 'signEvent:22242': 'ask' },
+    ] as PermissionBucket[]) {
+      expect(resolve(bucket, 'signEvent', kinds.relay)).toBe('ask');
+    }
+  });
+
+  test('a deny is still honoured, at every level', () => {
+    expect(resolve({ 'signEvent:22242': 'deny' }, 'signEvent', kinds.relay)).toBe('deny');
+    expect(resolve({ signEvent: 'deny' }, 'signEvent', kinds.relay)).toBe('deny');
+    expect(resolve({ '*': 'deny' }, 'signEvent', kinds.relay)).toBe('deny');
+    // And the denying level is still reported, so a host can say which rule refused.
+    expect(resolveDetailed({ 'signEvent:22242': 'deny' }, 'signEvent', kinds.relay).key).toBe('signEvent:22242');
+  });
+
+  test('no other kind is affected, including NIP-98', () => {
+    // 27235 is deliberately untouched here: the cascade is not given the origin, so it cannot
+    // tell a same-origin NIP-98 request (which a stored rule may legitimately answer) from a
+    // cross-origin one. SignerCore closes that half by never writing an allow for either kind.
+    expect(resolve({ 'signEvent:27235': 'allow' }, 'signEvent', kinds.http)).toBe('allow');
+    expect(resolve({ '*': 'allow' }, 'signEvent', 1)).toBe('allow');
+    expect(resolve({ signEvent: 'allow' }, 'signEvent', 22243)).toBe('allow');
+    expect(resolve({ 'signEvent:22242': 'allow' }, 'signEvent', 1)).toBe('ask');
+  });
+
+  test('the blanket read is unchanged, because it is a settings question and not a gate', () => {
+    // `checkBlanketSignEvent` answers "did the user say yes to signing in general?". Folding
+    // this rule into it would make a settings screen unable to read back what it was told.
+    expect(resolveBlanketSignEvent({ signEvent: 'allow' }).decision).toBe('allow');
   });
 });

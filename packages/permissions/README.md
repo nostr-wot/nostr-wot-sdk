@@ -153,6 +153,13 @@ Three ordering properties hold, and each has its own test:
 `Permissions` owns the grant store rather than taking one, so `clear`, `clearAllForOrigin` and
 `clearForAccount` cannot forget to revoke the credentials they leave behind.
 
+A stored `signEvent:22242` **allow** never authorises. `check` answers `ask` for that kind
+however broadly the bucket allows, because the key names no relay and buckets in the field
+already hold one; `saveDirect` refuses to write another. A `deny` is honoured at every level,
+since a refusal in force is a refusal. `signEvent:27235` is deliberately untouched: the cascade
+is not given the origin, so it cannot tell a same-origin NIP-98 request from a cross-origin one,
+and `SignerCore` closes that half by never remembering an allow for either kind.
+
 [ghsa]: https://github.com/advisories/GHSA-vx4h-56qj-wcp7
 
 ## Storage compatibility
