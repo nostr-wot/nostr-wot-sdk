@@ -80,11 +80,32 @@ jobs:
       - name: Verify release
         run: npm run typecheck && npm run test:run
 
+      - name: Every packed tarball carries the dist that was just verified
+        # No package rebuilds during pack or publish any more (there is no `prepack`), so the
+        # tarball `npm publish` would upload has to hold exactly the bytes check:dist verified
+        # above. While `prepack: npm run build` was set, `changeset publish` rebuilt and
+        # re-stamped every dist/ during the publish itself, so what landed on npm came from a
+        # build no gate had seen.
+        run: |
+          for pkg in $(node scripts/dist-stamp.mjs packages); do
+            name=$(basename "$pkg")
+            tarball=$(cd "$pkg" && npm pack --silent | tail -1)
+            rm -rf "/tmp/packed-$name" && mkdir -p "/tmp/packed-$name"
+            tar -xzf "$pkg/$tarball" -C "/tmp/packed-$name"
+            node scripts/dist-stamp.mjs check "$pkg" --dist "/tmp/packed-$name/package/dist"
+            rm "$pkg/$tarball"
+          done
+
       # `changeset publish` skips anything already on npm at its current
       # version, so re-running this is safe.
       # Always runs. `changeset publish` skips any version already on npm, so this
       # is idempotent — and gating it on changesets being present would mean a run
       # that consumed them (or a re-run after one did) never publishes at all.
+      #
+      # `npm run release` is `node scripts/release-preflight.mjs && changeset publish`: it
+      # re-reads the dist/ this job built and verified rather than building again, so the
+      # bytes published are the bytes checked. It used to be `npm run build && changeset
+      # publish`, which rebuilt everything after the gate had passed.
       - name: Publish to npm
         run: npm run release
         env:

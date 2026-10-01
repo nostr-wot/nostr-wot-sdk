@@ -37,6 +37,7 @@ import {
   stampDist,
   toolVersions,
 } from '../../../scripts/dist-stamp.mjs';
+import { declaredEntryPoints, releaseBlockers } from '../../../scripts/release-preflight.mjs';
 
 const ROOT = join(import.meta.dirname, '..', '..', '..');
 const SCRIPT = join(ROOT, 'scripts', 'dist-stamp.mjs');
@@ -46,9 +47,6 @@ const SCRIPT = join(ROOT, 'scripts', 'dist-stamp.mjs');
  * could not detect a tampered `dist/` now can.
  */
 const WIRED = ['storage', 'permissions', 'accounts', 'vault', 'signers', 'bunker', 'pq', 'signer-core'] as const;
-
-/** The five signer-stack packages the app vendors by path. */
-const SHARED = ['storage', 'vault', 'accounts', 'permissions', 'signer-core'] as const;
 
 /** The stamp a build left in a dist directory. */
 const readStamp = (dir: string) => JSON.parse(readFileSync(join(dir, STAMP), 'utf8')) as { inputs: string; outputs: string; tools: string };
@@ -278,9 +276,25 @@ describe('every package with a check is wired to the one implementation', () => 
     }
   });
 
-  test.each(SHARED)('%s rebuilds before pack', (name) => {
-    const scripts = JSON.parse(readFileSync(join(ROOT, 'packages', name, 'package.json'), 'utf8')).scripts as Record<string, string>;
-    expect(scripts['prepack']).toBe('npm run build');
+  test('no workspace rebuilds itself during pack or publish', () => {
+    // `prepack: npm run build` was set on the six unpublished packages, so `changeset publish`
+    // rebuilt and re-stamped every dist/ during the publish, after CI had built it and
+    // check:dist had verified it: npm got a build no gate had seen. A `prepublishOnly` doing
+    // the same was already dropped for the sharper version of it, where the rebuilds raced
+    // through a shared dist/ and left @nostr-wot/dm unpublished twice. What publishes is now
+    // what was verified, which is only true while nothing regenerates dist/ late.
+    const workspaces = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).workspaces as string[];
+    for (const relative of workspaces) {
+      const scripts = (JSON.parse(readFileSync(join(ROOT, relative, 'package.json'), 'utf8')).scripts ?? {}) as Record<string, string>;
+      for (const hook of ['prepack', 'prepublishOnly', 'prepublish', 'prepare']) {
+        expect({ [relative]: scripts[hook] }).toEqual({ [relative]: undefined });
+      }
+    }
+  });
+
+  test('the release gate verifies the build instead of making a new one', () => {
+    const scripts = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).scripts as Record<string, string>;
+    expect(scripts['release']).toBe('node scripts/release-preflight.mjs && changeset publish');
   });
 
   test('the root check runs every workspace that has one', () => {
@@ -290,6 +304,116 @@ describe('every package with a check is wired to the one implementation', () => 
 
   test('the inputs are what a build reads', () => {
     expect(BUILD_INPUTS).toEqual(['src', 'tsup.config.ts', 'tsconfig.json', 'package.json']);
+  });
+});
+
+describe('the release preflight', () => {
+  // `npm run release` runs this before `changeset publish`. It is the guarantee that replaced
+  // `prepack`: a publish from a tree with no build, or with a dist/ that is not the one the
+  // gate verified, stops here instead of uploading an empty or unverified package.
+
+  /** A workspace root: one package wired to the shared check, one plain published package. */
+  function fixtureRoot(): string {
+    const root = mkdtempSync(join(tmpdir(), 'preflight-'));
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'fixture-root', private: true, workspaces: ['packages/stamped', 'packages/plain'] }));
+    const stamped = join(root, 'packages', 'stamped');
+    mkdirSync(join(stamped, 'src'), { recursive: true });
+    writeFileSync(join(stamped, 'src', 'index.ts'), 'export const one = 1;\n');
+    writeFileSync(join(stamped, 'tsup.config.ts'), "export default { entry: ['src/index.ts'] };\n");
+    writeFileSync(join(stamped, 'tsconfig.json'), '{ "compilerOptions": { "outDir": "dist" } }\n');
+    writeFileSync(
+      join(stamped, 'package.json'),
+      JSON.stringify({
+        name: '@fixture/stamped',
+        version: '1.0.0',
+        main: './dist/index.js',
+        types: './dist/index.d.ts',
+        scripts: { 'check:dist': 'node ../../scripts/dist-stamp.mjs check' },
+      }),
+    );
+    mkdirSync(join(stamped, 'dist'));
+    writeFileSync(join(stamped, 'dist', 'index.js'), 'export const one = 1;\n');
+    writeFileSync(join(stamped, 'dist', 'index.d.ts'), 'export declare const one: 1;\n');
+    stampDist(stamped);
+    const plain = join(root, 'packages', 'plain');
+    mkdirSync(join(plain, 'dist'), { recursive: true });
+    writeFileSync(join(plain, 'dist', 'index.js'), 'export const two = 2;\n');
+    writeFileSync(
+      join(plain, 'package.json'),
+      JSON.stringify({ name: '@fixture/plain', version: '1.0.0', exports: { '.': { import: './dist/index.js' } } }),
+    );
+    return root;
+  }
+
+  let root: string;
+  beforeEach(() => {
+    root = fixtureRoot();
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const preflight = (dir: string) => spawnSync(process.execPath, [join(ROOT, 'scripts', 'release-preflight.mjs'), dir], { encoding: 'utf8' });
+
+  test('a tree whose packages are all built and stamped passes', () => {
+    expect(releaseBlockers(root)).toEqual([]);
+    expect(preflight(root)).toMatchObject({ status: 0 });
+  });
+
+  test('a publish from a clean checkout is refused: the dist the package promises is not there', () => {
+    // The case that makes removing `prepack` safe to do. Without this, nothing rebuilds and
+    // nothing complains, and npm gets a package whose tarball holds no code at all.
+    rmSync(join(root, 'packages', 'stamped', 'dist'), { recursive: true });
+    rmSync(join(root, 'packages', 'plain', 'dist'), { recursive: true });
+    expect(releaseBlockers(root)).toEqual([
+      expect.stringContaining('@fixture/stamped: no index.js present'),
+      expect.stringContaining('@fixture/stamped: promises ./dist/index.js'),
+      expect.stringContaining('@fixture/stamped: promises ./dist/index.d.ts'),
+      expect.stringContaining('@fixture/plain: promises ./dist/index.js'),
+    ]);
+    const run = preflight(root);
+    expect(run.status).toBe(1);
+    expect(run.stderr).toMatch(/must not be published/i);
+  });
+
+  test('a package with no stamp is still held to the entry points it promises', () => {
+    // @fixture/plain has no check:dist, as several published workspaces have none. The weaker
+    // guarantee is that it cannot publish a tarball missing the file its exports name.
+    rmSync(join(root, 'packages', 'plain', 'dist', 'index.js'));
+    expect(releaseBlockers(root)).toEqual(['@fixture/plain: promises ./dist/index.js and has not built it; run `npm run build`']);
+    expect(preflight(root).status).toBe(1);
+  });
+
+  test('a stale dist is refused even though every promised file is present', () => {
+    writeFileSync(join(root, 'packages', 'stamped', 'src', 'index.ts'), 'export const one = 2;\n');
+    expect(releaseBlockers(root)).toEqual([expect.stringContaining('(stale)')]);
+    expect(preflight(root).status).toBe(1);
+  });
+
+  test('a tampered dist is refused: the files are all there and are not what was built', () => {
+    writeFileSync(join(root, 'packages', 'stamped', 'dist', 'index.js'), 'export const one = 666;\n');
+    expect(releaseBlockers(root)).toEqual([expect.stringContaining('(tampered)')]);
+    expect(preflight(root).status).toBe(1);
+  });
+
+  test('a private workspace is not held to entry points it never publishes', () => {
+    const manifest = join(root, 'packages', 'plain', 'package.json');
+    const plain = JSON.parse(readFileSync(manifest, 'utf8'));
+    rmSync(join(root, 'packages', 'plain', 'dist', 'index.js'));
+    writeFileSync(manifest, JSON.stringify({ ...plain, private: true }));
+    expect(releaseBlockers(root)).toEqual([]);
+  });
+
+  test('every entry point a manifest promises is collected, wildcards excepted', () => {
+    expect(
+      declaredEntryPoints({
+        main: './dist/index.cjs',
+        module: './dist/index.js',
+        types: './dist/index.d.ts',
+        bin: { tool: './dist/cli.js' },
+        exports: { '.': { import: './dist/index.js', require: './dist/index.cjs' }, './styles.css': './dist/styles.css', './*': './dist/*.js' },
+      }),
+    ).toEqual(['./dist/index.cjs', './dist/index.js', './dist/index.d.ts', './dist/cli.js', './dist/styles.css']);
   });
 });
 

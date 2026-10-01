@@ -48,5 +48,13 @@ To publish a package (use the npmrc approach — env var alone does not work):
 cd /Users/dandelionlabs/development/personal/nostr-wot-sdk
 source .env && npm config set //registry.npmjs.org/:_authToken $NPM_TOKEN
 npm run build -w @nostr-wot/<name>   # required: packages no longer self-build on publish
+npm run check:dist -w @nostr-wot/<name>   # the published bytes are whatever dist/ holds now
 cd packages/<name> && npm publish --access public
 ```
+
+No package has a `prepack` or a `prepublishOnly` hook, so nothing rebuilds `dist/` during a
+pack or a publish. That is deliberate: what goes to npm is then the build that was verified,
+not a fresh one made after the gate passed. The cost is that `dist/` has to be there and
+current already, which is what `npm run check:dist` says and what
+`scripts/release-preflight.mjs` enforces for the whole repo before `changeset publish`
+(`npm run release`).
