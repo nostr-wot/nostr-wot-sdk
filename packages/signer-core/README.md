@@ -26,6 +26,18 @@ is available. Reordering these steps is a regression, not a refactor.
 npm i @nostr-wot/signer-core
 ```
 
+### Module format
+
+ESM only, as every package in this release is. `import` it, or `await import()` it from
+CommonJS; there is no `require` entry point. One format rather than two is deliberate: a dual
+CJS/ESM build can be loaded twice in one process, once per format, and a package that holds
+state (a vault session, a bunker's client and secret registries) would then keep two of it,
+which in a signer is a defect rather than an inconvenience.
+
+The two packages the stack already published, `@nostr-wot/pq` and `@nostr-wot/signers`, do
+still ship CommonJS beside ESM. Dropping it there would break consumers who have it today, so
+it stays, and this is where that split is written down.
+
 ## Use
 
 ```ts

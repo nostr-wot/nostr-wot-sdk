@@ -2,7 +2,10 @@ import { defineConfig } from 'tsup';
 
 export default defineConfig({
   entry: ['src/index.ts'],
-  format: ['cjs', 'esm'],
+  // ESM only, as every package in this release is. A dual build of a package that holds
+  // process state (here the client and secret registries, in the signer stack a vault session)
+  // can be loaded twice in one process and keep two of that state.
+  format: ['esm'],
   dts: true,
   clean: true,
   sourcemap: true,
