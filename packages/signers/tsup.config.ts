@@ -1,5 +1,4 @@
 import { defineConfig } from 'tsup';
-import { stampDist } from '../../scripts/dist-stamp.mjs';
 
 export default defineConfig({
   entry: ['src/index.ts'],
@@ -11,10 +10,7 @@ export default defineConfig({
   outDir: 'dist',
   treeshake: true,
   splitting: false,
-  // Stamp dist/ with a hash of what it was built from; `npm run check:dist` compares. A
-  // function, not a shell string: tsup 8.5 runs a string through tinyexec, which mangles
-  // any `../` in it, and the script lives at the repo root.
-  onSuccess: async () => {
-    stampDist(process.cwd());
-  },
+  // The dist stamp is written by the build script after tsup exits, not from onSuccess: that
+  // hook runs concurrently with the declaration worker, so the hash of the outputs would cover
+  // the previous `.d.ts` or none at all. See `scripts/dist-stamp.mjs`.
 });

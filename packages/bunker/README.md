@@ -214,17 +214,21 @@ and see the package report for the upstream defect.
 
 ## Vendoring
 
-Prefer `npm pack`: `prepack` rebuilds, so a tarball is never stale. The build script
-(`tsup && node scripts/stamp-dist.mjs`, after tsup and its declaration worker have both exited)
-writes `dist/.src-hash`: a hash of every build input (`src/`, `tsup.config.ts`, `package.json`, the TypeScript config as tsc resolves it so the
-monorepo's `tsconfig.base.json` counts, and the tsup/esbuild/typescript versions) and a hash of
-every file the build produced. `npm run check:dist -w @nostr-wot/bunker` fails when `dist/` is
-missing, behind any input, or no longer what the build produced (tampered or partially deleted);
-`--dist DIR` checks a packed or vendored copy against this tree. The CI workflow runs it after
-the build, proves it fails on a tampered and on a partial copy, and checks the packed tarball;
-until this branch has a pull request those steps have only been run locally, command for
-command. There is deliberately no vitest test for this: `dist/` is gitignored, so such a test
-would run against nothing in CI.
+Build, then `npm pack`. The build script (`tsup && node ../../scripts/dist-stamp.mjs stamp`,
+the stamp written after tsup and its declaration worker have both exited) writes
+`dist/.src-hash`: a hash of every build input (`src/`, `tsup.config.ts`, `tsconfig.json`,
+`package.json`, the TypeScript config as tsc resolves it so the monorepo's `tsconfig.base.json`
+counts, and the tsup/esbuild/typescript versions) and a hash of every file the build produced.
+`npm run check:dist -w @nostr-wot/bunker` fails when `dist/` is missing, behind any input, or no
+longer what the build produced (tampered, or partially copied or deleted); `--dist DIR` checks a
+packed or vendored copy against this tree.
+
+That machinery is no longer this package's own. It lives at `scripts/dist-stamp.mjs` and every
+package in the repo with a `check:dist` uses it, which is how its neighbours got the outputs
+hash they were missing. The CI workflow runs the check after the build, proves it bites on a
+tampered and on a partial copy of every one of those packages, and checks each packed tarball.
+`packages/vault/test/dist-freshness.test.ts` holds the negative cases against a fixture package,
+and against a copy of a real `dist/` when one has been built.
 
 ## React Native
 

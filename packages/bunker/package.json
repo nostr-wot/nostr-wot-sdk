@@ -44,12 +44,12 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsup && node scripts/stamp-dist.mjs",
+    "build": "tsup && node ../../scripts/dist-stamp.mjs stamp",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:run": "vitest run",
-    "check:dist": "node scripts/check-dist.mjs",
+    "check:dist": "node ../../scripts/dist-stamp.mjs check",
     "prepack": "npm run build"
   },
   "dependencies": {

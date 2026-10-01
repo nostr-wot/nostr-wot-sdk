@@ -1,30 +1,57 @@
 /**
- * `dist/` freshness, proven to fail before it is trusted.
+ * `dist/` freshness and integrity, proven to fail before it is trusted.
  *
- * The shared packages are vendored by path into the app, so a `dist/` that is behind its
- * source ships stale code with a current version number. Every build stamps `dist/.src-hash`
- * with a hash over its inputs (`src/`, `tsup.config.ts`, `tsconfig.json`, `package.json`),
- * and `npm run check:dist` refuses when the stamp is missing or does not match the tree.
+ * The shared packages are vendored by path into the app and published to npm without a
+ * rebuild, so a `dist/` that is behind its source, or that was edited or half copied after the
+ * build, ships as if it were the verified thing. Every build stamps `dist/.src-hash` with a
+ * hash over its inputs (`src/`, `tsup.config.ts`, `tsconfig.json`, `package.json`, the
+ * resolved TypeScript config, the toolchain) AND a hash over every file it wrote into `dist/`,
+ * and `npm run check:dist` refuses when either does not match.
  *
  * The bunker's first attempt at this was vacuous in CI: `dist/` is gitignored, so a check
  * that only compared hashes passed with no `dist/` at all. So this suite does not check that
  * the real packages are fresh (a fresh build is what CI just made, which proves nothing). It
  * builds a fixture package in a temp dir and shows the check going red in each way that
- * matters: a stale build, a config-only edit, missing output. And it pins the wiring, so a
- * shared package cannot drop out of the check without failing here.
+ * matters: a stale build, a config-only edit, missing output, an edited output, a partial copy.
+ * And it pins the wiring, so a package cannot drop out of the check without failing here.
  *
- * Lives beside `boundaries.test.ts` for the same reason it does: one guard over all five.
+ * The one thing it does read from the real tree is a *copy* of each package's `dist/` when one
+ * has been built, re-broken in the temp copy. That is skipped when there is no build, which is
+ * why the fixture cases carry the weight.
+ *
+ * Lives beside `boundaries.test.ts` for the same reason it does: one guard over all of them.
  */
 import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { BUILD_INPUTS, checkDist, hashBuildInputs, resolvedTsConfig, stampDist, toolVersions } from '../../../scripts/dist-stamp.mjs';
+import {
+  BUILD_INPUTS,
+  checkDist,
+  hashBuildInputs,
+  hashOutputs,
+  packagesWithCheckDist,
+  resolvedTsConfig,
+  STAMP,
+  stampDist,
+  toolVersions,
+} from '../../../scripts/dist-stamp.mjs';
 
 const ROOT = join(import.meta.dirname, '..', '..', '..');
 const SCRIPT = join(ROOT, 'scripts', 'dist-stamp.mjs');
+/**
+ * Every package wired to the shared script, in workspace order. One list, because there is now
+ * one implementation: the bunker's second copy of this machinery is gone, so the packages that
+ * could not detect a tampered `dist/` now can.
+ */
+const WIRED = ['storage', 'permissions', 'accounts', 'vault', 'signers', 'bunker', 'pq', 'signer-core'] as const;
+
+/** The five signer-stack packages the app vendors by path. */
 const SHARED = ['storage', 'vault', 'accounts', 'permissions', 'signer-core'] as const;
+
+/** The stamp a build left in a dist directory. */
+const readStamp = (dir: string) => JSON.parse(readFileSync(join(dir, STAMP), 'utf8')) as { inputs: string; outputs: string; tools: string };
 
 let pkg: string;
 
@@ -57,10 +84,14 @@ afterEach(() => {
 const cli = (...args: string[]) => spawnSync(process.execPath, [SCRIPT, ...args], { encoding: 'utf8' });
 
 describe('the check can fail', () => {
-  test('a fresh build passes, and the stamp is the hash of the inputs', () => {
-    expect(checkDist(pkg)).toEqual({ ok: true, hash: hashBuildInputs(pkg) });
-    expect(readFileSync(join(pkg, 'dist', '.src-hash'), 'utf8').trim()).toBe(hashBuildInputs(pkg));
+  test('a fresh build passes, and the stamp holds the hash of the inputs and of the outputs', () => {
+    const dist = join(pkg, 'dist');
+    expect(checkDist(pkg)).toEqual({ ok: true, inputs: hashBuildInputs(pkg), outputs: hashOutputs(dist) });
+    expect(readStamp(dist)).toEqual({ inputs: hashBuildInputs(pkg), outputs: hashOutputs(dist), tools: toolVersions() });
     expect(hashBuildInputs(pkg)).toMatch(/^[0-9a-f]{64}$/);
+    expect(hashOutputs(dist)).toMatch(/^[0-9a-f]{64}$/);
+    // The stamp is not part of what it stamps, or no stamp could ever be written.
+    expect(hashOutputs(dist)).toBe(hashOutputs(dist));
   });
 
   test('a stale build fails: the source moved after the build', () => {
@@ -79,9 +110,9 @@ describe('the check can fail', () => {
   test('missing output fails, with or without a stamp', () => {
     rmSync(join(pkg, 'dist'), { recursive: true });
     expect(checkDist(pkg)).toMatchObject({ ok: false, reason: 'missing' });
-    // A stamp alone is not a build. This is the vacuous case: dist/ absent, hash "matching".
+    // A stamp alone is not a build. This is the vacuous case: dist/ absent, hashes "matching".
     mkdirSync(join(pkg, 'dist'));
-    writeFileSync(join(pkg, 'dist', '.src-hash'), hashBuildInputs(pkg) + '\n');
+    writeFileSync(join(pkg, 'dist', STAMP), JSON.stringify({ inputs: hashBuildInputs(pkg), outputs: hashOutputs(join(pkg, 'dist')), tools: toolVersions() }));
     expect(checkDist(pkg)).toMatchObject({ ok: false, reason: 'missing' });
     // And a build without its types is not a build either.
     writeFileSync(join(pkg, 'dist', 'index.js'), '');
@@ -89,7 +120,7 @@ describe('the check can fail', () => {
   });
 
   test('a build with no stamp fails: it predates the check, or was made some other way', () => {
-    rmSync(join(pkg, 'dist', '.src-hash'));
+    rmSync(join(pkg, 'dist', STAMP));
     expect(checkDist(pkg)).toMatchObject({ ok: false, reason: 'unstamped' });
   });
 
@@ -115,8 +146,9 @@ describe('the check can fail', () => {
 
   test('the toolchain is part of the hash: tsup, esbuild and typescript versions', () => {
     expect(toolVersions()).toMatch(/^tsup@\d+\.\d+\.\d+,esbuild@\d+\.\d+\.\d+,typescript@\d+\.\d+\.\d+$/);
-    const stamped = readFileSync(join(pkg, 'dist', '.src-hash'), 'utf8').trim();
-    expect(hashBuildInputs(pkg, { tools: 'tsup@0.0.0,esbuild@0.0.0,typescript@0.0.0' })).not.toBe(stamped);
+    const stamped = readStamp(join(pkg, 'dist'));
+    expect(stamped.tools).toBe(toolVersions());
+    expect(hashBuildInputs(pkg, { tools: 'tsup@0.0.0,esbuild@0.0.0,typescript@0.0.0' })).not.toBe(stamped.inputs);
   });
 
   test('a build input that disappears or appears changes the hash', () => {
@@ -135,7 +167,7 @@ describe('the check can fail', () => {
     rmSync(join(pkg, 'dist'), { recursive: true });
     const missing = cli('check', pkg);
     expect(missing.status).toBe(1);
-    expect(missing.stderr).toMatch(/no dist/i);
+    expect(missing.stderr).toMatch(/no index\.js present/i);
     expect(cli('stamp', pkg)).toMatchObject({ status: 0 });
     expect(existsSync(join(pkg, 'dist', '.src-hash'))).toBe(true);
     // A stamp does not manufacture a build.
@@ -144,20 +176,111 @@ describe('the check can fail', () => {
   });
 });
 
-describe('every shared package is wired', () => {
-  test.each(SHARED)('%s stamps on build, exposes check:dist, and rebuilds before pack', (name) => {
+describe('the check catches a dist/ that is not what the build produced', () => {
+  // The half the five signer-stack packages were missing: their stamp covered build inputs
+  // only, so anything could happen to dist/ after the build and the check still passed. Only
+  // the bunker hashed its outputs, and only the bunker's dist was proven against tampering.
+
+  test('an edited output fails: the inputs still match, the outputs do not', () => {
+    writeFileSync(join(pkg, 'dist', 'index.js'), readFileSync(join(pkg, 'dist', 'index.js'), 'utf8') + 'globalThis.x = 1;\n');
+    expect(checkDist(pkg)).toMatchObject({ ok: false, reason: 'tampered' });
+    expect(hashBuildInputs(pkg)).toBe(readStamp(join(pkg, 'dist')).inputs);
+  });
+
+  test('a deleted output fails even while index.js and index.d.ts are both present', () => {
+    writeFileSync(join(pkg, 'dist', 'index.js.map'), '{"version":3}\n');
+    stampDist(pkg);
+    expect(checkDist(pkg)).toMatchObject({ ok: true });
+    rmSync(join(pkg, 'dist', 'index.js.map'));
+    expect(checkDist(pkg)).toMatchObject({ ok: false, reason: 'tampered' });
+  });
+
+  test('a file added to dist/ fails: a published dist carries what the build wrote and nothing else', () => {
+    writeFileSync(join(pkg, 'dist', 'extra.js'), 'export const smuggled = true;\n');
+    expect(checkDist(pkg)).toMatchObject({ ok: false, reason: 'tampered' });
+  });
+
+  test('a renamed output fails, though the set of bytes is unchanged', () => {
+    renameSync(join(pkg, 'dist', 'index.d.ts'), join(pkg, 'dist', 'index.d.mts'));
+    // Refused as missing first: index.d.ts is required output, not merely hashed.
+    expect(checkDist(pkg)).toMatchObject({ ok: false, reason: 'missing' });
+    writeFileSync(join(pkg, 'dist', 'index.d.ts'), 'export declare const one: 1;\n');
+    expect(checkDist(pkg)).toMatchObject({ ok: false, reason: 'tampered' });
+  });
+
+  test('a stamp that is not the JSON this build writes fails as unreadable, never as ok', () => {
+    writeFileSync(join(pkg, 'dist', STAMP), 'not json\n');
+    expect(checkDist(pkg)).toMatchObject({ ok: false, reason: 'unreadable' });
+    // The old bare-hex stamp the five packages used to write is exactly this case, so a dist
+    // built before the two implementations were unified cannot pass either.
+    writeFileSync(join(pkg, 'dist', STAMP), hashBuildInputs(pkg) + '\n');
+    expect(checkDist(pkg)).toMatchObject({ ok: false, reason: 'unreadable' });
+  });
+
+  test('--dist checks a copy against this tree: a good copy passes, a tampered and a partial copy fail', () => {
+    const copies = mkdtempSync(join(tmpdir(), 'dist-copy-'));
+    const good = join(copies, 'good');
+    cpSync(join(pkg, 'dist'), good, { recursive: true });
+    expect(checkDist(pkg, { distDir: good })).toMatchObject({ ok: true });
+    expect(cli('check', pkg, '--dist', good)).toMatchObject({ status: 0 });
+
+    const tampered = join(copies, 'tampered');
+    cpSync(join(pkg, 'dist'), tampered, { recursive: true });
+    writeFileSync(join(tampered, 'index.js'), 'export const one = 666;\n');
+    expect(checkDist(pkg, { distDir: tampered })).toMatchObject({ ok: false, reason: 'tampered' });
+    const tamperedCli = cli('check', pkg, '--dist', tampered);
+    expect(tamperedCli.status).toBe(1);
+    expect(tamperedCli.stderr).toMatch(/not what the build produced/i);
+
+    const partial = join(copies, 'partial');
+    cpSync(join(pkg, 'dist'), partial, { recursive: true });
+    rmSync(join(partial, 'index.d.ts'));
+    expect(checkDist(pkg, { distDir: partial })).toMatchObject({ ok: false, reason: 'missing' });
+    expect(cli('check', pkg, '--dist', partial).status).toBe(1);
+
+    // And the copy is judged against this tree, not against itself: a copy of a stale build
+    // fails even though the copy is byte for byte what was stamped.
+    writeFileSync(join(pkg, 'src', 'index.ts'), 'export const one = 2;\n');
+    expect(checkDist(pkg, { distDir: good })).toMatchObject({ ok: false, reason: 'stale' });
+    rmSync(copies, { recursive: true, force: true });
+  });
+});
+
+describe('every package with a check is wired to the one implementation', () => {
+  test('the wired packages are exactly the workspaces that declare a check', () => {
+    // Read from the workspaces and their own scripts, not from a list somebody maintains, so
+    // the CI negative tests (which loop over `dist-stamp.mjs packages`) cannot fall behind a
+    // package that was added.
+    expect(packagesWithCheckDist(ROOT)).toEqual(WIRED.map((name) => join(ROOT, 'packages', name)));
+  });
+
+  test.each(WIRED)('%s stamps after tsup exits and checks with the shared script', (name) => {
     const dir = join(ROOT, 'packages', name);
-    const tsup = readFileSync(join(dir, 'tsup.config.ts'), 'utf8');
-    // The function form, not a shell string: tsup 8.5 runs a string `onSuccess` through
-    // tinyexec, which mangles any `../` token, so `node ../../scripts/... stamp` exited 127
-    // in every package and never stamped anything. The function runs in-process, and a
-    // throw in it fails the build.
-    expect(tsup).toContain("import { stampDist } from '../../scripts/dist-stamp.mjs';");
-    expect(tsup).toMatch(/onSuccess: async \(\) => \{\s*stampDist\(process\.cwd\(\)\);\s*\}/);
     const scripts = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).scripts as Record<string, string>;
+    expect(scripts['build']).toBe('tsup && node ../../scripts/dist-stamp.mjs stamp');
     expect(scripts['check:dist']).toBe('node ../../scripts/dist-stamp.mjs check');
-    expect(scripts['prepack']).toBe('npm run build');
+    // Not from tsup's onSuccess, which runs concurrently with the declaration worker: the
+    // outputs hash taken there covers the previous `.d.ts` or none. The stamp is a separate
+    // process after tsup has exited, which is what the bunker worked out and the other five
+    // never got.
+    const tsup = readFileSync(join(dir, 'tsup.config.ts'), 'utf8');
+    expect(tsup).not.toMatch(/^\s*onSuccess/m);
+    expect(tsup).not.toContain('stampDist');
     for (const input of BUILD_INPUTS) expect(existsSync(join(dir, input))).toBe(true);
+  });
+
+  test('no package carries a second copy of the stamp machinery', () => {
+    // Two implementations of one stamp is how the bunker ended up with a guard its neighbours
+    // did not have. There is one script, at the root.
+    for (const name of WIRED) {
+      expect(existsSync(join(ROOT, 'packages', name, 'scripts', 'stamp-dist.mjs'))).toBe(false);
+      expect(existsSync(join(ROOT, 'packages', name, 'scripts', 'check-dist.mjs'))).toBe(false);
+    }
+  });
+
+  test.each(SHARED)('%s rebuilds before pack', (name) => {
+    const scripts = JSON.parse(readFileSync(join(ROOT, 'packages', name, 'package.json'), 'utf8')).scripts as Record<string, string>;
+    expect(scripts['prepack']).toBe('npm run build');
   });
 
   test('the root check runs every workspace that has one', () => {
@@ -167,5 +290,33 @@ describe('every shared package is wired', () => {
 
   test('the inputs are what a build reads', () => {
     expect(BUILD_INPUTS).toEqual(['src', 'tsup.config.ts', 'tsconfig.json', 'package.json']);
+  });
+});
+
+describe('a real built dist/, re-broken in a copy', () => {
+  // The fixture cases above carry the weight, because `dist/` is gitignored and a local run may
+  // have no build at all. When there is one (CI builds before it tests), each package's real
+  // output is copied to a temp dir and broken there, which is the vendored-tarball case.
+  test.each(WIRED)('%s: a copy passes, the same copy tampered or partial does not', (name) => {
+    const dir = join(ROOT, 'packages', name);
+    // No current build here (gitignored dist/, or a tree edited since the last build): then the
+    // only thing to assert is that the check says so rather than passing vacuously.
+    if (!checkDist(dir).ok) {
+      expect(checkDist(dir)).toMatchObject({ ok: false });
+      return;
+    }
+    const tmp = mkdtempSync(join(tmpdir(), `dist-copy-${name}-`));
+    try {
+      const copy = join(tmp, 'dist');
+      cpSync(join(dir, 'dist'), copy, { recursive: true });
+      expect(checkDist(dir, { distDir: copy })).toMatchObject({ ok: true });
+      writeFileSync(join(copy, 'index.js'), readFileSync(join(copy, 'index.js'), 'utf8') + '\nglobalThis.tampered = true;\n');
+      expect(checkDist(dir, { distDir: copy })).toMatchObject({ ok: false, reason: 'tampered' });
+      cpSync(join(dir, 'dist'), copy, { recursive: true, force: true });
+      rmSync(join(copy, 'index.d.ts'));
+      expect(checkDist(dir, { distDir: copy })).toMatchObject({ ok: false, reason: 'missing' });
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });

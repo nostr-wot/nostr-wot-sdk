@@ -54,20 +54,43 @@ jobs:
           git checkout -- tsconfig.base.json
           npm run check:dist
 
-      - name: bunker check:dist must fail on a tampered or incomplete copy
-        # The repo-wide check:dist above proves the guard passes on a good build. These
-        # prove it actually rejects a bad one, which is what a vendored tarball needs.
+      - name: check:dist must fail on a tampered or incomplete dist, in every package that has one
+        # The repo-wide check:dist above proves the guard passes on a good build. These prove it
+        # actually rejects a bad one, which is what a vendored copy and a published tarball need.
+        # Only the bunker was proven this way while it was the only package whose stamp covered
+        # its outputs. The list comes from the packages themselves (`dist-stamp.mjs packages`),
+        # so a package wired later is covered here without anyone remembering to edit this step.
         run: |
-          cp -R packages/bunker/dist /tmp/tampered && echo "garbage" >> /tmp/tampered/index.js
-          if node packages/bunker/scripts/check-dist.mjs --dist /tmp/tampered; then echo "check:dist passed a tampered copy" && exit 1; fi
-          cp -R packages/bunker/dist /tmp/partial && rm /tmp/partial/index.cjs /tmp/partial/index.d.ts
-          if node packages/bunker/scripts/check-dist.mjs --dist /tmp/partial; then echo "check:dist passed a partial copy" && exit 1; fi
+          for pkg in $(node scripts/dist-stamp.mjs packages); do
+            name=$(basename "$pkg")
+            rm -rf "/tmp/tampered-$name" "/tmp/partial-$name"
+            cp -R "$pkg/dist" "/tmp/tampered-$name"
+            echo "globalThis.tampered = true;" >> "/tmp/tampered-$name/index.js"
+            if node scripts/dist-stamp.mjs check "$pkg" --dist "/tmp/tampered-$name"; then
+              echo "check:dist passed a tampered copy of $name"
+              exit 1
+            fi
+            cp -R "$pkg/dist" "/tmp/partial-$name"
+            rm "/tmp/partial-$name/index.d.ts"
+            if node scripts/dist-stamp.mjs check "$pkg" --dist "/tmp/partial-$name"; then
+              echo "check:dist passed a partial copy of $name"
+              exit 1
+            fi
+            echo "$name: the check bites on a tampered dist and on a partial one"
+          done
 
-      - name: The packed bunker tarball carries a dist that matches this tree
+      - name: Every packed tarball carries the dist that was just verified
+        # What `npm publish` uploads is whatever `dist/` holds when it runs, so the tarball has
+        # to match the build check:dist passed a moment ago.
         run: |
-          tarball=$(cd packages/bunker && npm pack --silent | tail -1)
-          mkdir -p /tmp/vendored && tar -xzf "packages/bunker/$tarball" -C /tmp/vendored
-          node packages/bunker/scripts/check-dist.mjs --dist /tmp/vendored/package/dist
+          for pkg in $(node scripts/dist-stamp.mjs packages); do
+            name=$(basename "$pkg")
+            tarball=$(cd "$pkg" && npm pack --silent | tail -1)
+            rm -rf "/tmp/packed-$name" && mkdir -p "/tmp/packed-$name"
+            tar -xzf "$pkg/$tarball" -C "/tmp/packed-$name"
+            node scripts/dist-stamp.mjs check "$pkg" --dist "/tmp/packed-$name/package/dist"
+            rm "$pkg/$tarball"
+          done
 
       - name: Type check
         run: npm run typecheck
