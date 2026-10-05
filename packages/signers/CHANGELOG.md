@@ -1,5 +1,12 @@
 # @nostr-wot/signers
 
+## 1.2.1
+
+### Patch Changes
+
+- Updated dependencies [[`feae7ff`](https://github.com/nostr-wot/nostr-wot-sdk/commit/feae7ff79175d10033b785c15081e24ab42208c6)]:
+  - @nostr-wot/pq@0.3.0
+
 ## 1.2.0
 
 ### Minor Changes

@@ -1,5 +1,12 @@
 # @nostr-wot/blossom
 
+## 0.1.8
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @nostr-wot/signers@1.2.1
+
 ## 0.1.7
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@nostr-wot/storage",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Platform-neutral key/value storage port for the @nostr-wot packages: the KeyValueStore interface, an in-memory implementation, and a namespacing wrapper.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "MIT",

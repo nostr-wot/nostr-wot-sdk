@@ -1,6 +1,6 @@
 {
   "name": "@nostr-wot/accounts",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Platform-neutral Nostr account primitives for the @nostr-wot packages: NIP-06 key derivation, import parsing and NIP-49 (ncryptsec) encoding, with no browser or React Native globals.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "MIT",

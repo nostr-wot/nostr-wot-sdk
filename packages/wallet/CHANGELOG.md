@@ -1,5 +1,12 @@
 # @nostr-wot/wallet
 
+## 0.3.5
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @nostr-wot/signers@1.2.1
+
 ## 0.3.4
 
 ### Patch Changes
