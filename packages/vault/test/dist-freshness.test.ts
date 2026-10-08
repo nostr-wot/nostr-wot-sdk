@@ -46,7 +46,7 @@ const SCRIPT = join(ROOT, 'scripts', 'dist-stamp.mjs');
  * one implementation: the bunker's second copy of this machinery is gone, so the packages that
  * could not detect a tampered `dist/` now can.
  */
-const WIRED = ['storage', 'permissions', 'accounts', 'vault', 'data', 'relay', 'signers', 'bunker', 'dm', 'wallet', 'ui', 'pq', 'signer-core'] as const;
+const WIRED = ['storage', 'permissions', 'accounts', 'vault', 'data', 'relay', 'signers', 'bunker', 'blossom', 'dm', 'wallet', 'ui', 'pq', 'signer-core'] as const;
 
 /** The stamp a build left in a dist directory. */
 const readStamp = (dir: string) => JSON.parse(readFileSync(join(dir, STAMP), 'utf8')) as { inputs: string; outputs: string; tools: string };

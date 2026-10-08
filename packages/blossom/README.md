@@ -1,87 +1,101 @@
 # @nostr-wot/blossom
 
-[Blossom](https://github.com/hzrd149/blossom) helpers for Nostr — content-addressed file hosting with kind-24242 BUD-01 signed auth. Upload, mirror across servers, delete.
+[Blossom](https://github.com/hzrd149/blossom) content-addressed uploads, mirrors, and deletion, with signed [BUD-11 authorization](https://github.com/hzrd149/blossom/blob/master/buds/11.md) and validated [BUD-02 descriptors](https://github.com/hzrd149/blossom/blob/master/buds/02.md).
 
 ## Install
 
 ```bash
-npm i @nostr-wot/blossom @nostr-wot/signers nostr-tools
+npm i @nostr-wot/blossom nostr-tools
 ```
 
 ## Upload
+
+Supply any signer exposing an asynchronous `signEvent` method, including the signers in `@nostr-wot/signers`:
 
 ```ts
 import { uploadToBlossom } from "@nostr-wot/blossom";
 import { Nip07Signer } from "@nostr-wot/signers";
 
-const signer = new Nip07Signer();
-const blob = await uploadToBlossom(file, { signer });
-// → { url, sha256, size, type, uploaded }
-// blob.url is e.g. https://blossom.primal.net/<sha256>.<ext>
+const blob = await uploadToBlossom(file, {
+  signer: new Nip07Signer(),
+  servers: ["https://my.blossom", "https://blossom.primal.net"],
+});
+// { url, sha256, size, type, uploaded }
 ```
 
-By default, the SDK tries a curated server list in order — `blossom.primal.net`, `cdn.nostr.build`, `blossom.band` — and returns the first 2xx. Override with your own:
+Inputs may be `File`, `Blob`, `ArrayBuffer`, or `Uint8Array`. Mutable inputs are copied before the first asynchronous operation so the signed hash always describes the uploaded bytes. The MIME type comes from `contentType`, then the Blob/File type; an empty or missing type becomes `application/octet-stream`. Auth lifetime defaults to 3,600 seconds and can be set with `authExpirySec` (finite, at least one second; fractions are rounded down).
+
+The default servers are `https://blossom.primal.net`, `https://nostr.build`, and `https://blossom.band`. HTTP errors, network errors, malformed JSON, and invalid descriptors trigger ordered fallback. Upload redirects are rejected so bytes and authorization are never forwarded outside the explicitly selected server list. Accepted descriptors must name the exact uploaded hash in the URL's final path segment (with an optional extension), match the hash and size, and contain a valid MIME type and nonnegative integer upload timestamp. Public uploads permit HTTP or HTTPS; credentials in URLs are rejected. An empty server list fails without signing.
+
+Public uploads use one signature across servers by default. Set `bindAuthToServer: true` to sign separately for each destination. The `server` tag contains its lowercase hostname, without a port, as required by BUD-11. Signer rejection propagates immediately instead of prompting again for the next server.
+
+## Encrypted attachments
+
+Encrypt the attachment before calling this helper. It creates a fresh disposable signing identity for each upload, uses that identity across its fallback attempts, and scopes each authorization to the destination server. Both upload destinations and returned URLs must use HTTPS. The body is sent as `application/octet-stream`.
 
 ```ts
-const blob = await uploadToBlossom(file, {
-  signer,
+import { uploadEncryptedBlob } from "@nostr-wot/blossom";
+
+const blob = await uploadEncryptedBlob(ciphertext, {
   servers: ["https://my.blossom", "https://blossom.primal.net"],
 });
 ```
 
+The server still sees the ciphertext size, hash, IP address, and request timing. This helper does not encrypt content or hide network metadata.
+
+## Cancellation and session changes
+
+Both upload functions accept `signal` and `assertActive`. A signal is forwarded to fetch. The synchronous `assertActive` callback should throw when a session or operation becomes obsolete; it is checked before and after asynchronous steps and before fallback. These failures propagate without trying another server. An already pending signer or Blob read cannot itself be cancelled; the result is discarded when it resolves.
+
+```ts
+const blob = await uploadToBlossom(file, {
+  signer,
+  signal: controller.signal,
+  assertActive: () => {
+    if (session !== currentSession()) throw new Error("Session changed");
+  },
+});
+```
+
+When all servers fail, `BlossomUploadError` exposes a readonly `reasons` array containing server diagnostics. Applications should map it to their own user-facing message.
+
 ## Mirror
 
-Backup an already-uploaded blob to additional servers — Blossom is content-addressed, so any server hosting the same SHA-256 returns the same content.
+Mirroring downloads the original bytes and uploads to each target, returning descriptors for successful copies. Individual target failures do not discard successful results; a failure downloading the source rejects the operation.
 
 ```ts
 import { mirrorBlob } from "@nostr-wot/blossom";
 
-const results = await mirrorBlob(existingBlob.url, {
+const copies = await mirrorBlob(existingBlob.url, {
   signer,
-  servers: ["https://blossom.band", "https://cdn.nostr.build"],
+  targetServers: ["https://blossom.band", "https://nostr.build"],
 });
-// → [{ server, ok, url? } | { server, ok: false, error }]
+// BlossomBlob[]
 ```
 
 ## Delete
 
-Best-effort — Blossom servers may keep blobs that other users have also uploaded.
+Deletion returns the server's success status. The authorization is scoped to that server. A server may retain a blob referenced by other users.
 
 ```ts
 import { deleteBlob } from "@nostr-wot/blossom";
 
-await deleteBlob(blob.sha256, {
+const deleted = await deleteBlob(blob.sha256, {
   signer,
-  servers: [blob.url.split("/").slice(0, 3).join("/")],
-});
-```
-
-## Auth (BUD-01)
-
-Every Blossom request is signed with a kind-24242 event. The SDK builds + signs the event with your `NostrSigner` and attaches it via the `Authorization` header. You don't need to construct the auth event manually — it's transparent.
-
-If you need access to the raw event for debugging:
-
-```ts
-import { buildBlossomAuthEvent } from "@nostr-wot/blossom";
-
-const authEvent = await buildBlossomAuthEvent(signer, {
-  kind: "upload",     // "upload" | "delete" | "list" | "get"
-  fileSha256: hex,
-  expiration: Math.floor(Date.now() / 1000) + 60,
+  server: new URL(blob.url).origin,
 });
 ```
 
 ## Types
 
 ```ts
-interface BlossomBlob {
+type BlossomBlob = {
   url: string;
   sha256: string;
   size: number;
   type: string;
   uploaded: number;
-}
+};
 ```
 
 ## License
