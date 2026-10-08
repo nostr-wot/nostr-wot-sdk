@@ -1,5 +1,11 @@
 # @nostr-wot/blossom
 
+## 0.2.0
+
+### Minor Changes
+
+- [#13](https://github.com/nostr-wot/nostr-wot-sdk/pull/13) [`bfba05f`](https://github.com/nostr-wot/nostr-wot-sdk/commit/bfba05f4c41239e709182c28a144cc22a670fc7f) Thanks [@leonacostaok](https://github.com/leonacostaok)! - Add anonymous encrypted-blob uploads with fresh ephemeral identities and server-scoped BUD-11 authorization. Share immutable upload bytes and validated BUD-02 descriptors across public and encrypted uploads, expose aggregate server failure diagnostics, and stop failover on cancellation or session changes. Public uploads preserve a single signature by default and can opt into server binding. Correct mirror/delete documentation and add distribution freshness checks.
+
 ## 0.1.8
 
 ### Patch Changes

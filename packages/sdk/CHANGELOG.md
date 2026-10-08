@@ -1,5 +1,16 @@
 # nostr-wot-sdk
 
+## 1.0.4
+
+### Patch Changes
+
+- Updated dependencies [[`bfba05f`](https://github.com/nostr-wot/nostr-wot-sdk/commit/bfba05f4c41239e709182c28a144cc22a670fc7f), [`bfba05f`](https://github.com/nostr-wot/nostr-wot-sdk/commit/bfba05f4c41239e709182c28a144cc22a670fc7f)]:
+  - @nostr-wot/blossom@0.2.0
+  - @nostr-wot/data@0.7.0
+  - @nostr-wot/dm@0.7.1
+  - @nostr-wot/ui@0.8.1
+  - @nostr-wot/wallet@0.4.1
+
 ## 1.0.3
 
 ### Patch Changes

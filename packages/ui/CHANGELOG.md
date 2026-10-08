@@ -1,5 +1,12 @@
 # @nostr-wot/ui
 
+## 0.8.1
+
+### Patch Changes
+
+- Updated dependencies [[`bfba05f`](https://github.com/nostr-wot/nostr-wot-sdk/commit/bfba05f4c41239e709182c28a144cc22a670fc7f)]:
+  - @nostr-wot/data@0.7.0
+
 ## 0.8.0
 
 ### Minor Changes

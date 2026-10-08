@@ -1,5 +1,11 @@
 # @nostr-wot/data
 
+## 0.7.0
+
+### Minor Changes
+
+- [#13](https://github.com/nostr-wot/nostr-wot-sdk/pull/13) [`bfba05f`](https://github.com/nostr-wot/nostr-wot-sdk/commit/bfba05f4c41239e709182c28a144cc22a670fc7f) Thanks [@leonacostaok](https://github.com/leonacostaok)! - Add `clear()` to keyed observables for runtime cache invalidation. It removes cached slots and notifies their per-key and global subscribers while preserving subscriptions, so mounted consumers continue receiving new values. The existing `_reset()` remains a silent test teardown that removes subscriptions.
+
 ## 0.6.0
 
 ### Minor Changes
