@@ -1,6 +1,6 @@
 {
   "name": "@nostr-wot/data",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Pure-function Nostr data layer: profiles, notes, threads, engagement, NIP-65 outbox. Optional SWR cache + React hooks.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "MIT",
@@ -91,6 +91,6 @@
     "vitest": "^4.0.18"
   },
   "dependencies": {
-    "@nostr-wot/relay": "^0.1.1"
+    "@nostr-wot/relay": "^0.2.0"
   }
 }

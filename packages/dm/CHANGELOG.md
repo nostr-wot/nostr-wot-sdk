@@ -1,5 +1,18 @@
 # @nostr-wot/dm
 
+## 0.7.0
+
+### Minor Changes
+
+- [#12](https://github.com/nostr-wot/nostr-wot-sdk/pull/12) [`e0972fb`](https://github.com/nostr-wot/nostr-wot-sdk/commit/e0972fb3d5587a737f7f139ef9f46d8ec250d347) Thanks [@leonacostaok](https://github.com/leonacostaok)! - Add self-addressed gift-wrap helpers for private application state. These reuse the existing signer-based NIP-59 encryption and authenticated unwrap path, reject other authors in mixed inbox streams, and preserve the inner rumor timestamp independently of randomized envelope timestamps.
+
+  Expose NIP-17 attachment encryption and decryption with fresh AES-GCM keys/nonces, ciphertext and plaintext hashes, and integrity errors for tampered or malformed files. WebCrypto is resolved only when these async functions are called.
+
+### Patch Changes
+
+- Updated dependencies [[`e0972fb`](https://github.com/nostr-wot/nostr-wot-sdk/commit/e0972fb3d5587a737f7f139ef9f46d8ec250d347), [`e0972fb`](https://github.com/nostr-wot/nostr-wot-sdk/commit/e0972fb3d5587a737f7f139ef9f46d8ec250d347)]:
+  - @nostr-wot/data@0.6.0
+
 ## 0.6.3
 
 ### Patch Changes

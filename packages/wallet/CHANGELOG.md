@@ -1,5 +1,17 @@
 # @nostr-wot/wallet
 
+## 0.4.0
+
+### Minor Changes
+
+- [#12](https://github.com/nostr-wot/nostr-wot-sdk/pull/12) [`e0972fb`](https://github.com/nostr-wot/nostr-wot-sdk/commit/e0972fb3d5587a737f7f139ef9f46d8ec250d347) Thanks [@leonacostaok](https://github.com/leonacostaok)! - Expose a transport-injected NIP-47 client at `@nostr-wot/wallet/nwc`, with strict connection parsing, multi-relay support, NIP-44/NIP-04 negotiation, request expiration, and machine-readable payment outcomes. The existing root client delegates to the same protocol implementation while retaining its public method and result shapes.
+
+### Patch Changes
+
+- Updated dependencies [[`e0972fb`](https://github.com/nostr-wot/nostr-wot-sdk/commit/e0972fb3d5587a737f7f139ef9f46d8ec250d347), [`e0972fb`](https://github.com/nostr-wot/nostr-wot-sdk/commit/e0972fb3d5587a737f7f139ef9f46d8ec250d347)]:
+  - @nostr-wot/data@0.6.0
+  - @nostr-wot/relay@0.2.0
+
 ## 0.3.5
 
 ### Patch Changes

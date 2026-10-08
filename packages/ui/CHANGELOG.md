@@ -1,5 +1,16 @@
 # @nostr-wot/ui
 
+## 0.8.0
+
+### Minor Changes
+
+- [#12](https://github.com/nostr-wot/nostr-wot-sdk/pull/12) [`e0972fb`](https://github.com/nostr-wot/nostr-wot-sdk/commit/e0972fb3d5587a737f7f139ef9f46d8ec250d347) Thanks [@leonacostaok](https://github.com/leonacostaok)! - Expose native NIP-46 connection-action configuration through LoginWidget and LoginModal: translated labels, platform signer URLs, an optional host clipboard adapter, and copy-on-open fallback. Render one signer link, show clipboard success/failure feedback, and reset feedback for each pairing URI without DOM mutation adapters.
+
+### Patch Changes
+
+- Updated dependencies [[`e0972fb`](https://github.com/nostr-wot/nostr-wot-sdk/commit/e0972fb3d5587a737f7f139ef9f46d8ec250d347), [`e0972fb`](https://github.com/nostr-wot/nostr-wot-sdk/commit/e0972fb3d5587a737f7f139ef9f46d8ec250d347)]:
+  - @nostr-wot/data@0.6.0
+
 ## 0.7.1
 
 ### Patch Changes

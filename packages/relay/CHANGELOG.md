@@ -1,5 +1,13 @@
 # @nostr-wot/relay
 
+## 0.2.0
+
+### Minor Changes
+
+- [#12](https://github.com/nostr-wot/nostr-wot-sdk/pull/12) [`e0972fb`](https://github.com/nostr-wot/nostr-wot-sdk/commit/e0972fb3d5587a737f7f139ef9f46d8ec250d347) Thanks [@leonacostaok](https://github.com/leonacostaok)! - Add a shared relay URL parser with explicit encrypted, local-development, compatible WebSocket, and public-host policies. Parsing rejects credentials while leaving canonicalization to callers. Route data's existing public relay filter through the shared implementation and reject bracketed IPv6 loopback/link-local, private ranges, local hostnames, and onion destinations consistently.
+
+  Expose RelayHub under `@nostr-wot/relay/hub`, including identity-isolated connections, authentication leases, subscription/query/publish coordination, bounded caches, test transport, and optional shared-instance ownership.
+
 ## 0.1.1
 
 ### Patch Changes

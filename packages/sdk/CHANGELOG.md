@@ -1,5 +1,16 @@
 # nostr-wot-sdk
 
+## 1.0.3
+
+### Patch Changes
+
+- Updated dependencies [[`e0972fb`](https://github.com/nostr-wot/nostr-wot-sdk/commit/e0972fb3d5587a737f7f139ef9f46d8ec250d347), [`e0972fb`](https://github.com/nostr-wot/nostr-wot-sdk/commit/e0972fb3d5587a737f7f139ef9f46d8ec250d347), [`e0972fb`](https://github.com/nostr-wot/nostr-wot-sdk/commit/e0972fb3d5587a737f7f139ef9f46d8ec250d347), [`e0972fb`](https://github.com/nostr-wot/nostr-wot-sdk/commit/e0972fb3d5587a737f7f139ef9f46d8ec250d347), [`e0972fb`](https://github.com/nostr-wot/nostr-wot-sdk/commit/e0972fb3d5587a737f7f139ef9f46d8ec250d347)]:
+  - @nostr-wot/ui@0.8.0
+  - @nostr-wot/wallet@0.4.0
+  - @nostr-wot/dm@0.7.0
+  - @nostr-wot/data@0.6.0
+  - @nostr-wot/relay@0.2.0
+
 ## 1.0.2
 
 ### Patch Changes

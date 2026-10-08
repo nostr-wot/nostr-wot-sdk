@@ -1,6 +1,6 @@
 {
   "name": "@nostr-wot/bunker",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "NIP-46 responder (the bunker / remote-signer side of Nostr Connect): listens on relays for kind 24133 requests, decrypts them, hands them to an injected handler, publishes encrypted responses.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "MIT",
@@ -49,7 +49,7 @@
   },
   "dependencies": {
     "@noble/hashes": "^2.0.1",
-    "@nostr-wot/relay": "^0.1.1"
+    "@nostr-wot/relay": "^0.2.0"
   },
   "peerDependencies": {
     "nostr-tools": ">=2.0.0"

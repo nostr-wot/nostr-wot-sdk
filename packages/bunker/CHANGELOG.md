@@ -1,5 +1,12 @@
 # @nostr-wot/bunker
 
+## 0.2.1
+
+### Patch Changes
+
+- Updated dependencies [[`e0972fb`](https://github.com/nostr-wot/nostr-wot-sdk/commit/e0972fb3d5587a737f7f139ef9f46d8ec250d347)]:
+  - @nostr-wot/relay@0.2.0
+
 ## 0.2.0
 
 ### Minor Changes
