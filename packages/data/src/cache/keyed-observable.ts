@@ -27,6 +27,9 @@ export interface KeyedObservable<K, V> {
   setStatus(key: K, status: SlotStatus, error?: Error): void;
   subscribe(key: K, cb: (slot: Slot<V>) => void): () => void;
   subscribeAll(cb: (key: K, slot: Slot<V>) => void): () => void;
+  /** Drop cached slots and notify their subscribers without removing subscriptions. */
+  clear(): void;
+  /** Test teardown: silently drop slots and every subscription. */
   _reset(): void;
 }
 
@@ -86,6 +89,13 @@ export function createKeyedObservable<K, V>(
       return () => {
         all.delete(cb);
       };
+    },
+    clear() {
+      const keys = [...slots.keys()];
+      slots.clear();
+      // Clear atomically before notifying: a callback can safely read other keys.
+      // Retain any value a subscriber writes while handling an earlier notification.
+      for (const key of keys) notify(key, slots.get(key) ?? (EMPTY as Slot<V>));
     },
     _reset() {
       slots.clear();

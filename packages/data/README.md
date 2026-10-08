@@ -126,6 +126,10 @@ const slot = obs.get("key");
 
 ---
 
+### Invalidating a keyed observable
+
+Call `store.clear()` to discard its cached slots at runtime. It clears all slots before notifying subscribers for the invalidated keys with the idle, undefined state; subscriptions remain attached for subsequent updates. Empty clears are quiet. A callback can repopulate a slot during notification. Clearing does not cancel the caller's network requests: retire stale asynchronous writers before calling it. `_reset()` is reserved for test teardown and also removes subscribers.
+
 ## React hooks
 
 ```tsx
@@ -233,7 +237,7 @@ const pool = new SimplePool({ websocketImplementation: MyWebSocket });
 setPool(pool);
 ```
 
-Other `@nostr-wot/*` packages reuse this same pool — DM subscriptions, blossom uploads, WoT lookups, all share connections.
+Other `@nostr-wot/*` packages reuse this same pool — DM subscriptions and WoT lookups, all share connections.
 
 ---
 
