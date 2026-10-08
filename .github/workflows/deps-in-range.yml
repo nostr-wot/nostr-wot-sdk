@@ -101,13 +101,15 @@ jobs:
       - name: Report resolved versions
         run: npm ls --all @noble/hashes @noble/curves @noble/ciphers @scure/base @scure/bip32 @scure/bip39 || true
 
-      - name: Typecheck
-        run: npm run typecheck -w @nostr-wot/accounts -w @nostr-wot/vault
-
       # The whole workspace, because a floated library that breaks a downstream package's
       # build is the same failure one step later.
       - name: Build
         run: npm run build
+
+      # Workspace imports resolve published declaration entrypoints in dist/.
+      # Build those before typechecking consumers on a clean runner.
+      - name: Typecheck
+        run: npm run typecheck -w @nostr-wot/accounts -w @nostr-wot/vault
 
       # accounts owns NIP-49 and vault owns the password stretching. These are the two suites a
       # library changing its own accounting under a caret range strands a user in.
