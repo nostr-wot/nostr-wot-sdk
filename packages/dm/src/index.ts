@@ -288,3 +288,38 @@ function randomTimestampInPast(): number {
   const twoDays = 2 * 24 * 3600;
   return now - Math.floor(Math.random() * twoDays);
 }
+
+/** Unsigned inner event authenticated by the surrounding seal. */
+export type GiftWrapRumor = UnsignedEvent & { id: string };
+
+/** A self-addressed private-state rumor; omitted fields use the usual Nostr defaults. */
+export type SelfGiftWrapTemplate = Pick<EventTemplate, "kind" | "content"> & Partial<Pick<EventTemplate, "tags" | "created_at">>;
+
+/** Seal private state to the current signer without exposing its kind or content to relays. */
+export async function sealAndGiftWrapForSelf(signer: NostrSigner, template: SelfGiftWrapTemplate): Promise<Event> {
+  const pubkey = await signer.getPublicKey();
+  return sealAndGiftWrap(signer, pubkey, {
+    pubkey,
+    kind: template.kind,
+    content: template.content,
+    tags: template.tags ?? [],
+    created_at: template.created_at ?? Math.floor(Date.now() / 1000),
+  });
+}
+
+/**
+ * Read self-authored private state from a mixed gift-wrap stream. Returns null
+ * for other authors, invalid envelopes, or decryption failures. The shared
+ * unwrap path authenticates the seal and checks the rumor author and event ID.
+ */
+export async function unwrapGiftWrapForSelf(signer: NostrSigner, giftWrap: Event): Promise<GiftWrapRumor | null> {
+  try {
+    const { message, senderPubkey } = await unwrapGiftWrap(signer, giftWrap);
+    return senderPubkey === await signer.getPublicKey() ? message : null;
+  } catch {
+    return null;
+  }
+}
+
+// NIP-17 kind-15 encrypted attachments; WebCrypto is accessed only when called.
+export { encryptFile, decryptFile, FileIntegrityError, FILE_CIPHER_ALGORITHM, type EncryptedFile } from "./file-cipher";

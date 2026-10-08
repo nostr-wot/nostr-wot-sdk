@@ -73,3 +73,6 @@ export { fetchFollows, type FollowsEntry } from "./fetchers/follows";
 export { fetchEngagement, type Engagement } from "./fetchers/engagement";
 export { fetchThread } from "./fetchers/thread";
 export { fetchRelayList } from "./fetchers/relay-list";
+
+// Pure event collection utilities
+export { dedupeEventsNewestFirst, topHashtags } from "./event-utils";

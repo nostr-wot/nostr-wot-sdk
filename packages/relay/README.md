@@ -127,3 +127,15 @@ See `src/types.ts` for the full surface.
 ## License
 
 MIT
+
+## Relay URL validation
+
+`parseRelayUrl(value, { policy })` returns a parsed `URL` or `null`. The default `wss` policy accepts encrypted WebSocket URLs without credentials; `local-ws` additionally allows plaintext WebSockets on exactly `localhost`, `127.0.0.1`, or `[::1]`; `ws` allows both transports; `public-wss` requires encrypted transport and excludes local/private literal hosts. `isPublicWssUrl(value)` is the boolean public-policy convenience function.
+
+Parsing does not infer a scheme, sort query parameters, remove fragments, or strip path slashes. Choose canonicalization separately: socket keys and application equality keys may have different contracts. Public-host filtering is lexical; server-side callers still need connection-layer DNS/redirect protection against SSRF.
+
+## RelayHub
+
+Import `createRelayHub`, `getRelayHub`, `currentRelayHub`, and the hub types from `@nostr-wot/relay/hub`. The hub owns subscriptions, queries, publishing, authentication leases, bounded caches, and identity-scoped pooled connections. `createRelayHub(options)` creates an independent instance; `getRelayHub(options)` shares one module-level instance and honors options only on first creation. `currentRelayHub()` observes that singleton without creating it. Use one package installation/import mode for callers that must share it.
+
+`FakeRelayFactory` supports deterministic transport tests without network sockets. `resetRelayHubForTests()` disposes and clears the shared instance between tests. The hub subpath is separate from the default relay utilities, so consumers needing URL validation do not load the connection manager.

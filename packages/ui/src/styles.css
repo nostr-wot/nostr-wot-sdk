@@ -405,20 +405,19 @@
  * `<a href="nostrconnect://…">` hands off to the registered signer
  * (Amber, nsec.app, Keychat, …) via the OS URL scheme. Styled like the
  * primary login button so it reads as the recommended action. */
-.nui-qr-deeplink {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 10px 16px;
-  border-radius: var(--nui-btn-radius);
-  background: var(--nui-primary);
-  color: var(--nui-primary-fg);
-  font: 600 14px var(--nui-font);
-  text-decoration: none;
-  transition: background 0.15s;
+.nui-qr-actions {
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
+  gap: 8px;
 }
-.nui-qr-deeplink:hover { background: var(--nui-primary-hover); }
+.nui-signer-copy-hint {
+  margin: 0;
+  color: var(--nui-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
 
 .nui-auth-banner {
   display: flex;

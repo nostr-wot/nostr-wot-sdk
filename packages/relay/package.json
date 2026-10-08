@@ -38,6 +38,16 @@
         "types": "./dist/react/index.d.cts",
         "default": "./dist/react/index.cjs"
       }
+    },
+    "./hub": {
+      "import": {
+        "types": "./dist/hub/index.d.ts",
+        "default": "./dist/hub/index.js"
+      },
+      "require": {
+        "types": "./dist/hub/index.d.cts",
+        "default": "./dist/hub/index.cjs"
+      }
     }
   },
   "files": [
@@ -46,9 +56,12 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && node ../../scripts/dist-stamp.mjs stamp",
     "dev": "tsup --watch",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "check:dist": "node ../../scripts/dist-stamp.mjs check"
   },
   "peerDependencies": {
     "nostr-tools": ">=2.0.0",
@@ -68,5 +81,8 @@
     "batcher",
     "nostr-tools",
     "low-level"
-  ]
+  ],
+  "devDependencies": {
+    "vitest": "^4.0.18"
+  }
 }

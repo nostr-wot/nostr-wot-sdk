@@ -76,3 +76,5 @@ export type {
   ModalSlot,
   LoginButtonSlot,
 } from "./types";
+
+export type { Nip46ConnectionOptions } from "./login/methods/Nip46ConnectionActions";

@@ -104,3 +104,13 @@ const { event, encoded } = await buildZapRequest(signer, {
 ## License
 
 MIT
+
+## Caller-owned NWC transport
+
+Import `NwcClient`, `parseNwcUri`, and `NwcTransport` from `@nostr-wot/wallet/nwc` when an application already owns its relay connections. The client accepts a parsed connection and a transport with `subscribe`, `publish`, and `query` methods. It does not create sockets. The optional `createPoolNwcTransport` adapts an existing `nostr-tools` pool.
+
+The protocol client reads the wallet's info event, negotiates NIP-44 when advertised (otherwise NIP-04), waits for the answer subscription to become ready, and adds request expiration. URI parsing accepts WSS relays and WS only for localhost or loopback development endpoints, rejects embedded credentials, validates the client secret, and retains up to three distinct relays.
+
+`NwcError.outcome` is `not-paid` only when no relay could have received the request or the wallet explicitly rejected it. `unknown` means a payment may have completed: do not automatically submit a second payment. The transport's `publish` must return `false` only when it can make that no-delivery guarantee; an ambiguous failure must remain unknown. Timeouts, malformed replies, and transport exceptions after sending are unknown outcomes.
+
+The root-entry `NwcClient` retains its pool-based constructor, method names, and result shapes while delegating to this same implementation. It now uses strict URI checks and wallet info negotiation; callers must use a NIP-47 wallet that publishes its info event.
