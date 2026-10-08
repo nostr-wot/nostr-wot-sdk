@@ -11,6 +11,7 @@ import type { ClassSlots, LoginMethodId, LoginWidgetSlot, StyleSlots } from "../
 import { performBackendAuth } from "../auth-handshake";
 import { Nip07Method } from "./methods/Nip07Method";
 import { Nip46Method } from "./methods/Nip46Method";
+import type { Nip46ConnectionOptions } from "./methods/Nip46ConnectionActions";
 import { GenerateMethod } from "./methods/GenerateMethod";
 import { ImportMethod } from "./methods/ImportMethod";
 
@@ -120,6 +121,8 @@ export interface LoginWidgetProps {
   nip46Metadata?: { name?: string; url?: string; description?: string; image?: string };
   /** NIP-46 perms string (`sign_event:1,nip44_encrypt,...`). */
   nip46Perms?: string;
+  /** Native signer-link and clipboard labels, handoff URL, and host clipboard adapter. */
+  nip46Connection?: Nip46ConnectionOptions;
   classes?: ClassSlots<LoginWidgetSlot>;
   styles?: StyleSlots<LoginWidgetSlot>;
 }
@@ -170,6 +173,7 @@ export function LoginWidget({
   nip46Relays,
   nip46Metadata,
   nip46Perms,
+  nip46Connection,
   classes,
   styles,
 }: LoginWidgetProps) {
@@ -479,6 +483,7 @@ export function LoginWidget({
         <Nip46Method
           inline
           defaultMode={nip46Mode}
+          connectionOptions={nip46Connection}
           onError={onErr}
           onAttached={attachedFor("nip46")}
           onBack={() => setView({ kind: "picker" })}

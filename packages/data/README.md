@@ -240,3 +240,16 @@ Other `@nostr-wot/*` packages reuse this same pool — DM subscriptions, blossom
 ## License
 
 MIT
+
+## Event collections
+
+```ts
+import { dedupeEventsNewestFirst, topHashtags } from "@nostr-wot/data";
+
+const notes = dedupeEventsNewestFirst(relayResults);
+const tags = topHashtags(notes, 8);
+```
+
+`dedupeEventsNewestFirst` keeps the last occurrence of each event ID and sorts by descending `created_at`; equal timestamps retain first-ID encounter order. It accepts any event shape carrying those two fields and preserves extra fields without changing the input.
+
+`topHashtags` counts a lowercase `t` tag once per note, ranks by frequency, and breaks ties alphabetically. Its default limit is eight. It accepts any object with a tags array. Neither helper verifies events; validate events and apply application filtering before collecting them.

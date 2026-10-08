@@ -17,3 +17,5 @@ export type {
   RelayStatsData,
   RelayStatsPersistence,
 } from './types';
+
+export { parseRelayUrl, isPublicWssUrl, type RelayUrlPolicy, type ParseRelayUrlOptions } from './url';

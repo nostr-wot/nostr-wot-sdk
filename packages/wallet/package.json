@@ -48,6 +48,16 @@
         "types": "./dist/react/index.d.cts",
         "default": "./dist/react/index.cjs"
       }
+    },
+    "./nwc": {
+      "import": {
+        "types": "./dist/nwc/index.d.ts",
+        "default": "./dist/nwc/index.js"
+      },
+      "require": {
+        "types": "./dist/nwc/index.d.cts",
+        "default": "./dist/nwc/index.cjs"
+      }
     }
   },
   "files": [
@@ -56,14 +66,17 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && node ../../scripts/dist-stamp.mjs stamp",
     "dev": "tsup --watch",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:run": "vitest run",
+    "check:dist": "node ../../scripts/dist-stamp.mjs check"
   },
   "dependencies": {
     "@noble/hashes": "^1.5.0",
     "@nostr-wot/data": "0.5.1",
-    "@nostr-wot/signers": "1.2.1"
+    "@nostr-wot/signers": "1.2.1",
+    "@nostr-wot/relay": "0.1.1"
   },
   "peerDependencies": {
     "nostr-tools": ">=2.0.0",

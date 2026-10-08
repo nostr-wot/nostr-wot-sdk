@@ -66,15 +66,17 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && node ../../scripts/dist-stamp.mjs stamp",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:run": "vitest run"
+    "test:run": "vitest run",
+    "check:dist": "node ../../scripts/dist-stamp.mjs check"
   },
   "dependencies": {
     "@nostr-wot/data": "^0.5.0",
-    "@nostr-wot/signers": "1.2.1"
+    "@nostr-wot/signers": "1.2.1",
+    "@noble/hashes": "^2.0.1"
   },
   "peerDependencies": {
     "nostr-tools": ">=2.0.0",

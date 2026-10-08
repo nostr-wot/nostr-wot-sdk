@@ -1,3 +1,5 @@
+import { isPublicWssUrl } from "@nostr-wot/relay";
+export { isPublicWssUrl } from "@nostr-wot/relay";
 import type { Event } from "nostr-tools";
 
 /**
@@ -13,38 +15,6 @@ export type RelayListEntry = {
 };
 
 export type RelayListFilter = "all" | "public" | ((url: string) => boolean);
-
-/**
- * Drop relay URLs that browser pages can't safely connect to:
- *   - non-`wss:` schemes (CSP `connect-src` typically only allows `wss:`)
- *   - localhost / .local / .localhost hostnames
- *   - RFC-1918 / loopback / link-local IPv4 ranges
- *   - `0.0.0.0`, IPv6 loopback / link-local
- *
- * Useful when a parser feeds URLs into `new WebSocket(url)` from a page
- * with a strict Content Security Policy: a single bad URL would otherwise
- * trigger a CSP violation per page load and (worse) a noisy "WebSocket
- * connection failed" in DevTools.
- */
-export function isPublicWssUrl(url: string): boolean {
-  let p: URL;
-  try {
-    p = new URL(url);
-  } catch {
-    return false;
-  }
-  if (p.protocol !== "wss:") return false;
-  const host = p.hostname.toLowerCase();
-  if (!host) return false;
-  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) return false;
-  if (/^127\./.test(host)) return false;
-  if (/^10\./.test(host)) return false;
-  if (/^192\.168\./.test(host)) return false;
-  if (/^169\.254\./.test(host)) return false;
-  if (/^172\.(1[6-9]|2[0-9]|3[01])\./.test(host)) return false;
-  if (host === "0.0.0.0" || host === "::1" || host.startsWith("fe80:")) return false;
-  return true;
-}
 
 function shouldKeep(url: string, filter: RelayListFilter): boolean {
   if (filter === "all") return url.startsWith("ws");

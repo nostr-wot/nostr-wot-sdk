@@ -14,7 +14,7 @@ import {
   type SignerStorage,
 } from "../../signer-storage";
 import { useSignerStorage } from "../../signer-storage-context";
-import { AnchorButton } from "../../primitives/Button";
+import { Nip46ConnectionActions, type Nip46ConnectionOptions } from "./Nip46ConnectionActions";
 
 type Persisted =
   | {
@@ -133,6 +133,7 @@ export interface Nip46MethodProps {
   nostrConnectRelays?: string[];
   metadata?: { name?: string; url?: string; description?: string; image?: string };
   perms?: string;
+  connectionOptions?: Nip46ConnectionOptions;
 }
 
 /** Build a synthetic `bunker://` URI from a bunker pubkey + relays so that
@@ -154,6 +155,7 @@ export function Nip46Method({
   nostrConnectRelays = DEFAULT_NOSTRCONNECT_RELAYS,
   metadata,
   perms,
+  connectionOptions,
 }: Nip46MethodProps) {
   const storage = useSignerStorage();
   const [stage, setStage] = useState<"button" | "form">(inline ? "form" : "button");
@@ -321,7 +323,7 @@ export function Nip46Method({
             setMode("paste");
           }}
         >
-          Paste URI
+          {connectionOptions?.labels?.pasteUri ?? "Paste URI"}
         </button>
       </div>
 
@@ -349,23 +351,7 @@ export function Nip46Method({
                 aria-label="Nostr Connect QR code"
                 dangerouslySetInnerHTML={{ __html: qrSvg }}
               />
-              {/* Deep-link affordance — useful on mobile where the user
-               *  can't scan their own screen but the platform's URL handler
-               *  will hand off `nostrconnect://` to Amber / Nsec.app / etc.
-               *  Hidden when the URI isn't ready yet (qrUri only flips truthy
-               *  after `startQr` resolves the connect handle). */}
-              {qrUri && (
-                <AnchorButton
-                  variant="secondary"
-                  size="sm"
-                  fullWidth
-                  href={qrUri}
-                  rel="noopener noreferrer"
-                  trailingIcon={<span aria-hidden>↗</span>}
-                >
-                  Open in signer app
-                </AnchorButton>
-              )}
+              {qrUri && <Nip46ConnectionActions key={qrUri} uri={qrUri} options={connectionOptions} />}
               <p className="nui-qr-hint">
                 Scan with Amber, Nsec.app, Keychat, or any NIP-46 signer.
               </p>
@@ -374,34 +360,6 @@ export function Nip46Method({
                   Still waiting? Some signer apps default to "scan once" — try
                   re-opening the scanner.
                 </p>
-              )}
-              {qrUri && (
-                <div
-                  className="nui-qr-actions"
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 8,
-                    alignSelf: "stretch",
-                  }}
-                >
-                  <a
-                    href={qrUri}
-                    className="nui-qr-deeplink"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    Open in signer app ↗
-                  </a>
-                  <button
-                    type="button"
-                    className="nui-back"
-                    style={{ alignSelf: "center" }}
-                    onClick={() => void navigator.clipboard?.writeText(qrUri)}
-                  >
-                    Copy connect URI
-                  </button>
-                </div>
               )}
               <button
                 type="button"

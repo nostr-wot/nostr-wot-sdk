@@ -349,3 +349,24 @@ interface DMStorage {
 ## License
 
 MIT
+
+## Private state addressed to self
+
+```ts
+import { sealAndGiftWrapForSelf, unwrapGiftWrapForSelf } from "@nostr-wot/dm";
+
+const wrapped = await sealAndGiftWrapForSelf(signer, {
+  kind: 30078,
+  tags: [["d", "my-app:state"]],
+  content: JSON.stringify(state),
+});
+const rumor = await unwrapGiftWrapForSelf(signer, wrapped);
+```
+
+These helpers use the same signer-based seal and gift-wrap encryption as direct messages. The rumor retains its own `created_at`; outer timestamps are randomized. Unwrapping returns `null` for malformed envelopes, decrypt failures, or a seal authored by someone other than the signer, making it suitable for mixed inbox streams. The authenticated seal, rumor author, and rumor ID checks are inherited from `unwrapGiftWrap`. Applications still validate their private payload schema and decide when to publish or apply state.
+
+## Encrypted file messages
+
+`encryptFile(plaintext)` creates the AES-256-GCM payload used by NIP-17 kind-15 messages. It returns ciphertext, hex `key` and `nonce`, ciphertext SHA-256 `x`, plaintext SHA-256 `ox`, and original `size`. Upload only the ciphertext; send key and nonce inside the sealed rumor.
+
+`decryptFile(ciphertext, key, nonce, expectedX?)` verifies the optional ciphertext hash before decrypting and always authenticates the GCM tag. `FileIntegrityError` identifies invalid key material, swapped blobs, and authentication failures. AES-128 keys are accepted when reading interoperable messages; new files always use AES-256. `FILE_CIPHER_ALGORITHM` is the wire value `aes-gcm`. Both async helpers resolve WebCrypto lazily, and neither uploads files nor chooses application storage.

@@ -46,7 +46,7 @@ const SCRIPT = join(ROOT, 'scripts', 'dist-stamp.mjs');
  * one implementation: the bunker's second copy of this machinery is gone, so the packages that
  * could not detect a tampered `dist/` now can.
  */
-const WIRED = ['storage', 'permissions', 'accounts', 'vault', 'signers', 'bunker', 'pq', 'signer-core'] as const;
+const WIRED = ['storage', 'permissions', 'accounts', 'vault', 'data', 'relay', 'signers', 'bunker', 'dm', 'wallet', 'ui', 'pq', 'signer-core'] as const;
 
 /** The stamp a build left in a dist directory. */
 const readStamp = (dir: string) => JSON.parse(readFileSync(join(dir, STAMP), 'utf8')) as { inputs: string; outputs: string; tools: string };
@@ -255,7 +255,8 @@ describe('every package with a check is wired to the one implementation', () => 
   test.each(WIRED)('%s stamps after tsup exits and checks with the shared script', (name) => {
     const dir = join(ROOT, 'packages', name);
     const scripts = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).scripts as Record<string, string>;
-    expect(scripts['build']).toBe('tsup && node ../../scripts/dist-stamp.mjs stamp');
+    const build = name === 'ui' ? 'tsup && cp src/styles.css dist/styles.css' : 'tsup';
+    expect(scripts['build']).toBe(`${build} && node ../../scripts/dist-stamp.mjs stamp`);
     expect(scripts['check:dist']).toBe('node ../../scripts/dist-stamp.mjs check');
     // Not from tsup's onSuccess, which runs concurrently with the declaration worker: the
     // outputs hash taken there covers the previous `.d.ts` or none. The stamp is a separate
