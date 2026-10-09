@@ -29,7 +29,7 @@ export function readPublicKeyWithRetry(request: () => Promise<string>, signal: A
     if (signal.aborted) { cancelled(); return; }
     signal.addEventListener('abort', cancelled, { once: true });
     retry = setInterval(issue, 3000);
-    deadline = setTimeout(() => finish(new Error('nostrconnect: signer did not answer get_public_key within 12 seconds; please retry')), 12000);
+    deadline = setTimeout(() => finish(new Error('nostrconnect: signer did not answer get_public_key within 120 seconds; please retry')), 120000);
     issue();
   });
 }

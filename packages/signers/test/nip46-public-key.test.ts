@@ -25,7 +25,7 @@ it('times out with at most three requests instead of waiting forever', async () 
   const request = vi.fn(() => new Promise<string>(() => {}));
   const result = readPublicKeyWithRetry(request, new AbortController().signal);
   const assertion = expect(result).rejects.toThrow('did not answer get_public_key');
-  await vi.advanceTimersByTimeAsync(12000);
+  await vi.advanceTimersByTimeAsync(120000);
   await assertion;
   expect(request).toHaveBeenCalledTimes(3);
   expect(vi.getTimerCount()).toBe(0);
