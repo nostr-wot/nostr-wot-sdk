@@ -1,3 +1,5 @@
+import { StrictMode } from 'react';
+import { SignerStorageProvider } from '../src/signer-storage-context';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Nip46Signer } from '@nostr-wot/signers';
@@ -28,6 +30,23 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe('native NIP-46 connection actions', () => {
+  it('creates one QR attempt in StrictMode and cancels it on unmount', async () => {
+    const { unmount } = render(<StrictMode><Signer /></StrictMode>);
+    await screen.findByRole('link', { name: 'Open in signer app' });
+    expect(Nip46Signer.startNostrConnect).toHaveBeenCalledTimes(1);
+    unmount();
+  });
+
+  it('does not create a pairing after unmount while storage is pending', async () => {
+    let release!: (value: null) => void;
+    const storage = { getItem: () => new Promise<null>(resolve => { release = resolve; }), setItem: vi.fn(), removeItem: vi.fn() };
+    const { unmount } = render(<SignerStorageProvider storage={storage}><Signer /></SignerStorageProvider>);
+    unmount();
+    release(null);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(Nip46Signer.startNostrConnect).not.toHaveBeenCalled();
+  });
+
   it('forwards connection options through the modal and widget', async () => {
     render(<NostrSessionProvider autoRestore={false}><LoginModal open onClose={vi.fn()} methods={['nip46']} nip46Connection={{ labels }} /></NostrSessionProvider>);
     fireEvent.click(screen.getByRole('button', { name: /Remote signer/ }));

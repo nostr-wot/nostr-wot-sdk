@@ -1,5 +1,11 @@
 # @nostr-wot/ui
 
+## 0.8.2
+
+### Patch Changes
+
+- Prevent duplicate or stale QR pairing attempts during asynchronous storage and React StrictMode. Persist a completed pairing only after the signer returns its identity.
+
 ## 0.8.1
 
 ### Patch Changes

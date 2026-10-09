@@ -7,6 +7,7 @@ import {
 } from "nostr-tools/nip46";
 import { hexToBytes } from "@noble/hashes/utils";
 import type { NostrSigner } from "../types";
+import { readPublicKeyWithRetry } from "./public-key";
 
 /**
  * NIP-46 — Nostr Connect remote signer (a.k.a. bunker).
@@ -82,6 +83,8 @@ export class Nip46Signer implements NostrSigner {
   readonly #inner: BunkerSigner;
   readonly #clientSk: Uint8Array;
   readonly #relays: string[];
+  readonly #lifetime = new AbortController();
+  #publicKeyRequest: Promise<string> | undefined;
 
   private constructor(inner: BunkerSigner, clientSk: Uint8Array, relays: string[]) {
     this.#inner = inner;
@@ -145,6 +148,7 @@ export class Nip46Signer implements NostrSigner {
 
     let cancelled = false;
     let inner: BunkerSigner | null = null;
+    let paired: Nip46Signer | null = null;
 
     const ready = (async (): Promise<Nip46Signer> => {
       try {
@@ -156,7 +160,8 @@ export class Nip46Signer implements NostrSigner {
         // BunkerSigner.fromURI resolves once the bunker has paired; the
         // `connect` call itself happens internally. Touching getPublicKey is
         // a cheap way to confirm the channel is live before the UI settles.
-        return new Nip46Signer(inner, clientSk, opts.relays);
+        paired = new Nip46Signer(inner, clientSk, opts.relays);
+        return paired;
       } catch (err) {
         if (abort.signal.aborted && !cancelled) {
           throw new Error("nostrconnect: pairing timed out");
@@ -174,14 +179,19 @@ export class Nip46Signer implements NostrSigner {
         cancelled = true;
         clearTimeout(timer);
         abort.abort();
-        if (inner) void inner.close().catch(() => {});
+        if (paired) void paired.close();
+        else if (inner) void inner.close().catch(() => {});
       },
       ready,
     };
   }
 
   async getPublicKey(): Promise<string> {
-    return this.#inner.getPublicKey();
+    if (!this.#publicKeyRequest) {
+      this.#publicKeyRequest = readPublicKeyWithRetry(() => this.#inner.getPublicKey(), this.#lifetime.signal)
+        .catch((error) => { this.#publicKeyRequest = undefined; throw error; });
+    }
+    return this.#publicKeyRequest;
   }
 
   async signEvent(template: EventTemplate): Promise<Event> {
@@ -239,6 +249,7 @@ export class Nip46Signer implements NostrSigner {
   }
 
   async close(): Promise<void> {
+    this.#lifetime.abort();
     try {
       await this.#inner.close();
     } catch {

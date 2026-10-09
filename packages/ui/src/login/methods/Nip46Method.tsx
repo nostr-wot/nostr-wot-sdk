@@ -81,7 +81,6 @@ const DEFAULT_NOSTRCONNECT_RELAYS = [
   "wss://relay.nostr.band",
   "wss://nos.lol",
   "wss://relay.primal.net",
-  "wss://purplepag.es",
 ];
 
 /** Get-or-mint a stable client nsec across pairing attempts so the bunker
@@ -165,6 +164,7 @@ export function Nip46Method({
   const [pasting, setPasting] = useState(false);
 
   const handleRef = useRef<NostrConnectHandle | null>(null);
+  const attemptRef = useRef(0);
   const [qrSvg, setQrSvg] = useState<string | null>(null);
   const [qrUri, setQrUri] = useState<string | null>(null);
   const [waiting, setWaiting] = useState(false);
@@ -173,59 +173,64 @@ export function Nip46Method({
   const [authChallenge, setAuthChallenge] = useState<string | null>(null);
 
   const startQr = async () => {
+    const attempt = ++attemptRef.current;
+    handleRef.current?.cancel();
+    handleRef.current = null;
+    const current = () => attemptRef.current === attempt;
+    let slowTimer: ReturnType<typeof setTimeout> | undefined;
     setWaiting(true);
     setSlowHint(false);
     setAuthChallenge(null);
     try {
       const clientNsec = await getOrMintClientNsec(storage, nostrConnectRelays);
-      const clientSk = nsecToBytes(clientNsec);
-
+      // Effect cleanup can run while storage is pending (including StrictMode).
+      // A stale setup must never create sockets, render a QR or finish login.
+      if (!current()) return;
       const handle = Nip46Signer.startNostrConnect({
         relays: nostrConnectRelays,
-        clientSecretKey: clientSk,
+        clientSecretKey: nsecToBytes(clientNsec),
         ...(metadata ? { metadata } : {}),
         ...(perms ? { perms } : {}),
-        onAuthChallenge: (url) => setAuthChallenge(url),
+        onAuthChallenge: (url) => { if (current()) setAuthChallenge(url); },
       });
       handleRef.current = handle;
+      // Cancellation may reject ready while the QR renderer is still pending.
+      void handle.ready.catch(() => {});
+      const svg = await QRCode.toString(handle.uri, { type: "svg", margin: 1, width: 240 });
+      if (!current()) return;
       setQrUri(handle.uri);
-      const svg = await QRCode.toString(handle.uri, {
-        type: "svg",
-        margin: 1,
-        width: 240,
-      });
       setQrSvg(svg);
-
-      const slowTimer = setTimeout(() => setSlowHint(true), 10_000);
-      try {
-        const signer = await handle.ready;
-        clearTimeout(slowTimer);
-        const exportedClientNsec = signer.exportClientNsec();
-        await writePersistedTo(storage, {
-          kind: "nostrconnect",
-          bunkerPubkey: signer.bunkerPubkey,
-          relays: signer.relays,
-          clientNsec: exportedClientNsec,
-        });
-        const pubkey = await signer.getPublicKey();
-        await onAttached(signer, pubkey, {
-          bunkerUri: synthesizeBunkerUri(signer.bunkerPubkey, signer.relays),
-          clientNsec: exportedClientNsec,
-        });
-      } catch (err) {
-        clearTimeout(slowTimer);
-        if (handleRef.current === handle) {
-          onError(err instanceof Error ? err.message : String(err));
-        }
-      }
+      slowTimer = setTimeout(() => { if (current()) setSlowHint(true); }, 10_000);
+      const signer = await handle.ready;
+      if (!current()) { await signer.close(); return; }
+      const pubkey = await signer.getPublicKey();
+      if (!current()) { await signer.close(); return; }
+      const exportedClientNsec = signer.exportClientNsec();
+      await writePersistedTo(storage, {
+        kind: "nostrconnect",
+        bunkerPubkey: signer.bunkerPubkey,
+        relays: signer.relays,
+        clientNsec: exportedClientNsec,
+      });
+      if (!current()) { await signer.close(); return; }
+      await onAttached(signer, pubkey, {
+        bunkerUri: synthesizeBunkerUri(signer.bunkerPubkey, signer.relays),
+        clientNsec: exportedClientNsec,
+      });
     } catch (err) {
-      onError(err instanceof Error ? err.message : String(err));
+      if (current()) {
+        handleRef.current?.cancel();
+        handleRef.current = null;
+        onError(err instanceof Error ? err.message : String(err));
+      }
     } finally {
-      setWaiting(false);
+      clearTimeout(slowTimer);
+      if (current()) setWaiting(false);
     }
   };
 
   const cancelQr = () => {
+    attemptRef.current++;
     handleRef.current?.cancel();
     handleRef.current = null;
     setQrSvg(null);
@@ -237,9 +242,9 @@ export function Nip46Method({
 
   useEffect(() => {
     if (stage !== "form" || mode !== "qr") return;
-    if (qrSvg || waiting) return;
     void startQr();
     return () => {
+      attemptRef.current++;
       handleRef.current?.cancel();
       handleRef.current = null;
     };

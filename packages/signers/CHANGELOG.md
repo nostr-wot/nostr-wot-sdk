@@ -1,5 +1,11 @@
 # @nostr-wot/signers
 
+## 1.2.2
+
+### Patch Changes
+
+- Bound remote signer identity reads with retries and cancellation instead of waiting forever.
+
 ## 1.2.1
 
 ### Patch Changes
