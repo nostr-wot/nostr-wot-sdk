@@ -338,8 +338,8 @@ describe('subscription registry', () => {
     expect(terminal).toEqual(['restricted: not a member']); // the terminal one is reported through both
     h.release();
 
-    // A quota CLOSED would park the sub and shed another; a holder that
-    // lets go inside the verdict callback keeps the hub out of it.
+    // A quota CLOSED lowers the socket budget even when a holder
+    // lets go inside the verdict callback. New REQs still wait for recovery.
     const budgetBefore = t.hub.status(A).budget;
     const quota = t.hub.subscribe({
       relays: [A],
@@ -349,7 +349,7 @@ describe('subscription registry', () => {
     });
     await flush();
     relay.closed(relay.reqLog[2].id, 'restricted: Subscription quota exceeded: 50/50');
-    expect(t.hub.status(A).budget).toEqual({ ...budgetBefore, used: 0, parked: 0 });
+    expect(t.hub.status(A).budget).toEqual({ ...budgetBefore, max: budgetBefore.max - 1, used: 0, parked: 0 });
     expect(t.hub.status(A).openSubs).toBe(0);
   });
 

@@ -40,6 +40,7 @@ export interface RegistryOptions {
 export class SubScheduler {
   /** One bucket per socket key. */
   readonly buckets = new Map<string, Bucket>();
+  private readonly draining = new Set<Bucket>();
 
   constructor(
     private readonly auth: AuthLayer,
@@ -75,13 +76,18 @@ export class SubScheduler {
   }
 
   tryIssue(live: LiveSub): void {
-    if (live.terminalReason !== null || live.issued) return;
+    if (live.terminalReason !== null || live.issued || live.holders.size === 0) return;
+    if (live.deadlineAt !== undefined && Date.now() >= live.deadlineAt) {
+      this.terminate(live, 'query deadline expired');
+      return;
+    }
     const entry = live.entry;
     if (entry.connection !== 'connected') {
       setStatus(live, 'pending');
       return;
     }
     const bucket = this.bucket(entry);
+    if (bucket.penaltyTimer) { setStatus(live, 'parked'); return; }
     if (usedSlots(bucket) < bucket.max) {
       this.issue(live);
       return;
@@ -97,11 +103,18 @@ export class SubScheduler {
   }
 
   unparkOne(bucket: Bucket): void {
-    const parked = Array.from(bucket.subs.values())
-      .filter((l) => l.status === 'parked' && l.terminalReason === null && !l.issued)
-      .sort(byPriority);
-    const next = parked[0];
-    if (next) this.tryIssue(next);
+    if (this.draining.has(bucket)) return;
+    this.draining.add(bucket);
+    try {
+      const parked = Array.from(bucket.subs.values())
+        .filter((l) => l.status === 'parked' && l.terminalReason === null && !l.issued)
+        .sort(byPriority);
+      for (const next of parked) {
+        this.tryIssue(next);
+        // Expired queries are removed iteratively, never recursively.
+        if (next.terminalReason === null) break;
+      }
+    } finally { this.draining.delete(bucket); }
   }
 
   private park(live: LiveSub): void {
@@ -128,6 +141,7 @@ export class SubScheduler {
       label,
     });
     ref.sub = sub;
+    if (!this.isCurrent(live, ref) || live.holders.size === 0) { sub.close(); return; }
     this.armWatchdog(live);
     setStatus(live, 'open');
   }
@@ -194,10 +208,13 @@ export class SubScheduler {
       setStatus(live, 'pending');
       return;
     }
+    const reasonClass = classifyClosedReason(reason);
+    // Apply socket pressure before callbacks can release and unpark another REQ.
+    if (reasonClass === 'quota') this.quotaHit(live);
     for (const holder of Array.from(live.holders)) holder.spec.onRelayClosed?.(live.url, reason);
     // A holder that released inside the verdict callback took the REQ with it.
     if (live.holders.size === 0 || live.terminalReason !== null) return;
-    switch (classifyClosedReason(reason)) {
+    switch (reasonClass) {
       case 'auth':
         this.onAuthClosed(live, reason);
         return;
@@ -205,7 +222,6 @@ export class SubScheduler {
         this.terminate(live, reason);
         return;
       case 'quota':
-        this.quotaHit(live);
         return;
       case 'other':
         if (live.attempt >= this.opts.closedRetryAttempts) {
@@ -259,7 +275,9 @@ export class SubScheduler {
     bucket.penaltyTimer = setTimeout(() => {
       bucket.penaltyTimer = null;
       bucket.max = this.opts.maxSubsPerSocket;
-      this.unparkOne(bucket);
+      for (const pending of [...bucket.subs.values()].sort(byPriority)) {
+        if (pending.status === 'parked') this.tryIssue(pending);
+      }
     }, this.opts.quotaPenaltyMs);
     this.park(live);
     // The relay says we hold too many; shed the lowest open one too so the

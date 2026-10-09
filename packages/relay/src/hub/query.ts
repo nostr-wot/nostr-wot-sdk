@@ -15,11 +15,13 @@
  * lookup), so the byte budget is what bounds memory; the count cap bounds
  * bookkeeping: 256 × (key ~200 B + record 56 B + Map 40 B) ≈ 76 KB.
  *
- * Never shares a REQ with a live `subscribe`: CLOSE-on-EOSE vs keep-open.
+ * Shares the hub socket budget with live subscriptions, using separate keys
+ * so CLOSE-on-EOSE never closes a keep-open subscription.
  */
 import type { Event as NostrEvent } from 'nostr-tools';
 import type { HubEnv, Identity, QueryRelayOutcome, QueryResult, QuerySpec, SubscriptionLike } from './types';
 import type { SocketEntry, SocketTable } from './sockets';
+import type { SubscriptionRegistry } from './registry';
 import { BoundedMap } from './bounded-map';
 import { normalizeURL, queryKey } from './canonical';
 import { SYNTHETIC_EOSE_MARGIN_MS } from './env';
@@ -54,6 +56,7 @@ export class QueryPath {
     private readonly sockets: SocketTable,
     env: HubEnv,
     private readonly opts: QueryOptions,
+    private readonly registry?: SubscriptionRegistry,
   ) {
     this.cache = new BoundedMap<string, QueryResult>({
       maxEntries: opts.maxEntries,
@@ -131,6 +134,7 @@ export class QueryPath {
           perRelay,
         });
       };
+      const deadlineAt = Date.now() + maxWait;
       const deadline = setTimeout(finish, maxWait);
       const settle = (url: string, outcome: QueryRelayOutcome) => {
         if (perRelay[url]) return;
@@ -155,8 +159,8 @@ export class QueryPath {
             if (done) return;
             const ref: { sub: SubscriptionLike | null } = { sub: null };
             let closingOurselves = false;
-            ref.sub = entry.relay.subscribe(filters, {
-              onevent: (ev) => {
+            const params = {
+              onevent: (ev: NostrEvent) => {
                 if (done || seen.has(ev.id)) return;
                 seen.add(ev.id);
                 events.push(ev);
@@ -183,8 +187,19 @@ export class QueryPath {
               // Behind the deadline, so only a relay EOSE can prove empty.
               eoseTimeout: maxWait + SYNTHETIC_EOSE_MARGIN_MS,
               label: spec.label ?? 'hub-query',
-            });
-            subs.push(ref.sub);
+            };
+            if (this.registry) {
+              const handle = this.registry.subscribe({
+                relays: [url], filters, priority: 'active', maxAttempts: 1,
+                watchdogMs: maxWait, label: params.label,
+                onEvent: params.onevent, onEose: params.oneose,
+                onRelayClosed: params.onclose, onClosed: params.onclose,
+              }, identity, 'query:', deadlineAt);
+              ref.sub = { id: handle.keys[0], close: () => handle.release() };
+            } else ref.sub = entry.relay.subscribe(filters, params);
+            // A synchronous CLOSED may settle before subscribe returns.
+            if (done || perRelay[url]) ref.sub.close();
+            else subs.push(ref.sub);
         };
         if (entry.connection === 'connected') issue();
         else this.sockets.whenConnected(entry, maxWait).then(issue, () => settle(url, 'unreachable'));

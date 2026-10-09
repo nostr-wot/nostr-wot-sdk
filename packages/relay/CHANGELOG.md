@@ -1,5 +1,11 @@
 # @nostr-wot/relay
 
+## 0.2.1
+
+### Patch Changes
+
+- Share the per-socket subscription budget with one-shot queries, expire queued reads without sending them, and apply a socket-wide cooldown before quota-close callbacks can release and replace requests. Preserve separate query/live lifetimes and classify restricted rate-limit responses as transient pressure.
+
 ## 0.2.0
 
 ### Minor Changes

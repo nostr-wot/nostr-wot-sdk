@@ -101,7 +101,7 @@ export class RelayHubImpl implements RelayHub {
       closedRetryAttempts: 3,
       quotaPenaltyMs: 60_000,
     });
-    this.queries = new QueryPath(this.sockets, this.env, DEFAULT_QUERY_OPTIONS);
+    this.queries = new QueryPath(this.sockets, this.env, DEFAULT_QUERY_OPTIONS, this.registry);
   }
 
   // ---- identities and AUTH policy ----------------------------------------------

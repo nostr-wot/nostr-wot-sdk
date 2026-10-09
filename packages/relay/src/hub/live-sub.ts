@@ -20,6 +20,8 @@ export interface IssuedRef {
 }
 
 export interface LiveSub {
+  /** One-shot reads must not issue after their caller deadline. */
+  deadlineAt?: number;
   readonly key: string;
   readonly url: RelayUrl;
   readonly entry: SocketEntry;

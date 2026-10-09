@@ -24,12 +24,12 @@ export function isQuotaReason(reason: string): boolean {
  * a wrapper around `restricted:` is the relay's final answer, so `restricted`.
  */
 export function classifyClosedReason(reason: string): ClosedReasonClass {
+  if (isQuotaReason(reason)) return 'quota';
   if (reason.startsWith(AUTH_ATTEMPTED_PREFIX)) {
     const inner = reason.slice(AUTH_ATTEMPTED_PREFIX.length).trim();
     return inner.startsWith('restricted:') ? 'restricted' : 'auth';
   }
   if (reason.startsWith('auth-required:')) return 'auth';
   if (reason.startsWith('restricted:')) return 'restricted';
-  if (isQuotaReason(reason)) return 'quota';
   return 'other';
 }

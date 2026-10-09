@@ -19,7 +19,7 @@ describe('classifyClosedReason', () => {
   });
 
   it('reads rate limits and subscription caps as quota, anything else as other', () => {
-    for (const reason of ['error: too many concurrent REQs', 'rate-limited: slow down', 'max subscriptions reached', 'Quota exceeded']) {
+    for (const reason of ['error: too many concurrent REQs', 'rate-limited: slow down', 'max subscriptions reached', 'Quota exceeded', 'restricted: connection rate limit exceeded', 'restricted: Subscription quota exceeded: 128/128']) {
       expect(isQuotaReason(reason)).toBe(true);
       expect(classifyClosedReason(reason)).toBe('quota');
     }

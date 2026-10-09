@@ -74,7 +74,7 @@ export class SubscriptionRegistry {
     this.scheduler = new SubScheduler(auth, opts);
   }
 
-  subscribe(spec: SubscribeSpec, identity: Identity): SubscriptionHandle {
+  subscribe(spec: SubscribeSpec, identity: Identity, scope = '', deadlineAt?: number): SubscriptionHandle {
     if (spec.filters.length === 0) throw new Error('subscribe: at least one filter is required');
     const holder: Holder = { spec, priority: spec.priority ?? 'background' };
     const filters = spec.filters.map((f) => ({ ...f }));
@@ -84,13 +84,14 @@ export class SubscriptionRegistry {
     try {
       for (const url of urls) {
         const entry = this.sockets.ensure(url, identity);
-        const key = subKey(entry.url, filters);
+        const key = scope + subKey(entry.url, filters);
         const bucket = this.scheduler.bucket(entry);
         let live = bucket.subs.get(key);
         if (live) {
           shared = true;
         } else {
           live = createLiveSub(key, entry, filters, holder.priority, ++this.seq);
+          live.deadlineAt = deadlineAt;
           bucket.subs.set(key, live);
           entry.subs += 1;
         }
@@ -146,7 +147,11 @@ export class SubscriptionRegistry {
   onSocketDrop(entry: SocketEntry): void {
     const bucket = this.scheduler.buckets.get(entry.key);
     if (!bucket) return;
-    for (const live of bucket.subs.values()) {
+    for (const live of Array.from(bucket.subs.values())) {
+      if (live.deadlineAt !== undefined) {
+        this.scheduler.terminate(live, 'socket dropped');
+        continue;
+      }
       live.issued = null;
       clearRetry(live);
       clearWatchdog(live);

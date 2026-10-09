@@ -139,3 +139,9 @@ Parsing does not infer a scheme, sort query parameters, remove fragments, or str
 Import `createRelayHub`, `getRelayHub`, `currentRelayHub`, and the hub types from `@nostr-wot/relay/hub`. The hub owns subscriptions, queries, publishing, authentication leases, bounded caches, and identity-scoped pooled connections. `createRelayHub(options)` creates an independent instance; `getRelayHub(options)` shares one module-level instance and honors options only on first creation. `currentRelayHub()` observes that singleton without creating it. Use one package installation/import mode for callers that must share it.
 
 `FakeRelayFactory` supports deterministic transport tests without network sockets. `resetRelayHubForTests()` disposes and clears the shared instance between tests. The hub subpath is separate from the default relay utilities, so consumers needing URL validation do not load the connection manager.
+
+### Subscription pressure
+
+Hub one-shot queries and live subscriptions share the per-socket REQ budget (40 by default). Queries use separate subscription keys so a completed one-shot cannot close or attach to an already-EOSE live feed. They have active priority below voice; queued queries expire at their original deadline without briefly issuing an expired REQ.
+
+A quota or rate-limit CLOSED, including one prefixed with `restricted:`, pauses new subscriptions on that socket for 60 seconds and lowers its budget. The cooldown is installed before caller callbacks run, so releasing a rejected subscription cannot immediately open another queued request. Existing accepted subscriptions remain open. Repeated callbacks and pending query cleanup cannot bypass the cooldown.
