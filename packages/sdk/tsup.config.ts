@@ -25,21 +25,27 @@ const COMMON = {
   },
 };
 
-export default defineConfig([
-  { ...COMMON, entry: ['src/index.ts'], outDir: 'dist', clean: true },
-  { ...COMMON, entry: ['src/react/index.ts'], outDir: 'dist/react' },
-  { ...COMMON, entry: ['src/relay/index.ts'], outDir: 'dist/relay' },
-  { ...COMMON, entry: ['src/relay/react/index.ts'], outDir: 'dist/relay/react' },
-  { ...COMMON, entry: ['src/data/index.ts'], outDir: 'dist/data' },
-  { ...COMMON, entry: ['src/data/cache/index.ts'], outDir: 'dist/data/cache' },
-  { ...COMMON, entry: ['src/signers/index.ts'], outDir: 'dist/signers' },
-  { ...COMMON, entry: ['src/ui/index.ts'], outDir: 'dist/ui' },
-  { ...COMMON, entry: ['src/dm/index.ts'], outDir: 'dist/dm' },
-  { ...COMMON, entry: ['src/dm/react/index.ts'], outDir: 'dist/dm/react' },
-  { ...COMMON, entry: ['src/wallet/index.ts'], outDir: 'dist/wallet' },
-  { ...COMMON, entry: ['src/wallet/react/index.ts'], outDir: 'dist/wallet/react' },
-  { ...COMMON, entry: ['src/auth/index.ts'], outDir: 'dist/auth' },
-  { ...COMMON, entry: ['src/blossom/index.ts'], outDir: 'dist/blossom' },
-  { ...COMMON, entry: ['src/graph/index.ts'], outDir: 'dist/graph' },
-  { ...COMMON, entry: ['src/graph/react/index.ts'], outDir: 'dist/graph/react' },
-]);
+// One build owns dist/: cleaning one concurrent config could remove another's declarations.
+export default defineConfig({
+  ...COMMON,
+  entry: {
+    index: 'src/index.ts',
+    'react/index': 'src/react/index.ts',
+    'relay/index': 'src/relay/index.ts',
+    'relay/react/index': 'src/relay/react/index.ts',
+    'data/index': 'src/data/index.ts',
+    'data/cache/index': 'src/data/cache/index.ts',
+    'signers/index': 'src/signers/index.ts',
+    'ui/index': 'src/ui/index.ts',
+    'dm/index': 'src/dm/index.ts',
+    'dm/react/index': 'src/dm/react/index.ts',
+    'wallet/index': 'src/wallet/index.ts',
+    'wallet/react/index': 'src/wallet/react/index.ts',
+    'auth/index': 'src/auth/index.ts',
+    'blossom/index': 'src/blossom/index.ts',
+    'graph/index': 'src/graph/index.ts',
+    'graph/react/index': 'src/graph/react/index.ts',
+  },
+  outDir: 'dist',
+  clean: true,
+});
