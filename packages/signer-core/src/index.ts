@@ -20,6 +20,8 @@ export type {
   ValidatedBatch,
   BatchItemOutcome,
   BatchResult,
+  AuthenticationPolicy,
+  ApprovalContext,
   ApprovalDecision,
   ApprovalPort,
   ActivityEntry,

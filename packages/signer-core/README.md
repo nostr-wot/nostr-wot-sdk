@@ -437,3 +437,11 @@ above, and an older React Native host needs a polyfill for them as it does for t
 source. Without one the failure is loud rather than silent: a payload that names the hybrid
 envelope but cannot be decoded is refused as a post-quantum payload, with that in the error
 and in the activity entry, instead of being routed classic and failing there.
+
+## Authentication requests
+
+The signing boundary parses kind 22242 and 27235 with `@nostr-wot/permissions` before asking. Malformed or ambiguous tags, stale timestamps and insecure destinations fail before signing. Authentication always reaches the local approval port, including remote accounts and callers with a broad allow. The third `present(request, account, context)` argument contains the parsed protocol, exact URL, method and cross-origin status; the approval must explicitly return `{ allow: true, authenticationScope: 'once' }`. A generic allow is insufficient. Authentication items must be sent individually rather than in a batch.
+
+The core uses the transport-attested web origin. Non-web callers must provide `authentication.originFor(request, account)` to resolve a trusted HTTP origin. Never derive this value from event tags. `authentication.assertAllowed` lets the host enforce connected-site state, frame restrictions, privileged endpoint policy and destination-grant revocation. It runs before approval and again before and after signing, along with timestamp, permission and account checks. Hosts implementing remembered grants or opt-in backend automation can use `AuthenticationGrants` in their approval adapter and must revalidate that authorization in `assertAllowed`; the core does not silently turn kind rules into destination grants.
+
+Legacy website login compatibility is off by default. Hosts can set exact `authentication.legacyLoginOrigins`; only the narrow domain/challenge format is accepted. The approval context identifies `legacy-login`, which the host must display as a nonstandard authentication warning with guidance to contact the client developers. It always requires one-time consent and never persists a blanket allow or denial. This matches the extension's `src/domain/signing/authentication.ts` and `src/services/signing/signer.ts` boundaries without embedding a particular client's identity in the library.

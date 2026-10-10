@@ -17,6 +17,7 @@ import { Vault, noblePbkdf2, type Pbkdf2Port } from '@nostr-wot/vault';
 import { Permissions } from '@nostr-wot/permissions';
 import {
   SignerCore,
+  type AuthenticationPolicy,
   type ActivityEntry,
   type ActivityPort,
   type ApprovalDecision,
@@ -132,11 +133,13 @@ export function recordingActivity(): RecordingActivity {
 
 export interface FixtureOptions {
   accounts?: Account[];
+  now?: () => number;
   locked?: boolean;
   unlock?: UnlockPort;
   identity?: IdentityPort;
   remote?: RemoteSignerPort;
   logger?: SignerLogger;
+  authentication?: AuthenticationPolicy;
 }
 
 export const cores: SignerCore[] = [];
@@ -162,7 +165,7 @@ export function vaultIdentity(vault: Vault, accounts: Account[]): IdentityPort &
 }
 
 export async function fixture(approve: Mode, options: FixtureOptions = {}) {
-  const vault = new Vault({ store: new MemoryStore(), kdf: fastKdf });
+  const vault = new Vault({ store: new MemoryStore(), kdf: fastKdf, now: options.now });
   const accounts = options.accounts ?? [account('acct_1', PRIVKEY_1)];
   await vault.create(PASSWORD, accounts);
   if (options.locked) vault.lock();
@@ -179,6 +182,7 @@ export async function fixture(approve: Mode, options: FixtureOptions = {}) {
     unlock: options.unlock,
     remote: options.remote,
     logger: options.logger,
+    authentication: options.authentication,
   });
   cores.push(core);
   return { core, vault, permissions, approval, activity, accounts, identity };

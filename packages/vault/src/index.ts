@@ -60,6 +60,7 @@ export type { AutoLockOption } from './autolock.js';
 export { AUTO_LOCK_OPTIONS, shouldAutoLock } from './autolock.js';
 
 export type {
+  AccountRemovalInfo,
   ImportedPqKeys,
   PqKeyPair,
   RemoteSignerAccount,
@@ -69,3 +70,31 @@ export type {
   VaultOptions,
 } from './vault.js';
 export { Vault, VaultLockedOutError } from './vault.js';
+
+export {
+  PASSKEY_RP_ID,
+  PASSKEY_VAULT_VERSION,
+  PASSKEY_BACKUP_FORMAT,
+  PASSKEY_MAX_BACKUP_BYTES,
+  PASSKEY_MAX_CREDENTIALS,
+  PASSKEY_KDF_CONTEXT,
+  validatePasskeyInput,
+  validatePasskeyEnrollment,
+  validatePasskeyRecord,
+  parsePasskeyBackup,
+  serializePasskeyBackup,
+  wrapVaultKey,
+  unwrapVaultKey,
+  withPasskeyVaultKey,
+  sealPasskeyPayload,
+  createPasskeyRecord,
+  openPasskeyRecord,
+} from './passkey.js';
+export type {
+  PasskeyMetadata,
+  PasskeyInput,
+  PasskeyProof,
+  PasskeyWrapper,
+  PasskeyEnrollment,
+  PasskeyVaultRecord,
+} from './passkey.js';

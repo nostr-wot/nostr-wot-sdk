@@ -206,3 +206,7 @@ await requestZapInvoice(signer, { recipientPubkey, amountMsats });
 ## License
 
 MIT
+
+### NIP-46 transport lifetime
+
+Call `await signer.close()` on teardown, or `handle.cancel()` when abandoning QR pairing. An internally created pool belongs to the signer: failed pairing, timeout, cancellation, and close dispose its sockets, including connections still opening. A pool supplied through `pool` remains caller-owned; cleanup closes only this signer's subscriptions and never destroys the shared pool. The socket disposal follows the extension's `src/services/signing/nip46Connection.ts` transport ownership rules.

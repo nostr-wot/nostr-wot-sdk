@@ -67,6 +67,8 @@ const SYNCHRONOUS: ReadonlyArray<[string, (vault: Vault) => unknown]> = [
   ['getDecryptedPayload', (vault) => vault.getDecryptedPayload()],
   ['setAutoLockTimeout', (vault) => vault.setAutoLockTimeout(0)],
   ['lock', (vault) => vault.lock()],
+  ['getAccountRemovalInfo', (vault) => vault.getAccountRemovalInfo('acct_1')],
+  ['clearActiveAccount', (vault) => vault.clearActiveAccount()],
 ];
 
 /** Every member that reaches the store, or whose callback makes it asynchronous. */
@@ -75,6 +77,7 @@ const ASYNCHRONOUS: ReadonlyArray<[string, (vault: Vault) => unknown]> = [
   ['unlock', (vault) => vault.unlock(PASSWORD)],
   ['create', (vault) => vault.create(PASSWORD, [account])],
   ['destroy', (vault) => vault.destroy()],
+  ['destroyIfEmpty', (vault) => vault.destroyIfEmpty()],
   ['changePassword', (vault) => vault.changePassword(PASSWORD, 'another password')],
   ['reEncrypt', (vault) => vault.reEncrypt('another password')],
   ['getAutoLockMs', (vault) => vault.getAutoLockMs()],

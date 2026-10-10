@@ -67,8 +67,13 @@
 import { NIP42_KIND, NIP98_KIND } from './constants.js';
 import { canonicalHttpOrigin, canonicalWebSocketOrigin, hostnameOf } from './scope.js';
 
+/** Explicit host policy for nonstandard website login. Empty by default. */
+export interface AuthenticationParserOptions {
+  legacyLoginOrigins?: readonly string[];
+}
+
 /** Which authentication protocol an event speaks. */
-export type AuthenticationProtocol = 'nip42' | 'nip98';
+export type AuthenticationProtocol = 'nip42' | 'nip98' | 'legacy-login';
 
 /**
  * How widely a consent applies.
@@ -293,6 +298,7 @@ export function parseAuthentication(
   event: AuthenticationEventInput,
   origin: string,
   now: number = Math.floor(Date.now() / 1000),
+  options: AuthenticationParserOptions = {},
 ): AuthenticationRequest | undefined {
   if (event.kind !== NIP98_KIND && event.kind !== NIP42_KIND) return undefined;
   const relay = event.kind === NIP42_KIND;
@@ -308,6 +314,19 @@ export function parseAuthentication(
     if (event.tags?.some((item) => item[0] === name) && tag(event, name) !== origin) {
       throw new Error(`Invalid authentication ${name} tag`);
     }
+  }
+  if (relay && !event.tags.some(item => item[0] === 'relay') && event.tags.some(item => item[0] === 'domain')) {
+    if (!options.legacyLoginOrigins?.includes(origin) || canonicalHttpOrigin(origin) !== origin
+      || !origin.startsWith('https://') || tag(event, 'domain') !== hostnameOf(origin)
+      || event.tags.some(item => !['domain', 'challenge', 'origin', 'client-origin'].includes(item[0]!))) {
+      throw new Error('Invalid legacy authentication domain or format');
+    }
+    if (!tag(event, 'challenge').trim()) throw new Error('Invalid authentication challenge tag');
+    if (!Number.isInteger(event.created_at) || Math.abs(now - event.created_at) > NIP98_MAX_AGE_SECONDS) {
+      throw new Error('Invalid authentication timestamp');
+    }
+    if (event.content !== '') throw new Error('Invalid authentication content');
+    return { protocol: 'legacy-login', url: origin, destination: origin, crossOrigin: false };
   }
   const raw = tag(event, relay ? 'relay' : 'u');
 
@@ -374,6 +393,7 @@ export function validAuthenticationScope(
   auth: AuthenticationRequest,
   scope: unknown,
 ): scope is AuthenticationScope {
+  if (auth.protocol === 'legacy-login') return scope === 'once';
   return (
     scope === 'once' || scope === 'site' || (scope === 'connected-sites' && auth.protocol === 'nip42')
   );

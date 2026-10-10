@@ -75,7 +75,7 @@
   },
   "dependencies": {
     "@nostr-wot/data": "^0.7.0",
-    "@nostr-wot/signers": "1.2.1",
+    "@nostr-wot/signers": "1.2.2",
     "@noble/hashes": "^2.0.1"
   },
   "peerDependencies": {

@@ -1,6 +1,6 @@
 # nostr-wot-sdk monorepo
 
-A set of focused, peer-dep-only packages that compose into a full Nostr stack — data, signers, login UI, DMs, blossom uploads, wallets, WoT, and a server-side auth helper. Pick the slices you need; the meta package re-exports the core for back-compat.
+A set of focused packages that compose into a full Nostr stack — data, signers, login UI, DMs, blossom uploads, wallets, WoT, and a server-side auth helper. Pick the slices you need; the meta package re-exports the core for back-compat.
 
 ## Packages
 
@@ -20,6 +20,18 @@ A set of focused, peer-dep-only packages that compose into a full Nostr stack �
 | **[`@nostr-wot/bunker`](./packages/bunker)** | NIP-46 responder (the bunker side). `BunkerServer` listens for kind 24133 requests, verifies pairing secrets, dedupes, and hands every request to one injected handler. Both `bunker://` and `nostrconnect://` pairing; NIP-44 transport only. | `@nostr-wot/relay`, `nostr-tools` (peer) |
 | **[`@nostr-wot/ui`](./packages/ui)** | Headless React login UI — `<NostrSessionProvider>`, `<LoginButton>`, `<LoginModal>`, `<LoginWidget>`. Four login methods, NIP-46 QR + paste tabs, optional profile-setup wizard, pluggable encrypted-at-rest signer storage, branding slots, themable via CSS variables (built-in `light` / `dark` / `la-crypta` themes). Built-in `@nostr-wot/auth` handshake when you set `authBaseUrl`. | `@nostr-wot/data`, `@nostr-wot/signers` |
 | **[`@nostr-wot/auth`](./packages/auth)** | Server-side NIP-98 challenge / verify / JWT for Nostr login. Web-standard handlers + Next.js shim + a client helper that pairs with `@nostr-wot/ui`'s `authBaseUrl`. | — |
+
+### Shared signer core
+
+| Package | Scope |
+| --- | --- |
+| [`@nostr-wot/storage`](./packages/storage) | Portable key/value storage adapters. |
+| [`@nostr-wot/accounts`](./packages/accounts) | Account records, key import and seed derivation. |
+| [`@nostr-wot/permissions`](./packages/permissions) | Global/site rules and destination-scoped authentication. |
+| [`@nostr-wot/vault`](./packages/vault) | Password vault lifecycle and portable passkey record encryption. |
+| [`@nostr-wot/signer-core`](./packages/signer-core) | Approval, authorization and signing over host-supplied ports. |
+
+See [extension integration](./docs/extension-shared-core.md) for storage compatibility and browser-owned responsibilities.
 
 ### Capability packages
 

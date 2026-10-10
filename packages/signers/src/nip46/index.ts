@@ -7,6 +7,7 @@ import {
 } from "nostr-tools/nip46";
 import { hexToBytes } from "@noble/hashes/utils";
 import type { NostrSigner } from "../types";
+import { Nip46Connection } from "./connection";
 import { readPublicKeyWithRetry } from "./public-key";
 
 /**
@@ -81,12 +82,14 @@ function toBytes(sk: Uint8Array | string): Uint8Array {
 
 export class Nip46Signer implements NostrSigner {
   readonly #inner: BunkerSigner;
+  readonly #connection: Nip46Connection;
   readonly #clientSk: Uint8Array;
   readonly #relays: string[];
   readonly #lifetime = new AbortController();
   #publicKeyRequest: Promise<string> | undefined;
 
-  private constructor(inner: BunkerSigner, clientSk: Uint8Array, relays: string[]) {
+  private constructor(inner: BunkerSigner, clientSk: Uint8Array, relays: string[], connection: Nip46Connection) {
+    this.#connection = connection;
     this.#inner = inner;
     this.#clientSk = clientSk;
     this.#relays = relays;
@@ -107,12 +110,18 @@ export class Nip46Signer implements NostrSigner {
     }
 
     const clientSk = opts?.clientSecretKey ? toBytes(opts.clientSecretKey) : generateSecretKey();
-    const inner = BunkerSigner.fromBunker(clientSk, bp, {
-      ...(opts?.pool ? { pool: opts.pool } : {}),
-      ...(opts?.onAuthChallenge ? { onauth: opts.onAuthChallenge } : {}),
-    });
-    await inner.connect();
-    return new Nip46Signer(inner, clientSk, bp.relays);
+    const connection = new Nip46Connection(opts?.pool);
+    try {
+      const inner = connection.attach(BunkerSigner.fromBunker(clientSk, bp, {
+        pool: connection.pool,
+        ...(opts?.onAuthChallenge ? { onauth: opts.onAuthChallenge } : {}),
+      }));
+      await inner.connect();
+      return new Nip46Signer(inner, clientSk, bp.relays, connection);
+    } catch (error) {
+      connection.dispose();
+      throw error;
+    }
   }
 
   /**
@@ -137,32 +146,28 @@ export class Nip46Signer implements NostrSigner {
       ...(opts.metadata?.image ? { image: opts.metadata.image } : {}),
     });
 
+    const connection = new Nip46Connection(opts.pool);
     const pairTimeout = opts.pairTimeoutMs ?? 5 * 60_000;
     const abort = new AbortController();
-    const timer = setTimeout(() => abort.abort(), pairTimeout);
+    const timer = setTimeout(() => { abort.abort(); connection.dispose(); }, pairTimeout);
 
     const bunkerParams = {
-      ...(opts.pool ? { pool: opts.pool } : {}),
+      pool: connection.pool,
       ...(opts.onAuthChallenge ? { onauth: opts.onAuthChallenge } : {}),
     };
 
     let cancelled = false;
-    let inner: BunkerSigner | null = null;
     let paired: Nip46Signer | null = null;
 
     const ready = (async (): Promise<Nip46Signer> => {
       try {
-        inner = await BunkerSigner.fromURI(clientSk, uri, bunkerParams, abort.signal);
-        if (cancelled) {
-          await inner.close().catch(() => {});
-          throw new Error("nostrconnect: cancelled");
-        }
-        // BunkerSigner.fromURI resolves once the bunker has paired; the
-        // `connect` call itself happens internally. Touching getPublicKey is
-        // a cheap way to confirm the channel is live before the UI settles.
-        paired = new Nip46Signer(inner, clientSk, opts.relays);
+        const inner = connection.attach(await BunkerSigner.fromURI(clientSk, uri, bunkerParams, abort.signal));
+        // fromURI performs the handshake; attach rejects and closes late results
+        // if the transport was disposed while pairing was pending.
+        paired = new Nip46Signer(inner, clientSk, opts.relays, connection);
         return paired;
       } catch (err) {
+        connection.dispose();
         if (abort.signal.aborted && !cancelled) {
           throw new Error("nostrconnect: pairing timed out");
         }
@@ -179,8 +184,8 @@ export class Nip46Signer implements NostrSigner {
         cancelled = true;
         clearTimeout(timer);
         abort.abort();
+        connection.dispose();
         if (paired) void paired.close();
-        else if (inner) void inner.close().catch(() => {});
       },
       ready,
     };
@@ -250,11 +255,7 @@ export class Nip46Signer implements NostrSigner {
 
   async close(): Promise<void> {
     this.#lifetime.abort();
-    try {
-      await this.#inner.close();
-    } catch {
-      /* ignore */
-    }
+    this.#connection.dispose();
   }
 }
 
