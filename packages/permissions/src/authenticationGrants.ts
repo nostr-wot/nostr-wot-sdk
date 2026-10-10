@@ -82,6 +82,25 @@ import { canonicalHttpOrigin, siteScopes, storageLabel } from './scope.js';
 export const SHARED_SITES_ORIGIN = '*';
 export const DEFAULT_BACKEND_AUTH_KEY = 'defaultBackendAuthAccounts';
 
+/**
+ * An allow that found a deny already in force, thrown by {@link AuthenticationGrants.save}.
+ *
+ * A class with a fixed `name`, so a pipeline sitting above two different grant stores (this
+ * one, or a host's own over the same records) can tell "the user has refused this
+ * destination" from "the store failed" without matching message text, and without an
+ * `instanceof` that breaks the moment two copies of this package are loaded. A host store that
+ * refuses for the same reason should throw an error whose `name` is
+ * {@link AUTHENTICATION_DENIED_ERROR}. The message is the one this store has always thrown.
+ */
+export const AUTHENTICATION_DENIED_ERROR = 'AuthenticationDeniedError';
+
+export class AuthenticationDeniedError extends Error {
+  constructor() {
+    super('Authentication permission denied');
+    this.name = AUTHENTICATION_DENIED_ERROR;
+  }
+}
+
 /** Exact host-maintained registry pair. Registry entries alone grant nothing. */
 export interface AuthenticationBackend {
   origin: string;
@@ -253,17 +272,19 @@ export class AuthenticationGrants {
    * @param assertCurrent - re-checked INSIDE the lock, after the read. The host's chance to
    *   throw when the account, session or pending request the consent belongs to has moved on
    *   while this waited. Required, not optional with a no-op default: a caller that has not
-   *   thought about it is the caller this parameter exists for.
+   *   thought about it is the caller this parameter exists for. It may be asynchronous, so the
+   *   check can be a real re-read of the active account rather than a comparison against
+   *   something captured at the same instant as the read it guards; it is awaited.
    * @throws when the scope is not one this request could have (see
    *   {@link validAuthenticationScope}), when a denial is asked for at any scope but `site`,
-   *   or when an allow finds a deny already in force.
+   *   or, as an {@link AuthenticationDeniedError}, when an allow finds a deny already in force.
    */
   async save(
     accountId: string,
     origin: string,
     auth: AuthenticationRequest,
     scope: AuthenticationScope,
-    assertCurrent: () => void,
+    assertCurrent: () => void | Promise<void>,
     decision: 'allow' | 'deny' = 'allow',
   ): Promise<void> {
     requireLabel(accountId, 'account id');
@@ -280,7 +301,7 @@ export class AuthenticationGrants {
 
     await this.#lock.run(async () => {
       const grants = await this.list();
-      assertCurrent();
+      await assertCurrent();
       // A queued approval must not erase a rejection saved while it waited for this lock.
       // Revocation in settings is the explicit way to remove a deny. Checked for `once` too:
       // it stores nothing, but it still authorises this one signature, and a deny refuses it.
@@ -288,7 +309,7 @@ export class AuthenticationGrants {
         decision === 'allow' &&
         governing(grants, accountId, label, auth).some((grant) => grant.decision === 'deny')
       ) {
-        throw new Error('Authentication permission denied');
+        throw new AuthenticationDeniedError();
       }
       if (scope === 'once') return;
 
