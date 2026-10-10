@@ -34,7 +34,7 @@
  * against these interfaces, accepted by `SignerCore` at compile time (`contracts.test-d.ts`)
  * and driven through a real signing request at runtime (`adaptability.test.ts`).
  */
-import type { KindFor, KindForWrite, PermissionDecision } from '@nostr-wot/permissions';
+import type { AuthenticationRequest, AuthenticationScope, KindFor, KindForWrite, PermissionDecision } from '@nostr-wot/permissions';
 import type { ImportedPqKeys } from '@nostr-wot/vault';
 
 export type { ImportedPqKeys };
@@ -163,5 +163,45 @@ export interface PermissionsPort {
     kind: KindForWrite<M>[0],
     decision: PermissionDecision,
     accountId: string,
+  ): Promise<void>;
+}
+
+/**
+ * Remembered destination consents, as the pipeline reads and writes them.
+ *
+ * Satisfied by `@nostr-wot/permissions`'s `AuthenticationGrants`, and by any host store over
+ * the same records (the shape is the extension's `authenticationGrants` list, keyed on
+ * account, requester key, protocol, destination and method). Two members, because that is all
+ * the pipeline does with it: read what the user has said about this exact request, and record
+ * what they just said. Listing, revoking and the settings screens are the host's.
+ *
+ * `requester` is the requester's grant key as `authenticationRequesterKey` spells it: a
+ * canonical web origin, or `kind:identifier` for everything else. The pipeline computes it;
+ * an implementation compares it as given, apart from folding a web origin through
+ * `storageLabel` if it keeps the extension's legacy hostname rows.
+ *
+ * What an implementation owes:
+ *
+ * - `decisionFor` must not throw on a read. A store that throws into a signing path is worse
+ *   than one that prompts; a corrupt list reads as no grants.
+ * - `save` with `'allow'` must re-read for a deny INSIDE its own lock, after `assertCurrent`,
+ *   and refuse rather than overwrite one saved while this approval waited. It says so by
+ *   throwing an error whose `name` is `AUTHENTICATION_DENIED_ERROR` (`@nostr-wot/permissions`
+ *   exports the class), which the pipeline reports as `permission_denied`. A `SignerError`
+ *   thrown from `assertCurrent` passes through as itself. Any other failure is reported to the
+ *   logger and refuses the request as `internal`: a signature must not ride on a grant write
+ *   whose outcome nobody knows.
+ * - `save` with `'once'` writes nothing and still performs the deny re-check.
+ * - `save` with `'deny'` is only ever asked at `site` scope.
+ */
+export interface AuthenticationGrantsPort {
+  decisionFor(accountId: string, requester: string, auth: AuthenticationRequest): Promise<'allow' | 'deny' | undefined>;
+  save(
+    accountId: string,
+    requester: string,
+    auth: AuthenticationRequest,
+    scope: AuthenticationScope,
+    assertCurrent: () => void | Promise<void>,
+    decision?: 'allow' | 'deny',
   ): Promise<void>;
 }
