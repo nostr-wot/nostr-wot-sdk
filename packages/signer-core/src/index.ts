@@ -21,6 +21,9 @@ export type {
   BatchItemOutcome,
   BatchResult,
   AuthenticationPolicy,
+  SelfAuthenticationPolicy,
+  AuthenticationConsent,
+  AuthenticationActivity,
   ApprovalContext,
   ApprovalDecision,
   ApprovalPort,
@@ -59,11 +62,24 @@ export {
   KEY_METHODS,
 } from './constants.js';
 
-export type { VaultPort, PermissionsPort, ImportedPqKeys } from './ports.js';
+export type { VaultPort, PermissionsPort, AuthenticationGrantsPort, ImportedPqKeys } from './ports.js';
 export { SignerError, type SignerErrorCode } from './errors.js';
 export { validateRequest, validateBatchRequest, utf8ByteLength, disclosedRequest, disclosedBatch } from './schema.js';
 export { ApprovalQueue, type ApprovalQueueOptions, type TrackInput } from './queue.js';
-export { SignerCore, permissionOrigin } from './core.js';
+export { SignerCore, permissionOrigin, requesterOf } from './core.js';
+/**
+ * The requester a non-web host resolves for an authentication request, and the key its
+ * grants are stored under. Re-exported from `@nostr-wot/permissions` so a host configuring
+ * `authentication.requesterFor` and `authentication.self` needs no second import.
+ */
+export {
+  authenticationRequesterKey,
+  AUTHENTICATION_REQUESTER_KINDS,
+  NON_WEB_REQUESTER_KINDS,
+  type AuthenticationRequester,
+  type AuthenticationRequesterKind,
+  type AuthenticationScope,
+} from '@nostr-wot/permissions';
 export { verifyRemoteSignedEvent, type VerifiedRemoteEvent } from './remoteEvent.js';
 export { withPqKeys, PQ_SEED_WORD_COUNT, type PqKeyScope } from './pq.js';
 /**
