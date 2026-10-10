@@ -33,7 +33,7 @@
  */
 import { randomBytes } from '@noble/ciphers/utils.js';
 import type { Account, Nip46Config, SafeAccount } from '@nostr-wot/accounts';
-import { toSafeAccount } from '@nostr-wot/accounts';
+import { NIP06_PATH, toSafeAccount } from '@nostr-wot/accounts';
 import type { KeyValueStore } from '@nostr-wot/storage';
 import { shouldAutoLock } from './autolock.js';
 import {
@@ -87,6 +87,12 @@ export interface VaultOptions {
    * `Date.now`, and this is the only default clock anywhere in the shared packages.
    */
   now?: () => number;
+}
+
+/** Portable removal context; hosts map reason values to localized warnings. */
+export interface AccountRemovalInfo {
+  reason: 'key' | 'only-seed' | 'main-seed' | 'derived-seed' | 'sibling-seed';
+  relatedCount: number;
 }
 
 /** The derived key the vault keeps so it can re-seal without asking for the password again. */
@@ -474,6 +480,21 @@ export class Vault {
       // anything, and this makes the outcome of a destroy independent of the lane order
       // regardless: when this returns, there is no session, full stop.
       this.#lockNow();
+    });
+  }
+
+  /** Destroy only an unlocked, authenticated empty vault, in the mutation lane. */
+  async destroyIfEmpty(): Promise<boolean> {
+    return this.#run(async () => {
+      if (!this.#payload || this.#payload.accounts.length !== 0) return false;
+      this.lock();
+      await this.#store.remove(VAULT_STORAGE_KEY);
+      await this.#store.remove(UNLOCK_GUARD_KEY);
+      for (const listener of this.#destroyListeners) {
+        try { await listener(); } catch { /* Cleanup listeners are independent. */ }
+      }
+      this.#lockNow();
+      return true;
     });
   }
 
@@ -950,6 +971,13 @@ export class Vault {
     });
   }
 
+  /** Clear selection in memory for a host-owned read-only account; does not persist. */
+  clearActiveAccount(): void {
+    if (!this.#payload || this.#payload.activeAccountId === null) return;
+    this.#payload.activeAccountId = null;
+    this.#invalidateSession();
+  }
+
   /**
    * Add an account and re-seal. The active account does not change: adding is not switching.
    *
@@ -971,6 +999,19 @@ export class Vault {
         abandon: () => zeroMemoryAccount(added),
       };
     });
+  }
+
+  /** Describe seed relationships for removal warnings without exposing the seed. */
+  getAccountRemovalInfo(accountId: string): AccountRemovalInfo {
+    const payload = this.#requireOpen();
+    const account = this.#findAccount(payload, accountId);
+    if (!account) throw new Error('Account not found');
+    const seed = account.mnemonicBytes;
+    if (!seed?.length) return { reason: 'key', relatedCount: 0 };
+    const related = payload.accounts.filter(candidate => candidate.id !== accountId && candidate.mnemonicBytes?.length === seed.length && candidate.mnemonicBytes.every((byte, index) => byte === seed[index]));
+    const main = (candidate: MemoryAccount) => candidate.derivationIndex === 0 || candidate.derivationPath === NIP06_PATH || (candidate.derivationIndex === undefined && !candidate.derivationPath);
+    const reason = !related.length ? 'only-seed' : main(account) ? 'main-seed' : related.some(main) ? 'derived-seed' : 'sibling-seed';
+    return { reason, relatedCount: related.length };
   }
 
   /**
@@ -1490,7 +1531,7 @@ export class Vault {
    * zeroing them before the write would destroy the only copy of something the undo might
    * have to put back.
    *
-   * The undo is right while the session is alive and wrong once it is not. A lock landing
+   * The undo is right while the same payload is alive and wrong once it is replaced. A lock landing
    * inside the write zeroes the payload; if the write then fails, restoring the outgoing
    * secrets would put live key material back into a payload nobody will ever lock again. So
    * on a dead session the mutation is abandoned instead: everything it detached or created
@@ -1524,8 +1565,15 @@ export class Vault {
       try {
         await this.#saveNow(current);
       } catch (error) {
-        if (current === this.#sessionRevision) mutation.undo();
-        else mutation.abandon();
+        if (this.#payload === payload) {
+          // A memory-only selection clear revokes capabilities without destroying this payload.
+          // Roll back the failed mutation, but do not restore the cleared account selection.
+          const selectionCleared = current !== this.#sessionRevision && payload.activeAccountId === null;
+          mutation.undo();
+          if (selectionCleared) payload.activeAccountId = null;
+        } else {
+          mutation.abandon();
+        }
         throw error;
       }
       mutation.commit?.();
@@ -1608,9 +1656,12 @@ export class Vault {
     const held = this.#held;
     if (!payload || !held) throw new Error('Vault is locked');
 
+    const previous = await this.#readRecord();
+    this.#assertRevision(revision);
     const { iv, ciphertext } = encrypt(held.key, JSON.stringify(toStoragePayload(payload)));
     const record: VaultRecord = {
       version: VAULT_VERSION,
+      ...(previous?.registeredPasskeys ? { registeredPasskeys: previous.registeredPasskeys } : {}),
       iterations: held.iterations,
       salt: bytesToBase64(held.salt),
       iv: bytesToBase64(iv),
@@ -1633,7 +1684,10 @@ export class Vault {
 
     const capture = this.#capturingKdf();
     try {
+      const previous = await this.#readRecord();
+      this.#assertRevision(revision);
       const record = await sealPayload(toStoragePayload(payload), password, capture.kdf);
+      if (previous?.registeredPasskeys) record.registeredPasskeys = previous.registeredPasskeys;
       this.#assertRevision(revision);
       await this.#store.set(VAULT_STORAGE_KEY, record);
       // Again after the write, immediately before the key is installed. The write is a window

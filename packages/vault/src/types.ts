@@ -32,6 +32,8 @@ export interface VaultRecord {
    * open exactly the oldest vaults in the field.
    */
   iterations?: number;
+  /** Retained enrollment when a passkey vault switches to password protection. */
+  registeredPasskeys?: import("./passkey.js").PasskeyEnrollment;
 }
 
 /** The decrypted contents of a {@link VaultRecord}. */

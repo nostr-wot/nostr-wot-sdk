@@ -195,3 +195,35 @@ in `crypto.ts`, and for the mnemonic and NIP-46 secrets in `serialization.ts`.
 ## License
 
 MIT
+
+## Passkey record primitives
+
+The `Vault` class remains the password-protected version 1 lifecycle. It rejects other record versions/protection modes on password unlock and preserves `registeredPasskeys` when saving or changing a password. Its `clearActiveAccount()` clears only the in-memory selection and revokes outstanding scoped capabilities; the stored selection is restored on the next unlock unless another mutation saves it. `destroyIfEmpty()` deletes only an authenticated, unlocked empty vault, serializes against mutations, zeroes secrets and invokes destroy listeners. Locked state or an account added ahead of cleanup prevents deletion. `getAccountRemovalInfo(id)` returns typed `AccountRemovalInfo` with a portable `reason` (`key`, `only-seed`, `main-seed`, `derived-seed` or `sibling-seed`) and `relatedCount` without releasing seed material; the host maps these reasons to localized warnings.
+
+Version 2 passkey records use separate portable functions: `createPasskeyRecord`, `openPasskeyRecord`, `sealPasskeyPayload`, `wrapVaultKey`, `withPasskeyVaultKey`, `parsePasskeyBackup` and `serializePasskeyBackup`. They implement the extension's HKDF-SHA256 PRF wrapping and AES-256-GCM record format, including authenticated credential/RP/salt binding and bounded recovery-file validation. The fixed RP is `passkeys.nostr-wot.com`; these functions do not register, request or verify native WebAuthn assertions. Hosts obtain the PRF response and own user verification, storage, mutation serialization, lock/session revocation, protection switching, recovery authorization and provider recovery blobs. Do not pass a v2 record to `Vault.unlock()`.
+
+```ts
+import {
+  createPasskeyRecord, openPasskeyRecord, sealPasskeyPayload,
+  withPasskeyVaultKey, wrapVaultKey, parsePasskeyBackup, serializePasskeyBackup,
+} from '@nostr-wot/vault';
+
+// enrollment/proof come from the host's authenticator ceremony; never store/log their prf.
+const record = createPasskeyRecord(payload, enrollment);
+const opened = await openPasskeyRecord(record, proof);
+const updated = await withPasskeyVaultKey(record, proof, key =>
+  sealPasskeyPayload(opened.payload, key, record),
+);
+// Store updated atomically after checking the host session still authorizes this write.
+const withSecondPasskey = await withPasskeyVaultKey(updated, proof, key =>
+  sealPasskeyPayload(opened.payload, key, {
+    rpId: updated.rpId,
+    passkeys: [...updated.passkeys, wrapVaultKey(key, secondEnrollment)],
+  }),
+);
+const backup = serializePasskeyBackup(withSecondPasskey);
+const recovered = await openPasskeyRecord(parsePasskeyBackup(backup), secondProof);
+// Check current-vault replacement policy before persisting the recovered record.
+```
+
+`withPasskeyVaultKey` zeroes its temporary vault key on success and failure, but has no host session to revoke; a host must enforce its own revision checks around asynchronous work. `unwrapVaultKey` is the lower-level alternative: its returned key belongs to the caller and must be zeroed in `finally`. PRF values and decrypted payload strings cannot be erased by JavaScript; minimize their lifetime. When `openPasskeyRecord` reports `cacheKeyMinted`, re-seal and persist the returned payload before using its cache key. Re-seal existing payloads instead of creating a new record when updating accounts, so the private-cache key and existing passkey enrollment remain stable.

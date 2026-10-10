@@ -7,6 +7,7 @@
  * and the format has to match byte for byte, because the vaults people already have were
  * written by that code.
  */
+import { validatePasskeyEnrollment } from './passkey.js';
 import { randomBytes } from '@noble/ciphers/utils.js';
 import {
   LEGACY_VAULT_PBKDF2_ITERATIONS,
@@ -84,6 +85,11 @@ export async function openRecord(
   password: string,
   kdf: Pbkdf2Port,
 ): Promise<OpenedRecord> {
+  // Never reinterpret a new protection scheme as a legacy password vault.
+  if (record.version !== VAULT_VERSION || ('protection' in record && record.protection !== undefined)) {
+    throw new Error('Unsupported password vault protection or version');
+  }
+  if (record.registeredPasskeys !== undefined) validatePasskeyEnrollment(record.registeredPasskeys);
   const salt = base64ToBytes(record.salt);
   const iv = base64ToBytes(record.iv);
   const ciphertext = base64ToBytes(record.ciphertext);
