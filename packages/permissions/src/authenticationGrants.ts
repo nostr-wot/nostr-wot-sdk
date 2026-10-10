@@ -70,7 +70,7 @@ import {
 } from './authentication.js';
 import { AUTHENTICATION_GRANTS_KEY } from './constants.js';
 import { AsyncLock } from './lock.js';
-import { siteScopes, storageLabel } from './scope.js';
+import { canonicalHttpOrigin, siteScopes, storageLabel } from './scope.js';
 
 /**
  * The origin a `connected-sites` grant is stored under.
@@ -80,6 +80,17 @@ import { siteScopes, storageLabel } from './scope.js';
  * {@link canonicalHttpOrigin} refuses it as an origin.
  */
 export const SHARED_SITES_ORIGIN = '*';
+export const DEFAULT_BACKEND_AUTH_KEY = 'defaultBackendAuthAccounts';
+
+/** Exact host-maintained registry pair. Registry entries alone grant nothing. */
+export interface AuthenticationBackend {
+  origin: string;
+  destination: string;
+  protocol: 'nip98';
+}
+export interface AuthenticationGrantsOptions {
+  backendRegistry?: readonly AuthenticationBackend[];
+}
 
 /**
  * Which grants to remove. An omitted field means "any", and an omitted filter removes all of
@@ -169,9 +180,11 @@ function grantId(accountId: string, origin: string, auth: AuthenticationRequest)
 export class AuthenticationGrants {
   readonly #store: KeyValueStore;
   readonly #lock = new AsyncLock();
+  readonly #registry: readonly AuthenticationBackend[];
 
-  constructor(store: KeyValueStore) {
+  constructor(store: KeyValueStore, options: AuthenticationGrantsOptions = {}) {
     this.#store = store;
+    this.#registry = (options.backendRegistry ?? []).map(entry => ({ ...entry }));
   }
 
   /** Every stored grant. For a settings screen; the gate uses {@link decisionFor}. */
@@ -195,13 +208,34 @@ export class AuthenticationGrants {
     origin: string,
     auth: AuthenticationRequest,
   ): Promise<'allow' | 'deny' | undefined> {
+    if (auth.protocol === 'legacy-login' || !accountId || !origin) return undefined;
     const matching = governing(await this.list(), accountId, storageLabel(origin), auth);
     // A site-specific rejection takes precedence over a shared relay allowance.
     if (matching.some((grant) => grant.decision === 'deny')) return 'deny';
     if (matching.some((grant) => grant.decision === undefined || grant.decision === 'allow')) {
       return 'allow';
     }
+    const exactHttps = (value: string) => value.startsWith('https://') && canonicalHttpOrigin(value) === value;
+    if (auth.protocol === 'nip98' && exactHttps(origin) && exactHttps(auth.destination)
+      && (origin === auth.destination || this.#registry.some(entry => entry.protocol === 'nip98'
+        && entry.origin === origin && entry.destination === auth.destination))
+      && await this.getDefaultBackendAuth(accountId)) return 'allow';
     return undefined;
+  }
+
+  async getDefaultBackendAuth(accountId: string): Promise<boolean> {
+    if (!accountId) return false;
+    const defaults = await this.#store.get<Record<string, boolean>>(DEFAULT_BACKEND_AUTH_KEY);
+    return defaults?.[accountId] === true;
+  }
+
+  async setDefaultBackendAuth(accountId: string, enabled: boolean): Promise<void> {
+    requireLabel(accountId, 'account id');
+    if (typeof enabled !== 'boolean') throw new Error('Invalid backend authentication setting');
+    await this.#lock.run(async () => {
+      const defaults = await this.#store.get<Record<string, boolean>>(DEFAULT_BACKEND_AUTH_KEY);
+      await this.#store.set(DEFAULT_BACKEND_AUTH_KEY, { ...defaults, [accountId]: enabled });
+    });
   }
 
   /** Whether this request may proceed without asking. Never true while any deny matches. */
@@ -300,6 +334,11 @@ export class AuthenticationGrants {
     const origin = filter.origin === undefined ? undefined : storageLabel(filter.origin);
     await this.#lock.run(async () => {
       const grants = await this.list();
+      if (!filter.id && !filter.origin) {
+        const defaults = { ...await this.#store.get<Record<string, boolean>>(DEFAULT_BACKEND_AUTH_KEY) };
+        if (filter.accountId) delete defaults[filter.accountId];
+        await this.#store.set(DEFAULT_BACKEND_AUTH_KEY, filter.accountId ? defaults : {});
+      }
       await this.#store.set(
         AUTHENTICATION_GRANTS_KEY,
         grants.filter(

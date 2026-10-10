@@ -1,46 +1,10 @@
-/**
- * The stored permission tree and everything that reads or writes it.
- *
- * Storage model:
- *
- * ```json
- * { "origin": { "_default": { "signEvent:1": "allow" }, "acctId": { "*": "deny" } } }
- * ```
- *
- * Mode-based resolution, and the two modes are mutually exclusive:
- *
- * - `useGlobalDefaults = true` consults **only** `perms[origin]["_default"]`
- * - `useGlobalDefaults = false` consults **only** `perms[origin][accountId]`
- * - nothing found means `ask`
- *
- * Dormant data survives a mode switch: only the active mode's bucket is read or written,
- * so switching back finds what was there before.
- *
- * ## Divergence from the browser extension: no `_default` fallback in per-account mode
- *
- * The extension resolves its bucket as `accountId || '_default'` in both modes, so a call
- * that omits `accountId` while in per-account mode silently reads the bucket every account
- * shares. It gets away with it because it has one call site. This package is about to have
- * four transports feeding it, and an optional parameter that one call site forgets is
- * exactly how a cross-account leak ships.
- *
- * So this implementation fails closed, at both levels. The `accountId` is REQUIRED on every
- * read and write, so forgetting it is a compile error rather than a behaviour. And at
- * runtime, in per-account mode an empty `accountId` resolves to no bucket at all: reads see
- * an empty bucket and answer `ask`, and writes throw rather than land in `_default`. Global
- * mode keeps the fallback, where `_default` is the correct bucket by definition. The cost is
- * one extra approval prompt on a path that should not occur; the alternative cost is an
- * unauthorized signature.
- *
- * Nothing here decides how a request is *routed* — local signing versus a remote signer is
- * the signer's business, not the permission's. A permission answers one question: may this
- * caller do this.
- *
- * @see https://github.com/nostr-protocol/nips/blob/master/07.md NIP-07
- */
+/** Stored permissions support legacy mode selection and explicit global-rule migration. */
 import type { KeyValueStore } from '@nostr-wot/storage';
 import {
   DEFAULT_BUCKET,
+  GLOBAL_RULES_SCOPE,
+  INHERITANCE_KEY,
+  GLOBAL_RULES_VERSION_KEY,
   DM_SIGN_KINDS,
   NIP42_KIND,
   GLOBAL_DEFAULTS_KEY,
@@ -55,7 +19,7 @@ import {
   type KindFor,
   type KindForWrite,
 } from './key.js';
-import { AuthenticationGrants } from './authenticationGrants.js';
+import { AuthenticationGrants, type AuthenticationGrantsOptions } from './authenticationGrants.js';
 import { AsyncLock } from './lock.js';
 import { originPermissionBucket, siteScopes, storageLabel } from './scope.js';
 import type {
@@ -68,9 +32,28 @@ import type {
 } from './types.js';
 
 /** Optional collaborators. Everything here is opt-in; a store alone is enough. */
-export interface PermissionsOptions {
+export interface PermissionsOptions extends AuthenticationGrantsOptions {
   /** Told about every denial. Omit it and denials are silent. */
   logger?: PermissionLogger;
+}
+
+/** Host inventory needed to preserve currently active account/site decisions. */
+export interface PermissionMigrationContext {
+  accountIds: readonly string[];
+  origins?: readonly string[];
+}
+
+const MIGRATION_PENDING_KEY = 'signerRulesMigrationPending';
+type PendingMigration = { tree: PermissionMap; global: boolean };
+
+/** Resolve inherited layers; an explicit ask overrides the same inherited key. */
+export function effectiveOriginPermissions(perms: PermissionMap, origin: string, accountId: string): PermissionBucket {
+  return {
+    ...originPermissionBucket(perms, GLOBAL_RULES_SCOPE, DEFAULT_BUCKET),
+    ...originPermissionBucket(perms, GLOBAL_RULES_SCOPE, accountId),
+    ...originPermissionBucket(perms, origin, DEFAULT_BUCKET),
+    ...originPermissionBucket(perms, origin, accountId),
+  };
 }
 
 /**
@@ -176,7 +159,7 @@ export class Permissions {
   constructor(store: KeyValueStore, options: PermissionsOptions = {}) {
     this.#store = store;
     this.#logger = options.logger;
-    this.authentication = new AuthenticationGrants(store);
+    this.authentication = new AuthenticationGrants(store, options);
 
     // A store that cannot report changes simply does not get us this; our own writes
     // invalidate the cache directly, so only out-of-band edits are missed.
@@ -275,7 +258,8 @@ export class Permissions {
     const perms = await this.#load();
     const result: Record<string, PermissionBucket> = {};
     for (const origin of Object.keys(perms)) {
-      const data = perms[origin][bucket];
+      if (origin === GLOBAL_RULES_SCOPE) continue;
+      const data = await this.#inherits() ? effectiveOriginPermissions(perms, origin, accountId) : perms[origin][bucket];
       if (data && Object.keys(data).length > 0) result[origin] = { ...data };
     }
     return result;
@@ -285,7 +269,8 @@ export class Permissions {
   async getForOrigin(origin: string, accountId: string): Promise<PermissionBucket> {
     const bucket = await this.#activeBucket(accountId);
     if (bucket === null) return {};
-    return originPermissionBucket(await this.#load(), origin, bucket);
+    const perms = await this.#load();
+    return await this.#inherits() ? effectiveOriginPermissions(perms, origin, accountId) : originPermissionBucket(perms, origin, bucket);
   }
 
   /** The whole stored tree, every bucket, as a copy. For settings screens and diffs. */
@@ -300,7 +285,7 @@ export class Permissions {
   }
 
   /**
-   * Whether global defaults are on, meaning every account shares `_default`.
+   * The legacy mode flag. Inheritance, once enabled, takes precedence over this flag.
    *
    * Unset means on, because that is what stores written before the flag existed imply.
    */
@@ -313,7 +298,7 @@ export class Permissions {
 
   // ── Writing ──
 
-  /** Turns global defaults on or off. The dormant buckets are left exactly as they are. */
+  /** Sets the legacy mode flag. Inherited rules ignore it; stored buckets are unchanged. */
   async setUseGlobalDefaults(enabled: boolean): Promise<void> {
     try {
       await this.#store.set(GLOBAL_DEFAULTS_KEY, !!enabled);
@@ -373,6 +358,7 @@ export class Permissions {
     const label = storageLabel(origin);
     await this.#lock.run(async () => {
       const bucket = await this.#writeBucket(accountId);
+      await this.#assertRuleScope(label, bucket);
       const perms = await this.#draft();
       if (!perms[label]) perms[label] = {};
       if (!perms[label][bucket]) perms[label][bucket] = {};
@@ -415,6 +401,7 @@ export class Permissions {
     const label = storageLabel(origin);
     await this.#lock.run(async () => {
       const bucket = await this.#writeBucket(accountId);
+      await this.#assertRuleScope(label, bucket);
       const perms = await this.#draft();
       if (!perms[label]) perms[label] = {};
       if (!perms[label][bucket]) perms[label][bucket] = {};
@@ -543,9 +530,12 @@ export class Permissions {
     requireLabel(toAccountId, 'target account id');
     await this.#lock.run(async () => {
       const from = fromAccountId ?? DEFAULT_BUCKET;
+      const consolidated = await this.#store.get(GLOBAL_RULES_VERSION_KEY) === 1;
+      if (consolidated && toAccountId === DEFAULT_BUCKET) throw new Error('An account id is required');
       const perms = await this.#draft();
       let changed = false;
       for (const origin of Object.keys(perms)) {
+        if (consolidated && origin === GLOBAL_RULES_SCOPE) continue;
         const source = perms[origin][from];
         if (source && Object.keys(source).length > 0) {
           perms[origin][toAccountId] = { ...source };
@@ -573,7 +563,8 @@ export class Permissions {
    *
    * @param newAccountId - the account just created
    * @param existingAccountIds - every other account id, to preserve across the mode switch
-   * @param copyFromAccountId - a source to copy into the new account, or null for fresh
+   * After consolidation, null inherits global rules and a source copies site overrides.
+   * @param copyFromAccountId - a source to copy into the new account, or null for fresh in legacy mode
    */
   async setupNewAccountPermissions(
     newAccountId: string,
@@ -582,6 +573,27 @@ export class Permissions {
   ): Promise<void> {
     requireLabel(newAccountId, 'new account id');
 
+    if (await this.#inherits()) {
+      if (newAccountId === DEFAULT_BUCKET) throw new Error('An account id is required');
+      await this.#lock.run(async () => {
+        const tree = await this.#draft();
+        const consolidated = await this.#store.get(GLOBAL_RULES_VERSION_KEY) === 1;
+        for (const origin of Object.keys(tree)) {
+          if (consolidated && origin === GLOBAL_RULES_SCOPE) continue;
+          delete tree[origin][newAccountId];
+          if (consolidated) {
+            if (copyFromAccountId && tree[origin][copyFromAccountId]) tree[origin][newAccountId] = { ...tree[origin][copyFromAccountId] };
+          } else {
+            const defaults = originPermissionBucket(tree, origin, DEFAULT_BUCKET);
+            tree[origin][newAccountId] = copyFromAccountId
+              ? { ...defaults, ...originPermissionBucket(tree, origin, copyFromAccountId) }
+              : Object.fromEntries(Object.keys(defaults).map(key => [key, 'ask']));
+          }
+        }
+        await this.#commit(tree);
+      });
+      return;
+    }
     if (await this.getUseGlobalDefaults()) {
       // Preserve each existing account's currently-shared rules in its own bucket BEFORE
       // switching modes, so none of them starts re-asking after the switch.
@@ -760,6 +772,135 @@ export class Permissions {
     });
   }
 
+  /** Preserve active legacy rules before enabling account inheritance. */
+  async migrateToInheritance(context: PermissionMigrationContext): Promise<void> {
+    await this.#lock.run(async () => {
+      await this.#finishMigration();
+      if (await this.#inherits()) return;
+      const original = await this.#draft();
+      const tree = cloneJson(original);
+      const ids = this.#migrationAccounts(original, context);
+      const shared = await this.getUseGlobalDefaults();
+      for (const origin of Object.keys(tree)) {
+        if (shared) tree[origin] = original[origin][DEFAULT_BUCKET] ? { [DEFAULT_BUCKET]: original[origin][DEFAULT_BUCKET] } : {};
+        else {
+          const defaults = originPermissionBucket(original, origin, DEFAULT_BUCKET);
+          for (const id of ids) tree[origin][id] = {
+            ...Object.fromEntries(Object.keys(defaults).map(key => [key, 'ask' as const])),
+            ...originPermissionBucket(original, origin, id),
+          };
+        }
+      }
+      await this.#store.set(MIGRATION_PENDING_KEY, { tree, global: false });
+      await this.#finishMigration();
+    });
+  }
+
+  /** Consolidate shared defaults and preserve known accounts' existing site decisions. */
+  async migrateToGlobalRules(context: PermissionMigrationContext): Promise<void> {
+    await this.migrateToInheritance(context);
+    await this.#lock.run(async () => {
+      await this.#finishMigration();
+      if (await this.#store.get(GLOBAL_RULES_VERSION_KEY) === 1) return;
+      const original = await this.#draft();
+      const tree = cloneJson(original);
+      const ids = this.#migrationAccounts(original, context);
+      const origins = new Set([...Object.keys(original).filter(origin => origin !== GLOBAL_RULES_SCOPE), ...(context.origins ?? [])]);
+      const existing = original[GLOBAL_RULES_SCOPE]?.[DEFAULT_BUCKET] ?? {};
+      const globals = { ...existing };
+      for (const [origin, buckets] of Object.entries(original)) {
+        if (origin === GLOBAL_RULES_SCOPE) continue;
+        for (const [key, value] of Object.entries(buckets[DEFAULT_BUCKET] ?? {})) {
+          if (Object.hasOwn(existing, key)) continue;
+          if (!Object.hasOwn(globals, key) || RESTRICTIVENESS[value] > RESTRICTIVENESS[globals[key]]) globals[key] = value;
+        }
+        delete tree[origin][DEFAULT_BUCKET];
+      }
+      tree[GLOBAL_RULES_SCOPE] = { [DEFAULT_BUCKET]: globals };
+      for (const origin of [...origins].sort((a, b) => siteScopes(a).length - siteScopes(b).length || a.localeCompare(b))) {
+        for (const id of ids) {
+          const previous = effectiveOriginPermissions(original, origin, id);
+          const next = effectiveOriginPermissions(tree, origin, id);
+          // Preserve absence too: a newly consolidated allow must not grant an old site.
+          for (const key of new Set([...Object.keys(previous), ...Object.keys(next)])) {
+            if ((previous[key] ?? 'ask') === (next[key] ?? 'ask')) continue;
+            tree[origin] ??= {};
+            tree[origin][id] ??= {};
+            tree[origin][id][key] = previous[key] ?? 'ask';
+          }
+        }
+      }
+      await this.#store.set(MIGRATION_PENDING_KEY, { tree, global: true });
+      await this.#finishMigration();
+    });
+  }
+
+  /** Remove account overrides while retaining shared rules and authentication grants. */
+  async resetAccountRules(): Promise<void> {
+    if (!await this.#inherits()) throw new Error('Migrate permission inheritance first');
+    await this.#lock.run(async () => {
+      const tree = await this.#draft();
+      for (const origin of Object.keys(tree)) {
+        const defaults = tree[origin][DEFAULT_BUCKET];
+        if (defaults) tree[origin] = { [DEFAULT_BUCKET]: defaults };
+        else delete tree[origin];
+      }
+      await this.#commit(tree);
+    });
+  }
+
+  /** Delete one site override, including legacy hostname scopes, restoring inheritance. */
+  async inheritRule(origin: string, key: string, accountId: string): Promise<void> {
+    requireLabel(origin, 'origin'); requireLabel(key, 'permission key'); requireLabel(accountId, 'account id');
+    if (accountId === DEFAULT_BUCKET) throw new Error('An account override is required');
+    await this.#lock.run(async () => {
+      const tree = await this.#draft();
+      for (const scope of siteScopes(origin)) if (tree[scope]?.[accountId]) delete tree[scope][accountId][key];
+      await this.#commit(tree);
+    });
+  }
+
+  /** Settings-only deletion of a named bucket; destination grants remain separate. */
+  async clearRuleBucket(origin: string, accountId: string): Promise<void> {
+    requireLabel(origin, 'origin'); requireLabel(accountId, 'account id');
+    await this.#lock.run(async () => {
+      const tree = await this.#draft();
+      for (const scope of siteScopes(origin)) if (tree[scope]) delete tree[scope][accountId];
+      await this.#commit(tree);
+    });
+  }
+
+  #migrationAccounts(tree: PermissionMap, context: PermissionMigrationContext): Set<string> {
+    const ids = new Set(context.accountIds);
+    for (const buckets of Object.values(tree)) for (const id of Object.keys(buckets)) if (id !== DEFAULT_BUCKET) ids.add(id);
+    for (const id of ids) if (!id || id === DEFAULT_BUCKET) throw new Error('Invalid migration account');
+    return ids;
+  }
+
+  async #inherits(): Promise<boolean> {
+    return await this.#store.get(INHERITANCE_KEY) === true;
+  }
+
+  async #assertRuleScope(origin: string, bucket: string): Promise<void> {
+    if (await this.#store.get(GLOBAL_RULES_VERSION_KEY) !== 1) return;
+    if ((origin === GLOBAL_RULES_SCOPE) !== (bucket === DEFAULT_BUCKET)) {
+      throw new Error('Global rules require global scope; site rules require an account');
+    }
+  }
+
+  /** A durable journal compensates for storage ports without atomic multi-key writes. */
+  async #finishMigration(): Promise<void> {
+    const pending = await this.#store.get<PendingMigration>(MIGRATION_PENDING_KEY);
+    if (!pending) return;
+    try {
+      await this.#store.set(PERMISSIONS_STORAGE_KEY, pending.tree);
+      await this.#store.set(GLOBAL_DEFAULTS_KEY, false);
+      await this.#store.set(INHERITANCE_KEY, true);
+      if (pending.global) await this.#store.set(GLOBAL_RULES_VERSION_KEY, 1);
+      await this.#store.remove(MIGRATION_PENDING_KEY);
+    } finally { this.invalidateCache(); }
+  }
+
   // ── Internals ──
 
   /**
@@ -772,7 +913,7 @@ export class Permissions {
    * is the runtime half, for a caller that built an empty one from a variable.
    */
   async #activeBucket(accountId: string): Promise<string | null> {
-    if (await this.getUseGlobalDefaults()) return DEFAULT_BUCKET;
+    if (!await this.#inherits() && await this.getUseGlobalDefaults()) return DEFAULT_BUCKET;
     return accountId || null;
   }
 
@@ -788,6 +929,7 @@ export class Permissions {
   }
 
   async #load(): Promise<PermissionMap> {
+    if (await this.#store.get(MIGRATION_PENDING_KEY)) throw new Error('Permission migration incomplete; retry migration before authorizing');
     if (this.#cachedPerms !== null) return this.#cachedPerms;
     this.#cachedPerms = (await this.#store.get<PermissionMap>(PERMISSIONS_STORAGE_KEY)) ?? {};
     return this.#cachedPerms;

@@ -99,3 +99,8 @@ export const COMMON_PERM_KEYS = [
   'readMessages',
   'sendMessages',
 ];
+
+/** Shared rules across sites, and the extension's migration markers. */
+export const GLOBAL_RULES_SCOPE = '_global';
+export const INHERITANCE_KEY = 'signerRulesInheritance';
+export const GLOBAL_RULES_VERSION_KEY = 'signerGlobalRulesVersion';

@@ -32,6 +32,9 @@ export {
   MIGRATION_VERSION_KEY,
   MIGRATION_VERSION,
   DEFAULT_BUCKET,
+  GLOBAL_RULES_SCOPE,
+  INHERITANCE_KEY,
+  GLOBAL_RULES_VERSION_KEY,
   DM_SIGN_KINDS,
   DECISIONS,
   READ_ONLY_KEYS,
@@ -44,6 +47,7 @@ export {
 
 export type {
   AuthenticationProtocol,
+  AuthenticationParserOptions,
   AuthenticationScope,
   AuthenticationEventInput,
   AuthenticationRequest,
@@ -73,7 +77,10 @@ export { canonicalHostname, canonicalHttpOrigin, siteScopes, hasSiteScope, origi
 export {
   AuthenticationGrants,
   SHARED_SITES_ORIGIN,
+  DEFAULT_BACKEND_AUTH_KEY,
+  type AuthenticationBackend,
+  type AuthenticationGrantsOptions,
   type AuthenticationGrantFilter,
 } from './authenticationGrants.js';
 
-export { Permissions, type PermissionsOptions } from './store.js';
+export { Permissions, effectiveOriginPermissions, type PermissionMigrationContext, type PermissionsOptions } from './store.js';
