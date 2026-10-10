@@ -1,5 +1,14 @@
 # @nostr-wot/blossom
 
+## 0.2.1
+
+### Patch Changes
+
+- [#14](https://github.com/nostr-wot/nostr-wot-sdk/pull/14) [`938faf4`](https://github.com/nostr-wot/nostr-wot-sdk/commit/938faf42f1f322c2ae44b9970c671c3fed509506) Thanks [@leonacostaok](https://github.com/leonacostaok)! - Update pinned shared dependencies so file uploads, messaging and wallet consumers receive the current signer lifecycle fixes. Wallet also uses the latest relay connection-budget safeguards.
+
+- Updated dependencies [[`9439868`](https://github.com/nostr-wot/nostr-wot-sdk/commit/9439868eeefd6d18dc504c313354dadfd3bfe77e)]:
+  - @nostr-wot/signers@1.2.3
+
 ## 0.2.0
 
 ### Minor Changes

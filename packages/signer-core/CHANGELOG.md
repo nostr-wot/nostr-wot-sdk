@@ -1,5 +1,18 @@
 # @nostr-wot/signer-core
 
+## 0.3.0
+
+### Minor Changes
+
+- [#14](https://github.com/nostr-wot/nostr-wot-sdk/pull/14) [`e480f70`](https://github.com/nostr-wot/nostr-wot-sdk/commit/e480f7065aeb1b181ff2335f0e56d2df3c0f271d) Thanks [@leonacostaok](https://github.com/leonacostaok)! - Validate destination authentication at the signing boundary, require explicit individual consent even for remote accounts, and revalidate policy, account, timestamp and revocation before releasing signatures. Add opt-in, host-configured legacy login compatibility with one-time warning metadata. Authentication approval adapters must now return authenticationScope: once; generic batch authentication is refused.
+
+### Patch Changes
+
+- Updated dependencies [[`4d24073`](https://github.com/nostr-wot/nostr-wot-sdk/commit/4d24073f29c732d253bf1a2ef3aa2d051971deec), [`9439868`](https://github.com/nostr-wot/nostr-wot-sdk/commit/9439868eeefd6d18dc504c313354dadfd3bfe77e), [`3f866fa`](https://github.com/nostr-wot/nostr-wot-sdk/commit/3f866fa3192e1870bf202ec7714af0f438ee32e7)]:
+  - @nostr-wot/permissions@0.3.0
+  - @nostr-wot/signers@1.2.3
+  - @nostr-wot/vault@0.3.0
+
 ## 0.2.0
 
 ### Minor Changes

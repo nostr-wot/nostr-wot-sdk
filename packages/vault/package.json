@@ -1,6 +1,6 @@
 {
   "name": "@nostr-wot/vault",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Platform-neutral vault cryptography for the @nostr-wot packages: PBKDF2-HMAC-SHA-256 key derivation and AES-256-GCM, byte compatible with the WebCrypto vault format, with no WebCrypto required.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "MIT",

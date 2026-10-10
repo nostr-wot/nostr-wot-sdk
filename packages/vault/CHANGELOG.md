@@ -1,5 +1,13 @@
 # @nostr-wot/vault
 
+## 0.3.0
+
+### Minor Changes
+
+- [#14](https://github.com/nostr-wot/nostr-wot-sdk/pull/14) [`3f866fa`](https://github.com/nostr-wot/nostr-wot-sdk/commit/3f866fa3192e1870bf202ec7714af0f438ee32e7) Thanks [@leonacostaok](https://github.com/leonacostaok)! - Add portable version 2 passkey vault records, bounded recovery-file parsing, and interoperable HKDF/AES-GCM wrapping with scoped key access. Keep password vault records compatible, reject unsupported protection modes, and retain passkey enrollment during password saves and changes.
+
+  Add memory-only active-account clearing with scoped-capability revocation, serialized cleanup that deletes only an authenticated empty vault, and seed-relationship removal warnings that never expose seed material.
+
 ## 0.2.0
 
 ### Minor Changes

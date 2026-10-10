@@ -1,5 +1,11 @@
 # @nostr-wot/permissions
 
+## 0.3.0
+
+### Minor Changes
+
+- [#14](https://github.com/nostr-wot/nostr-wot-sdk/pull/14) [`4d24073`](https://github.com/nostr-wot/nostr-wot-sdk/commit/4d24073f29c732d253bf1a2ef3aa2d051971deec) Thanks [@leonacostaok](https://github.com/leonacostaok)! - Add true global rules, account/site inheritance, resumable conservative migrations, and explicit reset/inherit operations while preserving legacy storage behavior until migration. Add host-configured, once-only legacy login parsing and account opt-in backend authentication with exact registry matching and deny precedence.
+
 ## 0.2.0
 
 ### Minor Changes

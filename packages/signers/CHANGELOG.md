@@ -1,5 +1,11 @@
 # @nostr-wot/signers
 
+## 1.2.3
+
+### Patch Changes
+
+- [#14](https://github.com/nostr-wot/nostr-wot-sdk/pull/14) [`9439868`](https://github.com/nostr-wot/nostr-wot-sdk/commit/9439868eeefd6d18dc504c313354dadfd3bfe77e) Thanks [@leonacostaok](https://github.com/leonacostaok)! - Dispose internally owned NIP-46 relay pools after failed or cancelled pairing and signer teardown, including sockets still connecting. Preserve caller-owned pools and close late pairing results without reviving a disposed transport.
+
 ## 1.2.2
 
 ### Patch Changes
