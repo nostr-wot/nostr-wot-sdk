@@ -1,5 +1,11 @@
 # @nostr-wot/wallet
 
+## 0.4.2
+
+### Patch Changes
+
+- Encode signed zap requests exactly once in LNURL callback URLs for both invoice requests and WebLN zaps. This fixes providers rejecting double-encoded JSON before a payment can start. Preserve the encoded output of `buildZapRequest` for callers assembling URLs themselves.
+
 ## 0.4.1
 
 ### Patch Changes

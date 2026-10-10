@@ -111,10 +111,11 @@ export async function requestZapInvoice(
   if (!lnurl) throw new Error(`Could not resolve LNURL-pay for ${options.lud16}`);
   if (!lnurl.allowsNostr) throw new Error(`${options.lud16} does not accept Nostr zaps`);
 
-  const { event, encoded } = await buildZapRequest(signer, options);
+  const { event } = await buildZapRequest(signer, options);
   const callback = new URL(lnurl.callback);
   callback.searchParams.set("amount", String(options.amountMsats));
-  callback.searchParams.set("nostr", encoded);
+  // URLSearchParams performs URL encoding; pre-encoding makes the provider receive %7B instead of JSON.
+  callback.searchParams.set("nostr", JSON.stringify(event));
   if (options.comment) callback.searchParams.set("comment", options.comment);
 
   const fetchImpl = options.fetchImpl ?? fetch;

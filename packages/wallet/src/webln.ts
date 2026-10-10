@@ -69,7 +69,7 @@ export async function zapViaWebLN(opts: WebLNZapOptions): Promise<{ preimage: st
   }
 
   const relays = opts.relays.length > 0 ? opts.relays : ["wss://relay.damus.io", "wss://nos.lol"];
-  const { event, encoded } = await buildZapRequest(opts.signer, {
+  const { event } = await buildZapRequest(opts.signer, {
     recipientPubkey: opts.recipientPubkey,
     amountMsats,
     relays,
@@ -79,18 +79,14 @@ export async function zapViaWebLN(opts: WebLNZapOptions): Promise<{ preimage: st
 
   const callback = new URL(lnurl.callback);
   callback.searchParams.set("amount", String(amountMsats));
-  callback.searchParams.set("nostr", encoded);
+  // URLSearchParams performs URL encoding; pre-encoding makes the provider receive %7B instead of JSON.
+  callback.searchParams.set("nostr", JSON.stringify(event));
   if (opts.comment) callback.searchParams.set("comment", opts.comment);
 
   const res = await fetchImpl(callback.toString());
   if (!res.ok) throw new Error(`LNURL callback returned ${res.status}`);
   const body = (await res.json()) as { pr?: string; reason?: string };
   if (!body.pr) throw new Error(body.reason ?? "LNURL callback did not return an invoice");
-
-  // Touch `event` so users have a chance to inspect it via the return value
-  // if needed (currently we just pay and forget — receipts come back via
-  // useZapReceipts).
-  void event;
 
   return webln.sendPayment(body.pr);
 }
