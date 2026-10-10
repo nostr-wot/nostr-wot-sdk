@@ -52,7 +52,7 @@
   },
   "dependencies": {
     "@noble/hashes": "^1.5.0",
-    "@nostr-wot/signers": "1.2.1"
+    "@nostr-wot/signers": "1.2.2"
   },
   "sideEffects": false,
   "peerDependencies": {
