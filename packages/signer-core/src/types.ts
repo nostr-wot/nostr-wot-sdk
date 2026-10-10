@@ -9,6 +9,7 @@
  * without them: somewhere to put a prompt and somewhere to write what happened. The rest are
  * optional and each one unlocks a capability the host may not have.
  */
+import type { AuthenticationRequest, AuthenticationParserOptions } from '@nostr-wot/permissions';
 import type { SafeAccount } from '@nostr-wot/accounts';
 import type { PermissionsPort, VaultPort } from './ports.js';
 import type { SignerErrorCode } from './errors.js';
@@ -234,8 +235,22 @@ export interface BatchResult {
  * last piece a denied batch is re-sent identically and denied forever, which is the actual
  * user-facing defect near here — and it is smaller than `excludedItems`, not bigger.
  */
+export interface AuthenticationPolicy extends AuthenticationParserOptions {
+  /** Resolve a transport-attested HTTP origin. Required for non-web authentication callers; never infer it from event tags. */
+  originFor?(request: SignerRequest, account: SafeAccount): Promise<string>;
+  /** Enforce connection, frame and privileged endpoint policy. Repeated before and after signing. */
+  assertAllowed?(request: SignerRequest, account: SafeAccount, authentication: Readonly<AuthenticationRequest>): Promise<void>;
+}
+
+export interface ApprovalContext {
+  /** Show destination, method and protocol. For legacy-login, warn that the client uses the wrong standard and should contact its developers. */
+  authentication: Readonly<AuthenticationRequest>;
+}
+
 export interface ApprovalDecision {
   allow: boolean;
+  /** Required for authentication. This pipeline only accepts individual, one-time authentication consent. */
+  authenticationScope?: 'once';
   /** Persist this decision through permissions, so the origin is not asked again. */
   remember?: boolean;
   /** With `remember`, scope a `signEvent` decision to this event kind (the default) or to every kind. */
@@ -267,7 +282,7 @@ export interface ApprovalDecision {
  * the host can match what the queue matched.
  */
 export interface ApprovalPort {
-  present(request: SignerRequest, account: SafeAccount): Promise<ApprovalDecision>;
+  present(request: SignerRequest, account: SafeAccount, context?: ApprovalContext): Promise<ApprovalDecision>;
   /**
    * The prompt for a batch: the whole batch, every item, full content and every tag, answered
    * once. `cancel` names the batch id. A host that does not implement this cannot show a
@@ -418,5 +433,6 @@ export interface SignerCoreDeps {
   unlock?: UnlockPort;
   remote?: RemoteSignerPort;
   relays?: RelayListPort;
+  authentication?: AuthenticationPolicy;
   logger?: SignerLogger;
 }

@@ -57,6 +57,16 @@ import {
   nextId,
 } from './harness.js';
 
+function authReq(kind: number): SignerRequest {
+  const request = req('signEvent', {
+    kind, created_at: Math.floor(Date.now() / 1000),
+    tags: kind === 22242 ? [['relay', 'wss://relay.example.com'], ['challenge', 'challenge']]
+      : [['u', 'https://example.com/login'], ['method', 'POST']],
+  });
+  request.origin.identifier = 'https://example.com';
+  return request;
+}
+
 // ── One clock ──
 
 describe('the vault\'s clock is the pipeline\'s clock', () => {
@@ -783,22 +793,22 @@ describe('remember', () => {
       test(`a remembered ${protocol} allow stores nothing, and the next request asks again`, async () => {
         const { core, approval, permissions } = await fixture(true);
         const save = vi.spyOn(permissions, 'save');
-        approval.decide = async () => ({ allow: true, remember: true });
+        approval.decide = async () => ({ allow: true, authenticationScope: 'once', remember: true });
 
-        await core.handle(req('signEvent', { kind }));
+        await core.handle(authReq(kind));
         expect(save).not.toHaveBeenCalled();
-        expect(await permissions.check('example.com', 'signEvent', kind, 'acct_1')).toBe('ask');
-        await core.handle(req('signEvent', { kind }));
+        expect(await permissions.check('https://example.com', 'signEvent', kind, 'acct_1')).toBe('ask');
+        await core.handle(authReq(kind));
         expect(approval.presented).toHaveLength(2);
       });
 
       test(`rememberKind false on a ${protocol} approval does not widen it to every kind either`, async () => {
         // The broader write: the blanket `signEvent` key, which would allow kind 1 as well.
         const { core, approval, permissions } = await fixture(true);
-        approval.decide = async () => ({ allow: true, remember: true, rememberKind: false });
-        await core.handle(req('signEvent', { kind }));
-        expect(await permissions.check('example.com', 'signEvent', 1, 'acct_1')).toBe('ask');
-        expect(await permissions.checkBlanketSignEvent('example.com', 'acct_1')).toBe('ask');
+        approval.decide = async () => ({ allow: true, authenticationScope: 'once', remember: true, rememberKind: false });
+        await core.handle(authReq(kind));
+        expect(await permissions.check('https://example.com', 'signEvent', 1, 'acct_1')).toBe('ask');
+        expect(await permissions.checkBlanketSignEvent('https://example.com', 'acct_1')).toBe('ask');
       });
 
       test(`a remembered ${protocol} REFUSAL is still persisted, because deny wins`, async () => {
@@ -806,16 +816,16 @@ describe('remember', () => {
         // destination model has nothing broader to replace it with.
         const { core, approval, permissions } = await fixture(false);
         approval.decide = async () => ({ allow: false, remember: true });
-        await expect(core.handle(req('signEvent', { kind }))).rejects.toThrow(/rejected/i);
-        expect(await permissions.check('example.com', 'signEvent', kind, 'acct_1')).toBe('deny');
-        await expect(core.handle(req('signEvent', { kind }))).rejects.toThrow(/denied/i);
+        await expect(core.handle(authReq(kind))).rejects.toThrow(/rejected/i);
+        expect(await permissions.check('https://example.com', 'signEvent', kind, 'acct_1')).toBe('deny');
+        await expect(core.handle(authReq(kind))).rejects.toThrow(/denied/i);
         expect(approval.presented).toHaveLength(1);
       });
     }
 
     test('an ordinary kind is still remembered, so the guard is not a blanket refusal', async () => {
       const { core, approval, permissions } = await fixture(true);
-      approval.decide = async () => ({ allow: true, remember: true });
+      approval.decide = async () => ({ allow: true, authenticationScope: 'once', remember: true });
       await core.handle(req('signEvent', { kind: 22243 }));
       expect(await permissions.check('example.com', 'signEvent', 22243, 'acct_1')).toBe('allow');
     });
@@ -1513,28 +1523,13 @@ describe('the permission cascade applies per item', () => {
     expect(await permissions.check('example.com', 'signEvent', 30023, 'acct_1')).toBe('allow');
   });
 
-  test('a batch remembers its ordinary kinds and not its authentication ones', async () => {
-    // Per item, not per batch: dropping the whole write would lose the notes' approval, and
-    // keeping it would store the unbounded credential. See GHSA-vx4h-56qj-wcp7.
-    const { core, approval, permissions } = await fixture(true);
-    const save = vi.spyOn(permissions, 'save');
-    approval.decideBatch = async () => ({ allow: true, remember: true });
-    await core.handleBatch(batchReq([sign(1), sign(22242), sign(27235), sign(7)]));
-    expect(save.mock.calls.map((call) => [call[1], call[2], call[3]])).toEqual([
-      ['signEvent', 1, 'allow'],
-      ['signEvent', 7, 'allow'],
-    ]);
-    expect(await permissions.check('example.com', 'signEvent', 22242, 'acct_1')).toBe('ask');
-    expect(await permissions.check('example.com', 'signEvent', 27235, 'acct_1')).toBe('ask');
-  });
-
-  test('rememberKind false on a batch holding an authentication item stores no blanket allow', async () => {
+  test('authentication cannot inherit a generic batch approval or remembered rule', async () => {
     const { core, approval, permissions } = await fixture(true);
     const save = vi.spyOn(permissions, 'save');
     approval.decideBatch = async () => ({ allow: true, remember: true, rememberKind: false });
-    await core.handleBatch(batchReq([sign(22242)]));
+    await expect(core.handleBatch(batchReq([sign(1), sign(22242), sign(27235)]))).rejects.toMatchObject({ code: 'unsupported' });
     expect(save).not.toHaveBeenCalled();
-    expect(await permissions.checkBlanketSignEvent('example.com', 'acct_1')).toBe('ask');
+    expect(approval.presentedBatches).toHaveLength(0);
   });
 
   test('an item authored by another key refuses the batch before anyone is asked', async () => {

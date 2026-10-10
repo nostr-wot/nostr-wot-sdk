@@ -49,6 +49,9 @@ import type { SafeAccount } from '@nostr-wot/accounts';
 import { PrivateKeySigner } from '@nostr-wot/signers';
 import {
   AUTHENTICATION_SIGN_KINDS,
+  parseAuthentication,
+  authenticationKey,
+  type AuthenticationRequest,
   canonicalHostname,
   canonicalHttpOrigin,
   siteScopes,
@@ -62,6 +65,7 @@ import { verifyRemoteSignedEvent } from './remoteEvent.js';
 import { disclosedBatch, disclosedRequest, validateBatchRequest, validateRequest } from './schema.js';
 import type { PermissionsPort, VaultPort } from './ports.js';
 import type {
+  AuthenticationPolicy,
   ActivityEntry,
   ActivityPort,
   ApprovalDecision,
@@ -253,6 +257,7 @@ export class SignerCore {
   readonly #remote: RemoteSignerPort | undefined;
   readonly #relays: RelayListPort | undefined;
   readonly #logger: SignerLogger | undefined;
+  readonly #authentication: AuthenticationPolicy;
   readonly #now: () => number;
   readonly #queue: ApprovalQueue;
   /** Per origin key: the `getPublicKey` auto-approve period and the account it was earned for. */
@@ -272,6 +277,10 @@ export class SignerCore {
     this.#remote = deps.remote;
     this.#relays = deps.relays;
     this.#logger = deps.logger;
+    this.#authentication = Object.freeze({
+      ...deps.authentication,
+      legacyLoginOrigins: Object.freeze([...(deps.authentication?.legacyLoginOrigins ?? [])]),
+    });
     // One clock: the vault's. See `SignerCoreDeps`.
     this.#now = deps.vault.now;
     this.#queue = new ApprovalQueue({
@@ -484,6 +493,7 @@ export class SignerCore {
 
   async #run(validated: ValidatedRequest, context: RunContext): Promise<unknown> {
     const { request, params } = validated;
+    const revokedBefore = this.#revocationSerial;
     const method = params.method;
     const originKey = permissionOrigin(request.origin);
     const rule = permissionRule(params);
@@ -519,6 +529,8 @@ export class SignerCore {
         throw new SignerError('author_mismatch', 'Event author does not match the active account');
       }
     }
+
+    const authentication = await this.#parseAuthentication(request, params, account);
 
     // ── STEP 4 BEFORE STEP 3, DELIBERATELY. DO NOT "FIX" THIS. ──
     //
@@ -564,15 +576,18 @@ export class SignerCore {
     }
 
     // 3. Ask. The prompt shows the frozen copy: full content, every tag, exactly what is signed.
-    if (decision === 'ask' && this.#needsPrompt(method, remote, originKey, account)) {
+    if (authentication || (decision === 'ask' && this.#needsPrompt(method, remote, originKey, account))) {
       const shown = disclosedRequest(request, prepared);
       const outcome = await this.#queue.track(
         { id: request.id, kind: 'approval', origin: originKey, accountId: account.id },
-        () => this.#approval.present(shown, account),
+        () => this.#approval.present(shown, account, authentication ? { authentication: authentication.auth } : undefined),
       );
       if (!outcome.allow) {
-        if (outcome.remember) await this.#remember(originKey, rule, outcome, 'deny', account);
+        if (outcome.remember && authentication?.auth.protocol !== 'legacy-login') await this.#remember(originKey, rule, outcome, 'deny', account);
         throw new SignerError('rejected', outcome.reason || 'Request rejected by user');
+      }
+      if (authentication && outcome.authenticationScope !== 'once') {
+        throw new SignerError('rejected', 'Explicit one-time authentication approval required');
       }
       // The user approved THIS identity. If the active account moved while the prompt was
       // open, the answer is no, not the new account's key, and nothing is remembered.
@@ -598,6 +613,8 @@ export class SignerCore {
     // account is not answered once the user has moved to another, as the extension refuses.
     await this.#assertStillActive(account);
 
+    await this.#revalidateAuthentication(request, params, account, authentication, revokedBefore);
+
     // 5. Execute. 6. Zero: `withPrivkey` hands the backend a copy and zeroes it on every path.
     context.phase = 'execute';
     const result = await this.#executeFor(account, remote, originKey, request, params, prepared);
@@ -607,6 +624,7 @@ export class SignerCore {
     // The key was pinned, so it is not the wrong key; it is an answer to a question the user
     // is no longer asking, and it is refused rather than returned or logged as allowed.
     await this.#assertStillActive(account);
+    await this.#revalidateAuthentication(request, params, account, authentication, revokedBefore);
     return result;
   }
 
@@ -701,6 +719,11 @@ export class SignerCore {
       const decision = await this.#permissions.check(originKey, method, kind, account.id);
       if (decision === 'deny') throw new SignerError('permission_denied', 'Permission denied');
       if (decision === 'ask') asked.push({ method, kind });
+    }
+
+    // Authentication needs its own destination disclosure and one-time consent, never a generic batch allowance.
+    if (items.some(item => item.params.method === 'signEvent' && AUTHENTICATION_SIGN_KINDS.has(item.params.event.kind))) {
+      throw new SignerError('unsupported', 'Authentication requests must be approved individually');
     }
 
     // Whether this account can sign a batch at all. After the gate, so a denied origin learns
@@ -1008,11 +1031,52 @@ export class SignerCore {
     }
   }
 
+  #validateAuthenticationEvent(event: EventTemplateInput, origin: string): Readonly<AuthenticationRequest> {
+    let auth: AuthenticationRequest | undefined;
+    try {
+      auth = parseAuthentication({ ...event, created_at: event.created_at ?? NaN }, origin, Math.floor(this.#now() / 1000), this.#authentication);
+    } catch {
+      throw new SignerError('invalid_request', 'Invalid authentication request');
+    }
+    if (!auth) throw new SignerError('invalid_request', 'Invalid authentication request');
+    Object.freeze(auth);
+    return auth;
+  }
+
+  async #parseAuthentication(request: SignerRequest, params: ValidatedParams, account: SafeAccount): Promise<{ origin: string; auth: Readonly<AuthenticationRequest> } | undefined> {
+    if (params.method !== 'signEvent' || !AUTHENTICATION_SIGN_KINDS.has(params.event.kind)) return undefined;
+    const origin = this.#authentication.originFor
+      ? await this.#authentication.originFor(request, account)
+      : request.origin.kind === 'web' ? request.origin.identifier : '';
+    const auth = this.#validateAuthenticationEvent(params.event, origin);
+    await this.#authentication.assertAllowed?.(request, account, auth);
+    return { origin, auth };
+  }
+
+  async #revalidateAuthentication(request: SignerRequest, params: ValidatedParams, account: SafeAccount, prior: { origin: string; auth: Readonly<AuthenticationRequest> } | undefined, revokedBefore: number): Promise<void> {
+    if (!prior) return;
+    if (this.#disposed) throw new SignerError('shutdown', 'Signer is disposed');
+    const current = await this.#parseAuthentication(request, params, account);
+    if (!current || current.origin !== prior.origin || authenticationKey(current.auth) !== authenticationKey(prior.auth)) {
+      throw new SignerError('rejected', 'Authentication context changed');
+    }
+    const rule = permissionRule(params);
+    if (await this.#permissions.check(permissionOrigin(request.origin), rule.method, rule.kind, account.id) === 'deny') {
+      throw new SignerError('permission_denied', 'Permission denied');
+    }
+    const revoked = await this.#stillWanted(account, permissionOrigin(request.origin), revokedBefore);
+    if (revoked) throw revoked;
+    if (this.#disposed) throw new SignerError('shutdown', 'Signer is disposed');
+    if (this.#vault.isLocked()) throw new SignerError('vault_locked', 'Vault is locked');
+    // Every host/store read above may await past the credential's validity window.
+    if (params.method === 'signEvent') this.#validateAuthenticationEvent(params.event, prior.origin);
+  }
+
   /**
    * Whether an `ask` needs the user this time.
    *
    * `getRelays` never prompts: the extension answers it without one, and a relay list is not
-   * a secret. A remote account does not prompt locally for signing or crypto, because the
+   * a secret. A remote account does not prompt locally for ordinary signing or crypto, because the
    * bunker runs its own approval; `getPublicKey` on a remote account still does, since the
    * pubkey is answered locally. And a `getPublicKey` inside the cooldown earned for this
    * same account is answered without one.
