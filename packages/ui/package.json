@@ -3,7 +3,7 @@
   "version": "0.8.2",
   "description": "Headless React UI for Nostr \u2014 login modal/widget, session provider, themable via CSS variables.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
-  "license": "MIT",
+  "license": "GPL-3.0-only",
   "keywords": [
     "nostr",
     "react",
@@ -45,7 +45,8 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   "scripts": {
     "build": "tsup && cp src/styles.css dist/styles.css && node ../../scripts/dist-stamp.mjs stamp",

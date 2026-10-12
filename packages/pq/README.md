@@ -289,4 +289,4 @@ mean shipping parameters already scheduled for withdrawal.
 
 ## License
 
-MIT
+GNU General Public License version 3 only (`GPL-3.0-only`) — see [LICENSE](LICENSE) and [NOTICE](NOTICE).

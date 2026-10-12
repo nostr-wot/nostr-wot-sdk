@@ -3,7 +3,7 @@
   "version": "0.3.0",
   "description": "Platform-neutral vault cryptography for the @nostr-wot packages: PBKDF2-HMAC-SHA-256 key derivation and AES-256-GCM, byte compatible with the WebCrypto vault format, with no WebCrypto required.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
-  "license": "MIT",
+  "license": "GPL-3.0-only",
   "keywords": [
     "nostr",
     "vault",
@@ -36,7 +36,8 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   "scripts": {
     "build": "tsup && node ../../scripts/dist-stamp.mjs stamp",

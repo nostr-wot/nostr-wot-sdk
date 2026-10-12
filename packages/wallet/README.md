@@ -103,7 +103,7 @@ const { event, encoded } = await buildZapRequest(signer, {
 
 ## License
 
-MIT
+GNU General Public License version 3 only (`GPL-3.0-only`) — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
 ## Caller-owned NWC transport
 

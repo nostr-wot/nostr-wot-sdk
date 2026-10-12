@@ -3,7 +3,7 @@
   "version": "3.0.0",
   "description": "Nostr authentication for HTTP servers \u2014 challenge / signed-event verify (NIP-98) / JWT. Framework-agnostic Web-standard handlers + Next.js App Router shim + client helper.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
-  "license": "MIT",
+  "license": "GPL-3.0-only",
   "keywords": [
     "nostr",
     "auth",
@@ -63,7 +63,8 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   "scripts": {
     "build": "tsup",

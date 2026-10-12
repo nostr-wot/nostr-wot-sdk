@@ -243,7 +243,7 @@ Other `@nostr-wot/*` packages reuse this same pool — DM subscriptions and WoT 
 
 ## License
 
-MIT
+GNU General Public License version 3 only (`GPL-3.0-only`) — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
 ## Event collections
 

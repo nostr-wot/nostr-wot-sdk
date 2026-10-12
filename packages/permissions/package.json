@@ -3,7 +3,7 @@
   "version": "0.4.0",
   "description": "Platform-neutral signing permissions for the @nostr-wot packages: the deny-wins cascade that decides whether a caller may sign, encrypt or decrypt, over an injected storage port.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
-  "license": "MIT",
+  "license": "GPL-3.0-only",
   "keywords": [
     "nostr",
     "permissions",
@@ -36,7 +36,8 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   "scripts": {
     "build": "tsup && node ../../scripts/dist-stamp.mjs stamp",

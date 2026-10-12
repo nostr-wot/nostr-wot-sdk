@@ -3,7 +3,7 @@
   "version": "0.7.0",
   "description": "Pure-function Nostr data layer: profiles, notes, threads, engagement, NIP-65 outbox. Optional SWR cache + React hooks.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
-  "license": "MIT",
+  "license": "GPL-3.0-only",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/nostr-wot/nostr-wot-sdk.git",
@@ -53,7 +53,8 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   "scripts": {
     "build": "tsup && node ../../scripts/dist-stamp.mjs stamp",
