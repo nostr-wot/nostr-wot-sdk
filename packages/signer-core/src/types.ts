@@ -9,9 +9,16 @@
  * without them: somewhere to put a prompt and somewhere to write what happened. The rest are
  * optional and each one unlocks a capability the host may not have.
  */
-import type { AuthenticationRequest, AuthenticationParserOptions } from '@nostr-wot/permissions';
+import type {
+  AuthenticationParserOptions,
+  AuthenticationProtocol,
+  AuthenticationRequest,
+  AuthenticationRequester,
+  AuthenticationRequesterKind,
+  AuthenticationScope,
+} from '@nostr-wot/permissions';
 import type { SafeAccount } from '@nostr-wot/accounts';
-import type { PermissionsPort, VaultPort } from './ports.js';
+import type { AuthenticationGrantsPort, PermissionsPort, VaultPort } from './ports.js';
 import type { SignerErrorCode } from './errors.js';
 
 // ── The request ──
@@ -235,22 +242,93 @@ export interface BatchResult {
  * last piece a denied batch is re-sent identically and denied forever, which is the actual
  * user-facing defect near here — and it is smaller than `excludedItems`, not bigger.
  */
+/**
+ * How the pipeline treats a kind-22242 (NIP-42) or kind-27235 (NIP-98) event: a credential
+ * addressed to a destination, never an ordinary signature.
+ *
+ * **The default is the browser extension's: every authentication request prompts, the prompt
+ * must answer `authenticationScope: 'once'`, and nothing is stored.** Everything below is an
+ * explicit opt-in a host configures because its requesters are not web pages.
+ *
+ * **Who is asking.** The pipeline never infers the requester from the event. A web host
+ * either passes nothing (the validated `origin.identifier` of a `web` request is used, as the
+ * extension attests it before building the request) or `originFor`, which resolves a
+ * transport-attested HTTP origin. A host whose callers are a NIP-46 client, an Android
+ * package, a LAN peer or itself passes `requesterFor` instead, returning the typed
+ * {@link AuthenticationRequester} its transport established. One resolver or the other; a
+ * host that configures both has not decided, and the constructor refuses it. A non-web
+ * request with neither configured is refused as `invalid_request`, exactly as before.
+ *
+ * **Remembering.** With `grants` configured the pipeline reads the store before every
+ * authentication prompt and writes it after an approval: a stored `deny` refuses for every
+ * requester kind without a prompt; a stored `allow` skips the prompt, and a prompt may answer
+ * `site` or `connected-sites`, only for a requester whose kind is in `rememberFor`. Its default
+ * is every kind but `web`, so a browser host that configures `grants` gets a deny check and
+ * nothing more unless it adds `'web'` on purpose. A remembered refusal (`remember: true` on a
+ * `allow: false`) becomes a destination-scoped deny grant rather than a blanket kind deny in
+ * the permission cascade, which is what the user was shown. A stored allow is re-read after
+ * the unlock and after the signature, so a revocation landing in between refuses the result
+ * (`permission_denied`).
+ *
+ * **The host's own path.** `self` names the requesters that ARE the host app: a `local` label
+ * only in-app code can spell. A request from one of them, sent through
+ * {@link SignerCore.handleSelf}, authenticates to a relay (NIP-42 only) with no destination
+ * prompt and no grant written, because the question "may this caller log you in to this
+ * relay" has nobody else in it. Everything else still applies: the permission cascade's deny,
+ * a stored deny grant, `assertAllowed`, the unlock, every revalidation, and the activity entry,
+ * which carries `consent: 'self'` so a log reader sees exactly which signatures took this path.
+ * The same requester arriving through {@link SignerCore.handle} with an authentication event
+ * is refused (`permission_denied`): the self path is not reachable by request, only by the
+ * host calling the method, and a transport that forged the host's own origin gets nothing.
+ */
 export interface AuthenticationPolicy extends AuthenticationParserOptions {
-  /** Resolve a transport-attested HTTP origin. Required for non-web authentication callers; never infer it from event tags. */
+  /** Resolve a transport-attested HTTP origin for a web host. Never infer it from event tags. */
   originFor?(request: SignerRequest, account: SafeAccount): Promise<string>;
+  /**
+   * Resolve the typed requester the host's transport attested: a client pubkey a pairing
+   * proved, a package name the binder reported, a device id, the host's own label, or a web
+   * origin. Required for a non-web requester to authenticate at all. Never derive it from
+   * anything the request says about itself; `requesterOf(request.origin)` is the right answer
+   * only for a host whose every transport establishes identity before it builds the request.
+   */
+  requesterFor?(request: SignerRequest, account: SafeAccount): Promise<AuthenticationRequester>;
   /** Enforce connection, frame and privileged endpoint policy. Repeated before and after signing. */
   assertAllowed?(request: SignerRequest, account: SafeAccount, authentication: Readonly<AuthenticationRequest>): Promise<void>;
+  /** Stored destination grants. Without it nothing is remembered and only `once` is accepted. */
+  grants?: AuthenticationGrantsPort;
+  /** Requester kinds whose consent may be remembered and whose stored allow is honoured. Default: every kind but `web`. Needs `grants`. */
+  rememberFor?: readonly AuthenticationRequesterKind[];
+  /** The host's own requesters, for {@link SignerCore.handleSelf}. Non-web kinds only. */
+  self?: SelfAuthenticationPolicy;
+}
+
+/** The requesters that are the host app itself. See {@link AuthenticationPolicy}. */
+export interface SelfAuthenticationPolicy {
+  /** At least one, none of them `web`: a website is never the host. */
+  requesters: readonly AuthenticationRequester[];
 }
 
 export interface ApprovalContext {
   /** Show destination, method and protocol. For legacy-login, warn that the client uses the wrong standard and should contact its developers. */
   authentication: Readonly<AuthenticationRequest>;
+  /** The requester's grant key, as `authenticationRequesterKey` spells it: the origin for a page, `kind:identifier` otherwise. */
+  requester: string;
+  /**
+   * The scopes the pipeline will accept from this prompt. `['once']` unless the host
+   * configured `grants` and this requester's kind is in `rememberFor`; `connected-sites`
+   * only for a relay. A prompt should offer exactly these and nothing else.
+   */
+  scopes: readonly AuthenticationScope[];
 }
 
 export interface ApprovalDecision {
   allow: boolean;
-  /** Required for authentication. This pipeline only accepts individual, one-time authentication consent. */
-  authenticationScope?: 'once';
+  /**
+   * Required for authentication. `once` is always accepted; `site` and `connected-sites`
+   * only when they appear in {@link ApprovalContext.scopes}, which is the host's own
+   * configuration reflected back. Anything else refuses the request.
+   */
+  authenticationScope?: AuthenticationScope;
   /** Persist this decision through permissions, so the origin is not asked again. */
   remember?: boolean;
   /** With `remember`, scope a `signEvent` decision to this event kind (the default) or to every kind. */
@@ -326,6 +404,33 @@ export interface ActivityEntry {
   scheme?: 'classic' | 'pq';
   /** The batch this item arrived in, when it did. `requestId` is then the item's id. */
   batchId?: string;
+  /** For a NIP-42 or NIP-98 event that parsed: what it authenticated to, and what let it. */
+  authentication?: AuthenticationActivity;
+}
+
+/**
+ * What authorised an authentication signature.
+ *
+ * - `once`, `site`, `connected-sites`: a prompt the user answered, at that scope.
+ * - `grant`: a stored allow, read from `AuthenticationPolicy.grants`; no prompt was shown.
+ * - `self`: the host's own path, {@link SignerCore.handleSelf}; no prompt, nothing stored.
+ */
+export type AuthenticationConsent = AuthenticationScope | 'grant' | 'self';
+
+/**
+ * The authentication half of an activity entry, so a log reader can tell a relay login from a
+ * note without re-parsing the event, and can see which of them took the self path or rode a
+ * stored grant. Present whenever the event parsed; `consent` only when the run got as far as
+ * deciding, so a refused request shows its destination and no consent.
+ */
+export interface AuthenticationActivity {
+  protocol: AuthenticationProtocol;
+  /** The canonical destination: the relay URL for NIP-42, the service origin for NIP-98. */
+  destination: string;
+  method?: string;
+  /** The requester's grant key. */
+  requester: string;
+  consent?: AuthenticationConsent;
 }
 
 export interface ActivityPort {

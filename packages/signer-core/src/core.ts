@@ -48,10 +48,18 @@
 import type { SafeAccount } from '@nostr-wot/accounts';
 import { PrivateKeySigner } from '@nostr-wot/signers';
 import {
+  AUTHENTICATION_DENIED_ERROR,
+  AUTHENTICATION_REQUESTER_KINDS,
   AUTHENTICATION_SIGN_KINDS,
+  NON_WEB_REQUESTER_KINDS,
   parseAuthentication,
   authenticationKey,
+  authenticationRequesterKey,
+  validAuthenticationScope,
   type AuthenticationRequest,
+  type AuthenticationRequester,
+  type AuthenticationRequesterKind,
+  type AuthenticationScope,
   canonicalHostname,
   canonicalHttpOrigin,
   siteScopes,
@@ -65,6 +73,8 @@ import { verifyRemoteSignedEvent } from './remoteEvent.js';
 import { disclosedBatch, disclosedRequest, validateBatchRequest, validateRequest } from './schema.js';
 import type { PermissionsPort, VaultPort } from './ports.js';
 import type {
+  AuthenticationActivity,
+  AuthenticationConsent,
   AuthenticationPolicy,
   ActivityEntry,
   ActivityPort,
@@ -102,6 +112,34 @@ import type {
  */
 export function permissionOrigin(origin: RequestOrigin): string {
   return origin.kind === 'web' ? origin.identifier : `${origin.kind}:${origin.identifier}`;
+}
+
+/**
+ * A request's origin as the typed requester an authentication decision is made against.
+ *
+ * A shape change and nothing more: the boundary has already canonicalised the identifier, and
+ * `authenticationRequesterKey(requesterOf(origin))` spells exactly what {@link permissionOrigin}
+ * spells, which is what lets one grant list serve the permission cascade's keys and the
+ * destination grants. Held to that by `authentication.test.ts`.
+ *
+ * It is the right `requesterFor` only for a host whose every transport establishes identity
+ * BEFORE it builds the request: a binder-reported package, a pairing-proved key. It says
+ * nothing about whether that is so, which is why the policy takes a resolver rather than
+ * defaulting to this.
+ */
+export function requesterOf(origin: RequestOrigin): AuthenticationRequester {
+  switch (origin.kind) {
+    case 'web':
+      return { kind: 'web', origin: origin.identifier };
+    case 'nip46':
+      return { kind: 'nip46', clientPubkey: origin.identifier };
+    case 'nip55':
+      return { kind: 'nip55', packageName: origin.identifier };
+    case 'lan':
+      return { kind: 'lan', peerId: origin.identifier };
+    case 'local':
+      return { kind: 'local', id: origin.identifier };
+  }
 }
 
 /**
@@ -192,6 +230,24 @@ interface Cooldown {
   accountId: string;
 }
 
+/**
+ * An authentication request as the pipeline carries it from parse to record.
+ *
+ * `requester` is what the parser was given, kept so the revalidations re-parse against the
+ * identical identity; `key` is its grant spelling. `self` marks the host's own path. `consent`
+ * is filled in once something has authorised the signature, and `stored` is what the grant
+ * store said before any prompt, so the revalidations can tell a request riding a stored allow
+ * from one the user answered a moment ago.
+ */
+interface AuthenticationRun {
+  requester: string | AuthenticationRequester;
+  key: string;
+  auth: Readonly<AuthenticationRequest>;
+  self: boolean;
+  consent?: AuthenticationConsent;
+  stored?: 'allow' | 'deny' | undefined;
+}
+
 /** What `handle` knows about a request by the time it reports the outcome. */
 interface RunContext {
   account: SafeAccount | null;
@@ -203,6 +259,8 @@ interface RunContext {
    * entry for a single request, one per item for a batch, filled in as far as the run got.
    */
   prepared: readonly PreparedParams[] | null;
+  /** The authentication request this was, once parsed, for the activity entry. */
+  authentication: AuthenticationRun | null;
 }
 
 /**
@@ -217,6 +275,20 @@ interface Recorded {
   origin: RequestOrigin;
   params: PreparedParams | ValidatedParams;
   batchId?: string;
+  authentication?: AuthenticationActivity;
+}
+
+/** The activity view of an authentication run, as far as it got. */
+function authenticationActivity(run: AuthenticationRun | null): AuthenticationActivity | undefined {
+  if (!run) return undefined;
+  const activity: AuthenticationActivity = {
+    protocol: run.auth.protocol,
+    destination: run.auth.destination,
+    requester: run.key,
+  };
+  if (run.auth.method !== undefined) activity.method = run.auth.method;
+  if (run.consent !== undefined) activity.consent = run.consent;
+  return activity;
 }
 
 /** One item's run, before it is reported: the raw error is kept for the on-device log. */
@@ -258,6 +330,10 @@ export class SignerCore {
   readonly #relays: RelayListPort | undefined;
   readonly #logger: SignerLogger | undefined;
   readonly #authentication: AuthenticationPolicy;
+  /** Requester kinds whose authentication consent may be stored and whose stored allow is honoured. */
+  readonly #rememberFor: ReadonlySet<AuthenticationRequesterKind>;
+  /** The host's own requesters by grant key: what `handleSelf` accepts and `handle` refuses. */
+  readonly #selfRequesters: ReadonlyMap<string, AuthenticationRequester>;
   readonly #now: () => number;
   readonly #queue: ApprovalQueue;
   /** Per origin key: the `getPublicKey` auto-approve period and the account it was earned for. */
@@ -277,9 +353,36 @@ export class SignerCore {
     this.#remote = deps.remote;
     this.#relays = deps.relays;
     this.#logger = deps.logger;
+    const policy = deps.authentication ?? {};
+    // One resolver. A host that configured both has not decided which attestation it trusts,
+    // and silently preferring one would hide that from it.
+    if (policy.originFor && policy.requesterFor) {
+      throw new Error('Configure authentication.originFor or authentication.requesterFor, not both');
+    }
+    if (policy.rememberFor && !policy.grants) {
+      throw new Error('authentication.rememberFor names kinds to remember, which needs authentication.grants');
+    }
+    const rememberFor = policy.rememberFor ?? NON_WEB_REQUESTER_KINDS;
+    for (const kind of rememberFor) {
+      if (!AUTHENTICATION_REQUESTER_KINDS.includes(kind)) throw new Error(`Unknown authentication requester kind: ${String(kind)}`);
+    }
+    const selfRequesters = new Map<string, AuthenticationRequester>();
+    if (policy.self) {
+      if (policy.self.requesters.length === 0) throw new Error('authentication.self.requesters must name at least one requester');
+      for (const requester of policy.self.requesters) {
+        // A website is never the host. The self path signs without a destination prompt, and
+        // the one requester kind an outside party can spell is the one it must never cover.
+        if (requester.kind === 'web') throw new Error('authentication.self.requesters cannot include a web requester');
+        selfRequesters.set(authenticationRequesterKey(requester), Object.freeze({ ...requester }));
+      }
+    }
+    this.#rememberFor = new Set(rememberFor);
+    this.#selfRequesters = selfRequesters;
     this.#authentication = Object.freeze({
-      ...deps.authentication,
-      legacyLoginOrigins: Object.freeze([...(deps.authentication?.legacyLoginOrigins ?? [])]),
+      ...policy,
+      legacyLoginOrigins: Object.freeze([...(policy.legacyLoginOrigins ?? [])]),
+      ...(policy.rememberFor ? { rememberFor: Object.freeze([...policy.rememberFor]) } : {}),
+      ...(policy.self ? { self: Object.freeze({ requesters: Object.freeze([...selfRequesters.values()]) }) } : {}),
     });
     // One clock: the vault's. See `SignerCoreDeps`.
     this.#now = deps.vault.now;
@@ -408,14 +511,58 @@ export class SignerCore {
     } catch (error) {
       throw this.#toSignerError(error, 'pipeline', requestIdForLog(request));
     }
-    const context: RunContext = { account: null, phase: 'pipeline', prepared: null };
-    const recorded = (): Recorded => ({
-      id: validated.request.id,
-      origin: validated.request.origin,
-      params: context.prepared?.[0] ?? validated.params,
-    });
+    return this.#handleValidated(validated, false);
+  }
+
+  /**
+   * The host's own relay login: a NIP-42 event from one of the requesters named in
+   * `authentication.self`, signed with no destination prompt and no grant written.
+   *
+   * Only the host calls this, from the code that is publishing or reading as the user, against
+   * a relay the user's own lists named. It is not a transport entry point and must not be
+   * handed to one: {@link handle} refuses an authentication event from a self requester, so a
+   * transport that forged the host's origin is refused there, and the only way onto this path
+   * is this method. Everything but the prompt and the grant still runs: the permission
+   * cascade's deny, a stored deny grant, `assertAllowed`, the unlock, every revalidation, and
+   * an activity entry carrying `consent: 'self'`.
+   *
+   * Refused as `invalid_request` for anything that is not an authentication event, as
+   * `permission_denied` for a requester the host did not declare and for NIP-98 (an HTTP
+   * token is a bearer credential for whatever the endpoint does, and a host flow that needs
+   * one signs it through its own explicit path, never silently), and as `unsupported` when
+   * no self policy is configured.
+   */
+  async handleSelf(request: SignerRequest): Promise<unknown> {
+    if (this.#disposed) throw new SignerError('shutdown', 'Signer shut down');
+    if (this.#selfRequesters.size === 0) throw new SignerError('unsupported', 'This host has no self authentication path');
+    let validated: ValidatedRequest;
     try {
-      const result = await this.#run(validated, context);
+      validated = validateRequest(request);
+    } catch (error) {
+      throw this.#toSignerError(error, 'pipeline', requestIdForLog(request));
+    }
+    const { params } = validated;
+    if (params.method !== 'signEvent' || !AUTHENTICATION_SIGN_KINDS.has(params.event.kind)) {
+      throw new SignerError('invalid_request', 'handleSelf takes an authentication event only');
+    }
+    return this.#handleValidated(validated, true);
+  }
+
+  /** The tail `handle` and `handleSelf` share: run, record, answer. */
+  async #handleValidated(validated: ValidatedRequest, self: boolean): Promise<unknown> {
+    const context: RunContext = { account: null, phase: 'pipeline', prepared: null, authentication: null };
+    const recorded = (): Recorded => {
+      const view: Recorded = {
+        id: validated.request.id,
+        origin: validated.request.origin,
+        params: context.prepared?.[0] ?? validated.params,
+      };
+      const authentication = authenticationActivity(context.authentication);
+      if (authentication) view.authentication = authentication;
+      return view;
+    };
+    try {
+      const result = await this.#run(validated, context, self);
       await this.#record(recorded(), context.account, { decision: 'allow' });
       return result;
     } catch (error) {
@@ -460,7 +607,7 @@ export class SignerCore {
       params: context.prepared?.[index] ?? items[index]!.params,
       batchId: request.id,
     });
-    const context: RunContext = { account: null, phase: 'pipeline', prepared: null };
+    const context: RunContext = { account: null, phase: 'pipeline', prepared: null, authentication: null };
     try {
       const runs = await this.#runBatch(validated, context);
       const outcomes: BatchItemOutcome[] = [];
@@ -491,7 +638,7 @@ export class SignerCore {
     }
   }
 
-  async #run(validated: ValidatedRequest, context: RunContext): Promise<unknown> {
+  async #run(validated: ValidatedRequest, context: RunContext, self: boolean): Promise<unknown> {
     const { request, params } = validated;
     const revokedBefore = this.#revocationSerial;
     const method = params.method;
@@ -530,7 +677,21 @@ export class SignerCore {
       }
     }
 
-    const authentication = await this.#parseAuthentication(request, params, account);
+    const authentication = await this.#parseAuthentication(request, params, account, self);
+    context.authentication = authentication ?? null;
+
+    // What the user has already said about this exact destination, when the host keeps a
+    // store. A deny refuses before any prompt, for every requester kind: a refusal in force is
+    // a refusal in force. An allow skips the prompt only for a kind the host said may be
+    // remembered; for any other kind it is read and set aside, and the prompt follows as if
+    // nothing were stored. The self path never prompts and never reads an allow, so for it
+    // only the deny matters.
+    if (authentication && this.#authentication.grants) {
+      authentication.stored = await this.#authentication.grants.decisionFor(account.id, authentication.key, authentication.auth);
+      if (authentication.stored === 'deny') throw new SignerError('permission_denied', 'Authentication permission denied');
+    }
+    if (authentication?.self) authentication.consent = 'self';
+    else if (authentication && authentication.stored === 'allow' && this.#mayRemember(authentication)) authentication.consent = 'grant';
 
     // ── STEP 4 BEFORE STEP 3, DELIBERATELY. DO NOT "FIX" THIS. ──
     //
@@ -576,18 +737,37 @@ export class SignerCore {
     }
 
     // 3. Ask. The prompt shows the frozen copy: full content, every tag, exactly what is signed.
-    if (authentication || (decision === 'ask' && this.#needsPrompt(method, remote, originKey, account))) {
+    //    An authentication request always asks, unless something already answered it: the
+    //    host's own path, or a stored allow for a requester the host said may be remembered.
+    //    An ordinary request asks on an unset rule, as it always has.
+    const ask = authentication
+      ? authentication.consent === undefined
+      : decision === 'ask' && this.#needsPrompt(method, remote, originKey, account);
+    if (ask) {
       const shown = disclosedRequest(request, prepared);
+      const scopes = authentication ? this.#acceptedScopes(authentication) : [];
       const outcome = await this.#queue.track(
         { id: request.id, kind: 'approval', origin: originKey, accountId: account.id },
-        () => this.#approval.present(shown, account, authentication ? { authentication: authentication.auth } : undefined),
+        () => this.#approval.present(shown, account, authentication ? { authentication: authentication.auth, requester: authentication.key, scopes } : undefined),
       );
       if (!outcome.allow) {
-        if (outcome.remember && authentication?.auth.protocol !== 'legacy-login') await this.#remember(originKey, rule, outcome, 'deny', account);
+        if (outcome.remember && authentication?.auth.protocol !== 'legacy-login') {
+          // With a grant store, a remembered refusal is the one the user was shown: this
+          // requester, this destination. Without one it is the cascade's kind deny, as before.
+          if (authentication && this.#authentication.grants) await this.#rememberAuthenticationDeny(authentication, account);
+          else await this.#remember(originKey, rule, outcome, 'deny', account);
+        }
         throw new SignerError('rejected', outcome.reason || 'Request rejected by user');
       }
-      if (authentication && outcome.authenticationScope !== 'once') {
-        throw new SignerError('rejected', 'Explicit one-time authentication approval required');
+      if (authentication) {
+        const scope = outcome.authenticationScope;
+        if (scope !== 'once' && !(scope !== undefined && scopes.includes(scope))) {
+          throw new SignerError(
+            'rejected',
+            scopes.length > 1 ? 'Explicit authentication approval at an offered scope required' : 'Explicit one-time authentication approval required',
+          );
+        }
+        authentication.consent = scope;
       }
       // The user approved THIS identity. If the active account moved while the prompt was
       // open, the answer is no, not the new account's key, and nothing is remembered.
@@ -614,6 +794,15 @@ export class SignerCore {
     await this.#assertStillActive(account);
 
     await this.#revalidateAuthentication(request, params, account, authentication, revokedBefore);
+
+    // A consent the user asked to have remembered is written here, after every revalidation
+    // and immediately before the key is used, not at the moment they tapped. A grant written
+    // for a request that then failed to sign would be a standing permission for something
+    // that never happened. The store's own deny re-check inside its lock is the last gate
+    // before the signature.
+    if (authentication && (authentication.consent === 'site' || authentication.consent === 'connected-sites')) {
+      await this.#saveAuthenticationGrant(authentication, authentication.consent, account);
+    }
 
     // 5. Execute. 6. Zero: `withPrivkey` hands the backend a copy and zeroes it on every path.
     context.phase = 'execute';
@@ -1031,10 +1220,10 @@ export class SignerCore {
     }
   }
 
-  #validateAuthenticationEvent(event: EventTemplateInput, origin: string): Readonly<AuthenticationRequest> {
+  #validateAuthenticationEvent(event: EventTemplateInput, requester: string | AuthenticationRequester): Readonly<AuthenticationRequest> {
     let auth: AuthenticationRequest | undefined;
     try {
-      auth = parseAuthentication({ ...event, created_at: event.created_at ?? NaN }, origin, Math.floor(this.#now() / 1000), this.#authentication);
+      auth = parseAuthentication({ ...event, created_at: event.created_at ?? NaN }, requester, Math.floor(this.#now() / 1000), this.#authentication);
     } catch {
       throw new SignerError('invalid_request', 'Invalid authentication request');
     }
@@ -1043,21 +1232,58 @@ export class SignerCore {
     return auth;
   }
 
-  async #parseAuthentication(request: SignerRequest, params: ValidatedParams, account: SafeAccount): Promise<{ origin: string; auth: Readonly<AuthenticationRequest> } | undefined> {
-    if (params.method !== 'signEvent' || !AUTHENTICATION_SIGN_KINDS.has(params.event.kind)) return undefined;
-    const origin = this.#authentication.originFor
-      ? await this.#authentication.originFor(request, account)
-      : request.origin.kind === 'web' ? request.origin.identifier : '';
-    const auth = this.#validateAuthenticationEvent(params.event, origin);
-    await this.#authentication.assertAllowed?.(request, account, auth);
-    return { origin, auth };
+  /**
+   * Who is asking, as the host attested it, and the grant key that spells it.
+   *
+   * On the host's own path the requester is the one the host declared under that key,
+   * never resolved: the host IS the attestation there. Otherwise the typed resolver, else the
+   * web resolver, else the validated web identifier, else nothing, which the parser refuses.
+   * The self check runs twice on purpose, on the request's own origin before the host is
+   * asked and on whatever the host answered: a transport cannot reach the self path by
+   * spelling the host's origin, and a resolver cannot route a caller onto it by mistake.
+   */
+  async #resolveRequester(request: SignerRequest, account: SafeAccount, self: boolean): Promise<{ requester: string | AuthenticationRequester; key: string }> {
+    const originKey = permissionOrigin(request.origin);
+    if (self) {
+      const declared = this.#selfRequesters.get(originKey);
+      if (!declared) throw new SignerError('permission_denied', 'Not one of the host\'s own requesters');
+      return { requester: declared, key: originKey };
+    }
+    if (this.#selfRequesters.has(originKey)) throw new SignerError('permission_denied', 'The host\'s own authentication path is not reachable by request');
+    const requester: string | AuthenticationRequester = this.#authentication.requesterFor
+      ? await this.#authentication.requesterFor(request, account)
+      : this.#authentication.originFor
+        ? await this.#authentication.originFor(request, account)
+        : request.origin.kind === 'web' ? request.origin.identifier : '';
+    let key: string;
+    if (typeof requester === 'string') key = requester;
+    else {
+      try {
+        key = authenticationRequesterKey(requester);
+      } catch {
+        throw new SignerError('invalid_request', 'Invalid authentication request');
+      }
+    }
+    if (this.#selfRequesters.has(key)) throw new SignerError('permission_denied', 'The host\'s own authentication path is not reachable by request');
+    return { requester, key };
   }
 
-  async #revalidateAuthentication(request: SignerRequest, params: ValidatedParams, account: SafeAccount, prior: { origin: string; auth: Readonly<AuthenticationRequest> } | undefined, revokedBefore: number): Promise<void> {
+  async #parseAuthentication(request: SignerRequest, params: ValidatedParams, account: SafeAccount, self: boolean): Promise<AuthenticationRun | undefined> {
+    if (params.method !== 'signEvent' || !AUTHENTICATION_SIGN_KINDS.has(params.event.kind)) return undefined;
+    const { requester, key } = await this.#resolveRequester(request, account, self);
+    const auth = this.#validateAuthenticationEvent(params.event, requester);
+    // The self path is relay login and nothing else. An HTTP token is a bearer credential for
+    // whatever the endpoint does, and the one thing a silent path must never mint.
+    if (self && auth.protocol !== 'nip42') throw new SignerError('permission_denied', 'The host authenticates itself to relays only');
+    await this.#authentication.assertAllowed?.(request, account, auth);
+    return { requester, key, auth, self };
+  }
+
+  async #revalidateAuthentication(request: SignerRequest, params: ValidatedParams, account: SafeAccount, prior: AuthenticationRun | undefined, revokedBefore: number): Promise<void> {
     if (!prior) return;
     if (this.#disposed) throw new SignerError('shutdown', 'Signer is disposed');
-    const current = await this.#parseAuthentication(request, params, account);
-    if (!current || current.origin !== prior.origin || authenticationKey(current.auth) !== authenticationKey(prior.auth)) {
+    const current = await this.#parseAuthentication(request, params, account, prior.self);
+    if (!current || current.key !== prior.key || authenticationKey(current.auth) !== authenticationKey(prior.auth)) {
       throw new SignerError('rejected', 'Authentication context changed');
     }
     const rule = permissionRule(params);
@@ -1068,8 +1294,72 @@ export class SignerCore {
     if (revoked) throw revoked;
     if (this.#disposed) throw new SignerError('shutdown', 'Signer is disposed');
     if (this.#vault.isLocked()) throw new SignerError('vault_locked', 'Vault is locked');
+    // The store, read again: a deny recorded while the user was deciding or typing a password
+    // refuses, and a request that rode a stored allow is refused once that allow is gone.
+    // Revoking a grant leaves nothing behind, not a deny, so the deny check alone would let a
+    // request parked on the unlock screen sign on a permission the user removed meanwhile. A
+    // request the user answered a moment ago is not refused by a revocation of the grant its
+    // own approval wrote.
+    if (this.#authentication.grants) {
+      const stored = await this.#authentication.grants.decisionFor(account.id, prior.key, prior.auth);
+      if (stored === 'deny') throw new SignerError('permission_denied', 'Authentication permission denied');
+      if (prior.consent === 'grant' && stored !== 'allow') throw new SignerError('permission_denied', 'Authentication permission revoked');
+    }
     // Every host/store read above may await past the credential's validity window.
-    if (params.method === 'signEvent') this.#validateAuthenticationEvent(params.event, prior.origin);
+    if (params.method === 'signEvent') this.#validateAuthenticationEvent(params.event, prior.requester);
+  }
+
+  /** Whether this requester's kind is one the host said may hold a stored consent. */
+  #mayRemember(run: AuthenticationRun): boolean {
+    if (!this.#authentication.grants) return false;
+    const kind: AuthenticationRequesterKind = typeof run.requester === 'string' ? 'web' : run.requester.kind;
+    return this.#rememberFor.has(kind);
+  }
+
+  /** The scopes a prompt for this request may answer with: what the policy allows, narrowed to what the protocol allows. */
+  #acceptedScopes(run: AuthenticationRun): AuthenticationScope[] {
+    const scopes: AuthenticationScope[] = ['once'];
+    if (!this.#mayRemember(run)) return scopes;
+    for (const scope of ['site', 'connected-sites'] as const) {
+      if (validAuthenticationScope(run.auth, scope)) scopes.push(scope);
+    }
+    return scopes;
+  }
+
+  /**
+   * Persist a consent through the grant store, and turn its refusals into the pipeline's.
+   * A deny the store found in force is `permission_denied`; the host's own account check
+   * passes as itself; anything else refuses as `internal`, because a signature must not ride
+   * on a grant write whose outcome nobody knows.
+   */
+  async #saveAuthenticationGrant(run: AuthenticationRun, scope: AuthenticationScope, account: SafeAccount, decision: 'allow' | 'deny' = 'allow'): Promise<void> {
+    const grants = this.#authentication.grants;
+    if (!grants) throw new SignerError('internal', 'Internal signer error');
+    try {
+      await grants.save(account.id, run.key, run.auth, scope, () => this.#assertStillActive(account), decision);
+    } catch (error) {
+      if (error instanceof SignerError) throw error;
+      if ((error as { name?: unknown } | null)?.name === AUTHENTICATION_DENIED_ERROR) {
+        throw new SignerError('permission_denied', 'Authentication permission denied');
+      }
+      this.#logger?.warn('authentication grant not saved', { requester: run.key, error: errorMessage(error) });
+      throw new SignerError('internal', 'Could not record the authentication permission');
+    }
+  }
+
+  /**
+   * A refusal the user asked to have remembered, as a destination-scoped deny. Persisted
+   * before the request is refused, and a failure to persist it fails the refusal loudly: a
+   * user who chose "reject always" and got a refusal with no record written would believe a
+   * decision is in force that is not.
+   */
+  async #rememberAuthenticationDeny(run: AuthenticationRun, account: SafeAccount): Promise<void> {
+    try {
+      await this.#saveAuthenticationGrant(run, 'site', account, 'deny');
+    } catch (error) {
+      if (error instanceof SignerError && error.code === 'account_switched') throw error;
+      throw new SignerError('rejected', 'Authentication rejected; the rejection could not be remembered');
+    }
   }
 
   /**
@@ -1238,6 +1528,7 @@ export class SignerCore {
       decision: outcome.decision,
     };
     if (recorded.batchId !== undefined) entry.batchId = recorded.batchId;
+    if (recorded.authentication !== undefined) entry.authentication = recorded.authentication;
     if (outcome.reason !== undefined) entry.reason = outcome.reason;
     if (outcome.code !== undefined) entry.code = outcome.code;
     switch (params.method) {

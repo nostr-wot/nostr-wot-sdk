@@ -52,12 +52,17 @@ export type {
   AuthenticationEventInput,
   AuthenticationRequest,
   AuthenticationGrant,
+  AuthenticationRequester,
+  AuthenticationRequesterKind,
 } from './authentication.js';
 
 export {
   ENDPOINT_GRANT_VERSION,
+  AUTHENTICATION_REQUESTER_KINDS,
+  NON_WEB_REQUESTER_KINDS,
   parseAuthentication,
   authenticationKey,
+  authenticationRequesterKey,
   validAuthenticationScope,
 } from './authentication.js';
 
@@ -76,6 +81,8 @@ export { canonicalHostname, canonicalHttpOrigin, siteScopes, hasSiteScope, origi
 
 export {
   AuthenticationGrants,
+  AuthenticationDeniedError,
+  AUTHENTICATION_DENIED_ERROR,
   SHARED_SITES_ORIGIN,
   DEFAULT_BACKEND_AUTH_KEY,
   type AuthenticationBackend,

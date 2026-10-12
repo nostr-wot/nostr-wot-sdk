@@ -72,6 +72,113 @@ export interface AuthenticationParserOptions {
   legacyLoginOrigins?: readonly string[];
 }
 
+/**
+ * Who is asking for a credential, as the host's transport established it.
+ *
+ * A browser extension's requester is a web page, identified by the origin the browser
+ * attested. A phone's requesters are not pages at all: a NIP-46 client is the pubkey its
+ * pairing proved, an Android caller is the package name the binder reported, a LAN peer is
+ * the device id its pairing proved, and the host app itself is a label only in-app code can
+ * spell. None of those can be compared to a destination, none can truthfully carry an
+ * `origin` tag, and none may ever be spelled as a web origin, or a grant given to a site would
+ * answer for an app and the other way round.
+ *
+ * The host resolves one of these from its own attestation, never from anything the request
+ * says about itself, and hands it to {@link parseAuthentication}. The string form a grant is
+ * keyed by is {@link authenticationRequesterKey}.
+ *
+ * `nip55.signatureDigest` is the caller's signing-certificate digest when the host verified
+ * one. It is carried for the host's own policy and display and is deliberately NOT part of the
+ * key: a grant list keyed on package name alone already exists in the field, and folding the
+ * digest in would orphan every record in it.
+ */
+export type AuthenticationRequester =
+  | { kind: 'web'; origin: string }
+  | { kind: 'nip46'; clientPubkey: string }
+  | { kind: 'nip55'; packageName: string; signatureDigest?: string }
+  | { kind: 'lan'; peerId: string }
+  | { kind: 'local'; id: string };
+
+export type AuthenticationRequesterKind = AuthenticationRequester['kind'];
+
+/** Every requester kind, as a runtime list for a host validating configuration. */
+export const AUTHENTICATION_REQUESTER_KINDS: readonly AuthenticationRequesterKind[] = ['web', 'nip46', 'nip55', 'lan', 'local'];
+
+/** The requester kinds that are not a web page: every one but `web`. */
+export const NON_WEB_REQUESTER_KINDS: readonly AuthenticationRequesterKind[] = ['nip46', 'nip55', 'lan', 'local'];
+
+/** Lowercase hex, 32 bytes: a Nostr public key. */
+const HEX_PUBKEY = /^[0-9a-f]{64}$/;
+
+/**
+ * A non-web identifier the host attested, checked for the things that make a bad key: empty,
+ * surrounding whitespace, or control characters that would render as nothing on a settings
+ * screen. Nothing is folded; the identifier is the host's, spelled as the host spells it.
+ */
+function requesterLabel(value: unknown): string {
+  if (typeof value !== 'string' || value === '' || value !== value.trim()) {
+    throw new Error('Invalid authentication requester');
+  }
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    if (code <= 32 || code === 127) throw new Error('Invalid authentication requester');
+  }
+  return value;
+}
+
+/**
+ * The one string a grant for this requester is stored under.
+ *
+ * A web requester is its canonical http(s) origin, exactly the label `AuthenticationGrants`
+ * already keys on, so every grant a browser host has written keeps matching. Every other kind
+ * is `kind:identifier`. The two can never meet: a canonical origin always begins with
+ * `http://` or `https://`, and a prefixed key always begins with one of the fixed non-web
+ * kinds followed by a colon, so neither spelling is reachable from the other whatever the
+ * identifier holds. The same spelling `@nostr-wot/signer-core`'s `permissionOrigin` gives a
+ * request's origin, which is what lets one grant list serve both the permission cascade's
+ * keys and these.
+ *
+ * Throws for a web origin that is not already canonical (a host that passes a URL through has
+ * not resolved who is calling), for a NIP-46 key that is not 32 hex bytes, and for an empty or
+ * control-character identifier. Never returns `*`, the shared-sites sentinel.
+ */
+export function authenticationRequesterKey(requester: AuthenticationRequester): string {
+  switch (requester.kind) {
+    case 'web': {
+      const origin = canonicalHttpOrigin(requester.origin);
+      if (origin === null || origin !== requester.origin) throw new Error('Invalid authentication requester');
+      return origin;
+    }
+    case 'nip46': {
+      const pubkey = requesterLabel(requester.clientPubkey).toLowerCase();
+      if (!HEX_PUBKEY.test(pubkey)) throw new Error('Invalid authentication requester');
+      return `nip46:${pubkey}`;
+    }
+    case 'nip55':
+      return `nip55:${requesterLabel(requester.packageName)}`;
+    case 'lan':
+      return `lan:${requesterLabel(requester.peerId)}`;
+    case 'local':
+      return `local:${requesterLabel(requester.id)}`;
+    default:
+      throw new Error('Invalid authentication requester');
+  }
+}
+
+/**
+ * The web origin a requester is, or `null` for a requester that is not a page and so has no
+ * origin to compare a tag or a destination against. A bare string is the web origin a browser
+ * host has always passed.
+ */
+function webOriginOf(requester: string | AuthenticationRequester): string | null {
+  if (typeof requester === 'string') return requester;
+  if (requester.kind === 'web') return requester.origin;
+  // A malformed non-web requester is a host bug and is refused before anything in the event
+  // is read: a credential cannot be keyed to an identity that has no valid spelling.
+  authenticationRequesterKey(requester);
+  return null;
+}
+
 /** Which authentication protocol an event speaks. */
 export type AuthenticationProtocol = 'nip42' | 'nip98' | 'legacy-login';
 
@@ -231,7 +338,7 @@ function isLoopback(canonical: string): boolean {
  */
 function destinationOf(
   raw: string,
-  requesterOrigin: string,
+  requesterOrigin: string | null,
   relay: boolean,
 ): { origin: string; full: string } | null {
   // Checked on the raw STRING, before any parsing, because these are properties of what was
@@ -250,10 +357,14 @@ function destinationOf(
 
   // The requesting origin must already BE its canonical spelling. A host that hands us
   // `https://EXAMPLE.COM` has not resolved the caller's identity, it has passed a string
-  // through, and every grant keyed on it would be a second permission key for one site.
-  const requester = canonicalHttpOrigin(requesterOrigin);
-  if (requester === null || requester !== requesterOrigin) return null;
-  if (requester.startsWith('http://') && !isLoopback(requester)) return null;
+  // through, and every grant keyed on it would be a second permission key for one site. A
+  // non-web requester (`null`) has no origin to check; its identity was validated by
+  // `authenticationRequesterKey` before the event was read.
+  if (requesterOrigin !== null) {
+    const requester = canonicalHttpOrigin(requesterOrigin);
+    if (requester === null || requester !== requesterOrigin) return null;
+    if (requester.startsWith('http://') && !isLoopback(requester)) return null;
+  }
 
   const shape = URL_SHAPE.exec(raw);
   if (!shape) return null;
@@ -289,34 +400,55 @@ function destinationOf(
  * timestamp window is part of validity, so a prompt or an unlock that took long enough can
  * outlive the token that was shown.
  *
+ * ## Non-web requesters
+ *
+ * `requester` may be an {@link AuthenticationRequester} instead of a web origin string. A
+ * `web` requester is parsed exactly as the string form is. Every other kind is one that
+ * cannot prove an origin, so three things differ, each in the refusing direction:
+ *
+ * - an `origin` or `client-origin` tag is refused outright. For a page the tag may agree
+ *   with the attested origin; for an app, a client key or a device there is no string it
+ *   could truthfully hold, so any value is a contradiction and the event is not signed;
+ * - the request is `crossOrigin` for both protocols. Nothing an app is can equal a
+ *   destination, so no same-origin allowance can ever apply to it;
+ * - legacy domain/challenge login is refused. It is an allowlist of exact HTTPS origins, and
+ *   a non-web requester is never one.
+ *
+ * The requester itself is validated first, through {@link authenticationRequesterKey}, so a
+ * malformed identity is refused before the event is read.
+ *
  * @param event - the event a caller asked to have signed
- * @param origin - the requesting site, in its canonical spelling; anything else is refused
+ * @param requester - the requesting site in its canonical spelling, or the attested
+ *   non-web requester; anything else is refused
  * @param now - seconds since the epoch, injectable for tests
  * @throws when the event is an authentication event and anything about it is invalid
  */
 export function parseAuthentication(
   event: AuthenticationEventInput,
-  origin: string,
+  requester: string | AuthenticationRequester,
   now: number = Math.floor(Date.now() / 1000),
   options: AuthenticationParserOptions = {},
 ): AuthenticationRequest | undefined {
   if (event.kind !== NIP98_KIND && event.kind !== NIP42_KIND) return undefined;
   const relay = event.kind === NIP42_KIND;
+  const origin = webOriginOf(requester);
   // A caller may state which origin it believes it is. That is metadata and never evidence:
   // the browser-derived origin is the only authenticated statement of who is asking, and
   // nothing here is relaxed because a tag agrees with it. What a tag must not do is CONTRADICT
   // it, because then one of the two strings is being shown to a user or sent to a server while
   // the other is being authorised, and the event would be signed with both in it. `tag` also
-  // refuses two of them, so a matching tag beside a lying one is not a way through.
+  // refuses two of them, so a matching tag beside a lying one is not a way through. A non-web
+  // requester has no origin for a tag to agree with, so for it the tag's presence is the
+  // contradiction.
   // The extension's `parseAuthentication` in `src/domain/signing/authentication.ts` runs the
   // same loop over `['origin', 'client-origin']` and throws the same way.
   for (const name of ORIGIN_METADATA_TAGS) {
-    if (event.tags?.some((item) => item[0] === name) && tag(event, name) !== origin) {
+    if (event.tags?.some((item) => item[0] === name) && (origin === null || tag(event, name) !== origin)) {
       throw new Error(`Invalid authentication ${name} tag`);
     }
   }
   if (relay && !event.tags.some(item => item[0] === 'relay') && event.tags.some(item => item[0] === 'domain')) {
-    if (!options.legacyLoginOrigins?.includes(origin) || canonicalHttpOrigin(origin) !== origin
+    if (origin === null || !options.legacyLoginOrigins?.includes(origin) || canonicalHttpOrigin(origin) !== origin
       || !origin.startsWith('https://') || tag(event, 'domain') !== hostnameOf(origin)
       || event.tags.some(item => !['domain', 'challenge', 'origin', 'client-origin'].includes(item[0]!))) {
       throw new Error('Invalid legacy authentication domain or format');
@@ -367,7 +499,8 @@ export function parseAuthentication(
     url: raw,
     destination: destination.origin,
     method,
-    crossOrigin: destination.origin !== origin,
+    // A non-web requester is never the destination: see the module note on non-web requesters.
+    crossOrigin: origin === null || destination.origin !== origin,
   };
 }
 

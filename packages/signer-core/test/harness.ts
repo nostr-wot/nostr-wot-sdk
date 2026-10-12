@@ -140,6 +140,8 @@ export interface FixtureOptions {
   remote?: RemoteSignerPort;
   logger?: SignerLogger;
   authentication?: AuthenticationPolicy;
+  /** A `Permissions` built by the test, for a policy that needs its grant store before the core exists. */
+  permissions?: Permissions;
 }
 
 export const cores: SignerCore[] = [];
@@ -169,7 +171,7 @@ export async function fixture(approve: Mode, options: FixtureOptions = {}) {
   const accounts = options.accounts ?? [account('acct_1', PRIVKEY_1)];
   await vault.create(PASSWORD, accounts);
   if (options.locked) vault.lock();
-  const permissions = new Permissions(new MemoryStore());
+  const permissions = options.permissions ?? new Permissions(new MemoryStore());
   const approval = recordingApproval(approve);
   const activity = recordingActivity();
   const identity = options.identity ?? vaultIdentity(vault, accounts);
