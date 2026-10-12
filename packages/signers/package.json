@@ -1,6 +1,6 @@
 {
   "name": "@nostr-wot/signers",
-  "version": "1.2.3",
+  "version": "2.0.0",
   "description": "Nostr signer abstractions: NIP-07 (extension), NIP-46 (Nostr Connect / bunker), NIP-55 (Amber), and in-memory private key.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "GPL-3.0-only",
@@ -56,7 +56,7 @@
   },
   "dependencies": {
     "@noble/hashes": "^1.5.0",
-    "@nostr-wot/pq": "^0.3.0"
+    "@nostr-wot/pq": "^1.0.0"
   },
   "peerDependencies": {
     "nostr-tools": ">=2.0.0"

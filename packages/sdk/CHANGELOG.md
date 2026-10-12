@@ -1,5 +1,25 @@
 # nostr-wot-sdk
 
+## 2.0.0
+
+### Major Changes
+
+- [#16](https://github.com/nostr-wot/nostr-wot-sdk/pull/16) [`c609a4b`](https://github.com/nostr-wot/nostr-wot-sdk/commit/c609a4b64d7cb44173472eef919a602065476d8a) Thanks [@leonacostaok](https://github.com/leonacostaok)! - License project-owned code under GNU General Public License version 3 only (GPL-3.0-only). Include the full license and preserved prior MIT notice in every package. Previously released versions keep their original license.
+
+### Patch Changes
+
+- Updated dependencies [[`c609a4b`](https://github.com/nostr-wot/nostr-wot-sdk/commit/c609a4b64d7cb44173472eef919a602065476d8a)]:
+  - @nostr-wot/auth@4.0.0
+  - @nostr-wot/blossom@1.0.0
+  - @nostr-wot/data@1.0.0
+  - @nostr-wot/dm@1.0.0
+  - @nostr-wot/graph@1.0.0
+  - @nostr-wot/relay@1.0.0
+  - @nostr-wot/signers@2.0.0
+  - @nostr-wot/ui@1.0.0
+  - @nostr-wot/wallet@1.0.0
+  - @nostr-wot/wot@2.0.0
+
 ## 1.0.4
 
 ### Patch Changes
