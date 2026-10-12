@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "description": "Monorepo for the @nostr-wot/* packages.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
-  "license": "MIT",
+  "license": "GPL-3.0-only",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/nostr-wot/nostr-wot-sdk.git"

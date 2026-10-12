@@ -3,7 +3,7 @@
   "version": "1.0.4",
   "description": "Meta-package re-exporting the @nostr-wot/* family (wot, relay, data, signers, ui, dm, wallet, auth, blossom) under subpaths. Existing imports keep working; new code should depend on the scoped packages directly.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
-  "license": "MIT",
+  "license": "GPL-3.0-only",
   "keywords": [
     "nostr",
     "web-of-trust",
@@ -196,7 +196,8 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   "scripts": {
     "build": "tsup",

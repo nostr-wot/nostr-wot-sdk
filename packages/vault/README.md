@@ -194,7 +194,7 @@ in `crypto.ts`, and for the mnemonic and NIP-46 secrets in `serialization.ts`.
 
 ## License
 
-MIT
+GNU General Public License version 3 only (`GPL-3.0-only`) — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
 ## Passkey record primitives
 

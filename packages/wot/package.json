@@ -3,7 +3,7 @@
   "version": "1.1.0",
   "description": "Web-of-Trust distance queries for Nostr over an Oracle/relays. WoT class + React hooks.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
-  "license": "MIT",
+  "license": "GPL-3.0-only",
   "keywords": [
     "nostr",
     "web-of-trust",
@@ -53,7 +53,8 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   "scripts": {
     "build": "tsup",

@@ -126,7 +126,7 @@ See `src/types.ts` for the full surface.
 
 ## License
 
-MIT
+GNU General Public License version 3 only (`GPL-3.0-only`) — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
 ## Relay URL validation
 

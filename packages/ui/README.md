@@ -376,7 +376,7 @@ Same for blossom uploads, zap requests, etc. — they read the active signer fro
 
 ## License
 
-MIT
+GNU General Public License version 3 only (`GPL-3.0-only`) — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
 ## NIP-46 connection actions
 

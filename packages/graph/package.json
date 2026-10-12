@@ -3,7 +3,7 @@
   "version": "0.3.1",
   "description": "Local Web-of-Trust follow graph in the browser: crawl kind:3 contact lists over relays, persist to IndexedDB (interned + delta-encoded), compute social distance/score locally.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
-  "license": "MIT",
+  "license": "GPL-3.0-only",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/nostr-wot/nostr-wot-sdk.git",
@@ -43,7 +43,8 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   "scripts": {
     "build": "tsup",

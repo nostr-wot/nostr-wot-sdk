@@ -3,7 +3,7 @@
   "version": "0.2.0",
   "description": "Platform-neutral key/value storage port for the @nostr-wot packages: the KeyValueStore interface, an in-memory implementation, and a namespacing wrapper.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
-  "license": "MIT",
+  "license": "GPL-3.0-only",
   "keywords": [
     "nostr",
     "storage",
@@ -36,7 +36,8 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   "scripts": {
     "build": "tsup && node ../../scripts/dist-stamp.mjs stamp",

@@ -3,7 +3,7 @@
   "version": "0.2.1",
   "description": "NIP-46 responder (the bunker / remote-signer side of Nostr Connect): listens on relays for kind 24133 requests, decrypts them, hands them to an injected handler, publishes encrypted responses.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
-  "license": "MIT",
+  "license": "GPL-3.0-only",
   "keywords": [
     "nostr",
     "nip-46",
@@ -37,7 +37,8 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   "scripts": {
     "build": "tsup && node ../../scripts/dist-stamp.mjs stamp",
