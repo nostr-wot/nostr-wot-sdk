@@ -1,5 +1,11 @@
 # @nostr-wot/vault
 
+## 1.1.0
+
+### Minor Changes
+
+- [#17](https://github.com/nostr-wot/nostr-wot-sdk/pull/17) [`899e65a`](https://github.com/nostr-wot/nostr-wot-sdk/commit/899e65acffe470342db956a62bbea187996558b1) Thanks [@leonacostaok](https://github.com/leonacostaok)! - Add portable private-key, seed and vault passkey recovery with provider-confirmed largeBlob storage, explicit relay fallback and authenticated event metadata. Preserve existing RP bindings while using passkeys.nostrwot.com for new enrollment.
+
 ## Unreleased
 
 - Add portable single-key, seed and vault recovery codecs, authenticated events, provider-first storage and explicit relay fallback through host adapters. New passkeys default to passkeys.nostrwot.com while preserving old and custom RP bindings.
