@@ -1,5 +1,9 @@
 # @nostr-wot/vault
 
+## Unreleased
+
+- Add portable single-key, seed and vault recovery codecs, authenticated events, provider-first storage and explicit relay fallback through host adapters. New passkeys default to passkeys.nostrwot.com while preserving old and custom RP bindings.
+
 ## 1.0.0
 
 ### Major Changes

@@ -17,6 +17,7 @@ import {
   unwrapVaultKey,
   validatePasskeyRecord,
   PASSKEY_KDF_CONTEXT,
+  LEGACY_PASSKEY_RP_ID,
   PASSKEY_RP_ID,
 } from '../src/passkey.js';
 import type { Account } from '@nostr-wot/accounts';
@@ -80,7 +81,7 @@ describe('portable passkey records', () => {
       ['encrypt', 'decrypt'],
     );
     const additionalData = new TextEncoder().encode(
-      JSON.stringify([PASSKEY_KDF_CONTEXT, PASSKEY_RP_ID, input.credentialId, input.prfSalt]),
+      JSON.stringify([PASSKEY_KDF_CONTEXT, LEGACY_PASSKEY_RP_ID, input.credentialId, input.prfSalt]),
     );
     const wrapper = wrapVaultKey(raw, input);
     expect(
