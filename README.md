@@ -163,3 +163,7 @@ cd packages/sdk     && npm publish --access public
 ## License
 
 GNU General Public License version 3 only (`GPL-3.0-only`) — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+### Passkey recovery
+
+`@nostr-wot/vault` provides reusable passkey recovery for private keys, seeds and complete vaults, including provider-confirmed largeBlob storage and explicit relay fallback. See the [application integration guide](docs/passkey-recovery.md).

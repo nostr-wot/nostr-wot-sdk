@@ -98,3 +98,12 @@ export type {
   PasskeyEnrollment,
   PasskeyVaultRecord,
 } from './passkey.js';
+
+export { LEGACY_PASSKEY_RP_ID, PASSKEY_RECOVERY_PRF_SALT, validPasskeyRpId } from './passkey.js';
+export {
+  RECOVERY_EVENT_KIND, RECOVERY_PAYLOAD_VERSION, RECOVERY_MAX_BYTES, RECOVERY_MAX_BLOB_BYTES,
+  RECOVERY_PRF_INPUT, RECOVERY_SCHEMAS, recoverySchema, recoveryCoordinate,
+  encryptRecoveryPayload, decryptRecoveryPayload, buildRecoveryEvent,
+  validateRecoveryEvent, recoveryContextFromEvent, saveRecovery, restoreRecovery,
+} from './recovery.js';
+export type { RecoveryScope, RecoveryContext, RecoveryEvent, RecoveryEventTemplate, RecoveryVerifier, RecoveryProvider, RecoveryTransport } from './recovery.js';

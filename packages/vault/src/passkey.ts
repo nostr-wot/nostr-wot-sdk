@@ -7,7 +7,9 @@ import { encrypt, decrypt } from './crypto.js';
 import { base64ToBytes, bytesToBase64 } from './serialization.js';
 import type { OpenedRecord, VaultPayload } from './types.js';
 
-export const PASSKEY_RP_ID = 'passkeys.nostr-wot.com';
+export const PASSKEY_RP_ID = 'passkeys.nostrwot.com';
+export const LEGACY_PASSKEY_RP_ID = 'passkeys.nostr-wot.com';
+export const PASSKEY_RECOVERY_PRF_SALT = 'a2V5dHItdjE=';
 export const PASSKEY_VAULT_VERSION = 2;
 export const PASSKEY_BACKUP_FORMAT = 'nostr-wot-passkey-vault';
 export const PASSKEY_MAX_BACKUP_BYTES = 16 * 1024 * 1024;
@@ -17,6 +19,9 @@ export const PASSKEY_KDF_CONTEXT = 'nostr-wot/vault/passkey-wrap/v1';
 export interface PasskeyMetadata {
   credentialId: string;
   prfSalt: string;
+  rpId?: string;
+  recoveryPubkey?: string;
+  recoveryScope?: 'private-key' | 'seed' | 'vault';
 }
 /** Transient secret material; never persist or log PRF output. */
 export interface PasskeyInput extends PasskeyMetadata {
@@ -32,7 +37,7 @@ export interface PasskeyWrapper extends PasskeyMetadata {
   ciphertext: string;
 }
 export interface PasskeyEnrollment {
-  rpId: typeof PASSKEY_RP_ID;
+  rpId: string;
   passkeys: PasskeyWrapper[];
 }
 export interface PasskeyVaultRecord extends PasskeyEnrollment {
@@ -41,6 +46,14 @@ export interface PasskeyVaultRecord extends PasskeyEnrollment {
   iv: string;
   ciphertext: string;
 }
+
+export function validPasskeyRpId(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= 253 && value.includes('.') && /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(value) && value.split('.').every(label => label.length > 0 && label.length <= 63 && !label.startsWith('-') && !label.endsWith('-'));
+}
+function validMetadata(value: PasskeyMetadata): boolean {
+  return ((value.recoveryPubkey === undefined) === (value.recoveryScope === undefined)) && (value.rpId === undefined || validPasskeyRpId(value.rpId)) && (value.recoveryPubkey === undefined || /^[a-f0-9]{64}$/.test(value.recoveryPubkey)) && (value.recoveryScope === undefined || ['private-key', 'seed', 'vault'].includes(value.recoveryScope));
+}
+function validPrfSalt(value: unknown): boolean { return value === PASSKEY_RECOVERY_PRF_SALT || validBase64(value, 32); }
 
 function validBase64(value: unknown, min: number, max = min): value is string {
   if (typeof value !== 'string' || value.length > Math.ceil(max / 3) * 4) return false;
@@ -61,7 +74,7 @@ export function validatePasskeyInput(value: unknown): asserts value is PasskeyIn
   if (
     !input ||
     !validBase64(input.credentialId, 1, 1024) ||
-    !validBase64(input.prfSalt, 32) ||
+    !validPrfSalt(input.prfSalt) || !validMetadata(input) ||
     !validBase64(input.prf, 32)
   )
     throw new Error('Invalid passkey encryption response');
@@ -71,7 +84,7 @@ function validWrapper(value: PasskeyWrapper): boolean {
   return (
     !!value &&
     validBase64(value.credentialId, 1, 1024) &&
-    validBase64(value.prfSalt, 32) &&
+    validPrfSalt(value.prfSalt) && validMetadata(value) &&
     validBase64(value.iv, 12) &&
     validBase64(value.ciphertext, 48)
   );
@@ -81,11 +94,12 @@ export function validatePasskeyEnrollment(value: unknown): asserts value is Pass
   const record = value as PasskeyEnrollment | null;
   if (
     !record ||
-    record.rpId !== PASSKEY_RP_ID ||
+    !validPasskeyRpId(record.rpId) ||
     !Array.isArray(record.passkeys) ||
     record.passkeys.length < 1 ||
     record.passkeys.length > PASSKEY_MAX_CREDENTIALS ||
     record.passkeys.some((p) => !validWrapper(p)) ||
+    record.rpId !== (record.passkeys[0]?.rpId ?? LEGACY_PASSKEY_RP_ID) ||
     new Set(record.passkeys.map((p) => p.credentialId)).size !== record.passkeys.length
   )
     throw new Error('Invalid passkey enrollment');
@@ -138,7 +152,7 @@ function wrappingKey(input: PasskeyInput): Uint8Array {
 
 function binding(wrapper: PasskeyMetadata): Uint8Array {
   return new TextEncoder().encode(
-    JSON.stringify([PASSKEY_KDF_CONTEXT, PASSKEY_RP_ID, wrapper.credentialId, wrapper.prfSalt]),
+    JSON.stringify([PASSKEY_KDF_CONTEXT, wrapper.rpId ?? LEGACY_PASSKEY_RP_ID, wrapper.credentialId, wrapper.prfSalt, ...(wrapper.recoveryPubkey ? [wrapper.recoveryPubkey, wrapper.recoveryScope] : [])]),
   );
 }
 
@@ -150,6 +164,8 @@ export function wrapVaultKey(bytes: Uint8Array, input: PasskeyInput): PasskeyWra
     const iv = randomBytes(12);
     const ciphertext = gcm(key, iv, binding(input)).encrypt(bytes);
     return {
+      ...(input.rpId ? { rpId: input.rpId } : {}),
+      ...(input.recoveryPubkey ? { recoveryPubkey: input.recoveryPubkey, recoveryScope: input.recoveryScope } : {}),
       credentialId: input.credentialId,
       prfSalt: input.prfSalt,
       iv: bytesToBase64(iv),
@@ -220,8 +236,8 @@ export function createPasskeyRecord(
   const key = randomBytes(32);
   try {
     return sealPasskeyPayload(payload, key, {
-      rpId: PASSKEY_RP_ID,
-      passkeys: [wrapVaultKey(key, input)],
+      rpId: input.rpId ?? PASSKEY_RP_ID,
+      passkeys: [wrapVaultKey(key, { ...input, rpId: input.rpId ?? PASSKEY_RP_ID })],
     });
   } finally {
     key.fill(0);
