@@ -1,29 +1,20 @@
-# @nostr-wot/storage
+# nostr-wot-sdk/storage
 
-The storage port every other `@nostr-wot/*` package writes against — one key/value interface,
-supplied by whatever host the code is running on.
+> Unreleased consolidation: this is the API guide for `nostr-wot-sdk/storage`. The former `@nostr-wot/storage` package becomes a deprecated compatibility re-export after the replacement is published. Install the owning package shown below; a subpath is an import, not an npm package. See the [migration guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md).
 
-This package depends on nothing. It touches no platform global and no UI framework, so the same
-compiled module loads in an extension, in a mobile app, in a Node process and in a test run. The
-host decides where bytes actually live; nothing above this line has to know.
+The storage port every other `@nostr-wot/*` package writes against — one key/value interface, supplied by whatever host the code is running on.
+
+This storage module has no runtime dependencies of its own. It touches no platform global and no UI framework, so the same compiled module loads in an extension, in a mobile app, in a Node process and in a test run. The host decides where bytes actually live; nothing above this line has to know.
 
 ## Install
 
 ```bash
-npm i @nostr-wot/storage
+npm i nostr-wot-sdk
 ```
 
 ### Module format
 
-ESM only, as every package in this release is. `import` it, or `await import()` it from
-CommonJS; there is no `require` entry point. One format rather than two is deliberate: a dual
-CJS/ESM build can be loaded twice in one process, once per format, and a package that holds
-state (a vault session, a bunker's client and secret registries) would then keep two of it,
-which in a signer is a defect rather than an inconvenience.
-
-The two packages the stack already published, `@nostr-wot/pq` and `@nostr-wot/signers`, do
-still ship CommonJS beside ESM. Dropping it there would break consumers who have it today, so
-it stays, and this is where that split is written down.
+Use ESM `import` as shown here. Module-format support is specific to the owning package and entry point; do not infer it from another package in the family. The storage entry point is ESM-only.
 
 ## The interface
 
@@ -39,17 +30,14 @@ interface KeyValueStore {
 
 `subscribe` is optional — not every backend can report changes. Check for it before calling.
 
-Implementations behave as a *value* store, not a reference store: what comes back out of `get`
-is unaffected by later mutation of what went into `set`, and vice versa. A backend that
-serializes gets that for free; `MemoryStore` deep clones to match it, so a test that passes
-against `MemoryStore` passes against the real thing.
+Implementations behave as a *value* store, not a reference store: what comes back out of `get` is unaffected by later mutation of what went into `set`, and vice versa. A backend that serializes gets that for free; `MemoryStore` deep clones to match it, so a test that passes against `MemoryStore` passes against the real thing.
 
 ## `MemoryStore`
 
 In-memory, for tests and for state that should not outlive the process.
 
 ```ts
-import { MemoryStore } from '@nostr-wot/storage';
+import { MemoryStore } from 'nostr-wot-sdk/storage';
 
 const store = new MemoryStore({ seeded: 'value' });
 await store.set('profile', { name: 'leon' });
@@ -58,11 +46,10 @@ await store.get('profile'); // { name: 'leon' } — a fresh copy each time
 
 ## `namespaced`
 
-Views one store as a private sub-store, prefixing every key with `${prefix}:`. Two subsystems
-sharing one physical store cannot read or clobber each other by picking the same key name.
+Views one store as a private sub-store, prefixing every key with `${prefix}:`. Two subsystems sharing one physical store cannot read or clobber each other by picking the same key name.
 
 ```ts
-import { namespaced } from '@nostr-wot/storage';
+import { namespaced } from 'nostr-wot-sdk/storage';
 
 const signer = namespaced(store, 'signer');
 const cache = namespaced(store, 'cache');
@@ -72,41 +59,17 @@ await cache.set('key', 'b');  // lands at `cache:key`
 await signer.keys();          // ['key'] — unprefixed, and only its own
 ```
 
-`keys()` reports unprefixed keys and filters out every other namespace. `subscribe`, when the
-underlying store has one, does the same. Nesting composes: `namespaced(namespaced(s, 'a'), 'b')`
-writes `a:b:key`.
+`keys()` reports unprefixed keys and filters out every other namespace. `subscribe`, when the underlying store has one, does the same. Nesting composes: `namespaced(namespaced(s, 'a'), 'b')` writes `a:b:key`.
 
-Keys are free-form and may contain the `:` separator. The *prefix* is percent-escaped so that
-they can, which keeps the mapping from `(prefix, key)` to storage key injective — without it,
-`namespaced(s, 'a').set('b:c', …)` and `namespaced(s, 'a:b').set('c', …)` would both write
-`a:b:c` and silently clobber each other.
+Keys are free-form and may contain the `:` separator. The *prefix* is percent-escaped so that they can, which keeps the mapping from `(prefix, key)` to storage key injective — without it, `namespaced(s, 'a').set('b:c', …)` and `namespaced(s, 'a:b').set('c', …)` would both write `a:b:c` and silently clobber each other.
 
 ## Host requirements
 
-The `@nostr-wot` shared packages (`storage`, `accounts`, `vault`, `permissions`, `signer-core`)
-run on one rule: nothing platform-specific is reached for, and what a host must supply is
-injected or declared. Two globals are declared requirements of the family rather than
-avoided, because `@noble/hashes` and `@noble/ciphers` use them internally and the vault and
-accounts packages use them for the same UTF-8 conversions: **`TextEncoder`** and
-**`TextDecoder`**. Two more are required and easy to miss because nothing in these packages'
-own source names them: **`crypto.getRandomValues`** on `globalThis`, which `@noble`'s
-`randomBytes` reaches for (the vault's salt, IV and cache key; the ncryptsec salt and nonce)
-and THROWS without — on Hermes that means importing `react-native-get-random-values` before
-anything else — and timers, **`setTimeout`** / `clearTimeout`, which run the vault's auto-lock
-and the queue's request timeout, and **`AbortController`**, which the queue hands a remote
-signer port so a timeout, a switch or a disposal can abort the call in flight. Two more come in
-with the post-quantum path: **`atob`** and **`btoa`**, which `@nostr-wot/pq`'s base64 helpers
-reach for (with a `Buffer` fallback Hermes does not have either) to decode a stored ML-KEM key
-and to read a payload's envelope header. Missing them throws nothing; it silently makes every
-hybrid payload unrecognisable, which is why they are declared here rather than left to be
-discovered. Node, browsers and React Native 0.74 or newer have all seven except that React
-Native has to polyfill the random source. Storage, the clock and password stretching are injected as
-ports. `structuredClone`, `URL`, WebCrypto's `subtle`, the DOM and the WebExtension namespaces
-are never used, and `packages/vault/test/boundaries.test.ts` plus the ESLint config enforce
-that.
+The portable account, vault, permission and signing modules use injected storage and host ports. They require `TextEncoder`, `TextDecoder`, secure `crypto.getRandomValues`, timers and `AbortController`; post-quantum paths additionally require `atob`/`btoa` or the supported Buffer fallback. Initialize the necessary React Native/Hermes polyfills before importing these modules, including `react-native-get-random-values` for secure randomness. Do not substitute a non-cryptographic random source.
 
-This package itself uses neither `TextEncoder` nor `TextDecoder`; `MemoryStore` clones with a JSON
-round trip, which is also what every real backend does on the way to disk.
+The portable cryptographic core does not require the DOM, WebExtension APIs or WebCrypto `subtle`. Platform adapters such as WebAuthn ceremonies and relay transports have their own requirements. See the [identity runtime guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/packages/identity/README.md#runtime-requirements).
+
+This package itself uses neither `TextEncoder` nor `TextDecoder`; `MemoryStore` clones with a JSON round trip, which is also what every real backend does on the way to disk.
 
 ## License
 

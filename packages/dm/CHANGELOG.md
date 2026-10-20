@@ -1,5 +1,12 @@
 # @nostr-wot/dm
 
+## 2.0.0 (Unreleased)
+
+### Major changes
+
+- Use `nostr-wot-sdk/data` and `nostr-wot-sdk/signers` as the maintained data/session and signer foundations. Keep the public DM, cache and React entry points and their existing protocol behavior.
+- Document explicit package installation for applications using the SDK's optional DM compatibility imports, shared session ownership and supported signer adapters.
+
 ## 1.0.0
 
 ### Major Changes

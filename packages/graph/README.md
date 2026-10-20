@@ -1,4 +1,6 @@
-# @nostr-wot/graph
+# @nostr-wot/wot/graph
+
+> Unreleased consolidation: this is the API guide for `@nostr-wot/wot/graph`. The former `@nostr-wot/graph` package becomes a deprecated compatibility re-export after the replacement is published. Install the owning package shown below; a subpath is an import, not an npm package. See the [migration guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md).
 
 Build and query a **local** Web-of-Trust follow graph in the browser. Crawl kind:3 contact lists over relays, save them in IndexedDB, and compute social distance and trust scores locally — no extension and no remote Oracle required.
 
@@ -7,13 +9,13 @@ Build and query a **local** Web-of-Trust follow graph in the browser. Crawl kind
 ## Install
 
 ```bash
-npm i @nostr-wot/graph @nostr-wot/relay nostr-tools
+npm i @nostr-wot/wot nostr-wot-sdk nostr-tools
 ```
 
 ## Quick start
 
 ```ts
-import { WotGraph } from "@nostr-wot/graph";
+import { WotGraph } from "@nostr-wot/wot/graph";
 
 const wg = new WotGraph({
   namespace: "myapp",                       // IndexedDB partition key
@@ -62,43 +64,30 @@ wg.filterByWoT(pubkeys);  // trusted subset, sorted by score desc
 | `onProgress` | Callback receiving `{ depth, fetched, queued }`. |
 | `signal` | An `AbortSignal` to cancel the crawl. |
 
-Returns a promise with `{ fetched, nodes, edges, depth, durationMs, stoppedEarly }`.
-Zero configured relays throw `CrawlError`; invalid options, transport errors and
-storage errors also reject the promise.
+Returns a promise with `{ fetched, nodes, edges, depth, durationMs, stoppedEarly }`. Zero configured relays throw `CrawlError`; invalid options, transport errors and storage errors also reject the promise.
 
 ### Choosing a crawl depth
 
-Use `maxHops: 2` to discover people up to two follows away: the crawler fetches
-lists for the root and its direct follows. `maxHops: 0` sends no requests.
+Use `maxHops: 2` to discover people up to two follows away: the crawler fetches lists for the root and its direct follows. `maxHops: 0` sends no requests.
 
-`maxDepth` counts the depth of authors whose lists are fetched, starting at zero
-for the root. For example, `maxDepth: 1` fetches the same lists as `maxHops: 2`.
-When both options are supplied, `maxHops` takes precedence.
+`maxDepth` counts the depth of authors whose lists are fetched, starting at zero for the root. For example, `maxDepth: 1` fetches the same lists as `maxHops: 2`. When both options are supplied, `maxHops` takes precedence.
 
-Distance queries default to six hops. Pass a `maxHops` argument to query a
-different range within the graph you have collected.
+Distance queries default to six hops. Pass a `maxHops` argument to query a different range within the graph you have collected.
 
 ## Refreshing and saving the graph
 
-Call `crawl()` to refresh the graph. The newest contact list replaces the saved
-list; missing relay responses retain previously saved follows. Stopping a crawl
-keeps partial results available and marks the graph stale. Refreshes do not remove
-unreachable authors from storage; use `clear()` to start over.
+Call `crawl()` to refresh the graph. The newest contact list replaces the saved list; missing relay responses retain previously saved follows. Stopping a crawl keeps partial results available and marks the graph stale. Refreshes do not remove unreachable authors from storage; use `clear()` to start over.
 
-Each namespace has its own saved graph. Separate instances do not automatically
-synchronize their in-memory copies. Without IndexedDB, data remains in memory only.
-If you provide a custom relay pool, it must verify event signatures.
+Each namespace has its own saved graph. Separate instances do not automatically synchronize their in-memory copies. Without IndexedDB, data remains in memory only. If you provide a custom relay pool, it must verify event signatures.
 
 ### Upgrading from versions before 0.3.0
 
-Opening an existing namespace upgrades its IndexedDB database to schema 2 while
-preserving saved follows. Older package versions cannot open an upgraded database.
-To downgrade, use a different namespace or clear the upgraded database first.
+Opening an existing namespace upgrades its IndexedDB database to schema 2 while preserving saved follows. Older package versions cannot open an upgraded database. To downgrade, use a different namespace or clear the upgraded database first.
 
 ## React (`/react`)
 
 ```tsx
-import { WotGraphProvider, useWotGraph, useDistance, useCrawl } from "@nostr-wot/graph/react";
+import { WotGraphProvider, useWotGraph, useDistance, useCrawl } from "@nostr-wot/wot/graph/react";
 
 <WotGraphProvider namespace="myapp" relays={["wss://relay.damus.io"]}>
   <App />

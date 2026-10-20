@@ -1,5 +1,12 @@
 # @nostr-wot/auth
 
+## 5.0.0 (Unreleased)
+
+### Major changes
+
+- Use the maintained `nostr-wot-sdk/signers` type boundary in place of the retired signer package. Keep server, Next.js and client entry points and their authentication behavior.
+- Require applications using `nostr-wot-sdk/auth` compatibility imports to install `@nostr-wot/auth` explicitly; the SDK no longer installs the auth capability automatically.
+
 ## 4.0.0
 
 ### Major Changes

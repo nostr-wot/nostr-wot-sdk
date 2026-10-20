@@ -1,5 +1,12 @@
 # @nostr-wot/vault
 
+## 1.1.1 (Unreleased)
+
+### Patch changes
+
+- Replace the implementation with a compatibility re-export of `@nostr-wot/identity/vault` from `@nostr-wot/identity` 1.0.0. Preserve the existing public import entry points; new consumers should install the maintained owner and import its module directly.
+- Mark this package for deprecation after its replacement is published and available. This unreleased entry does not assert that an npm deprecation notice has already been applied. See the [migration guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md).
+
 ## 1.1.0
 
 ### Minor Changes
