@@ -1,11 +1,11 @@
 # @nostr-wot/accounts
 
-## 1.0.1 (Unreleased)
+## 1.0.1
 
 ### Patch changes
 
 - Replace the implementation with a compatibility re-export of `@nostr-wot/identity/accounts` from `@nostr-wot/identity` 1.0.0. Preserve the existing public import entry points; new consumers should install the maintained owner and import its module directly.
-- Mark this package for deprecation after its replacement is published and available. This unreleased entry does not assert that an npm deprecation notice has already been applied. See the [migration guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md).
+- Mark this package for deprecation after its replacement is published and available. See the [migration guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md).
 
 ## 1.0.0
 

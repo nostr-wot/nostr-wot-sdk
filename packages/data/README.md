@@ -1,6 +1,6 @@
 # nostr-wot-sdk/data
 
-> Unreleased consolidation: this is the API guide for `nostr-wot-sdk/data`. The former `@nostr-wot/data` package becomes a deprecated compatibility re-export after the replacement is published. Install the owning package shown below; a subpath is an import, not an npm package. See the [migration guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md).
+> Package consolidation: this is the API guide for `nostr-wot-sdk/data`. The former `@nostr-wot/data` package is a deprecated compatibility re-export. Install the owning package shown below; a subpath is an import, not an npm package. See the [migration guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md).
 
 Pure-function Nostr data layer. Profiles, notes, threads, follows, follower lists, engagement (reactions / reposts / zaps), NIP-65 outbox-model relay discovery, and a streaming subscription coalescer. Optional SWR cache + React hooks ship as separate entrypoints.
 

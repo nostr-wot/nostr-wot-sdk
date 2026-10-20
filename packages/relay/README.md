@@ -1,6 +1,6 @@
 # nostr-wot-sdk/relay
 
-> Unreleased consolidation: this is the API guide for `nostr-wot-sdk/relay`. The former `@nostr-wot/relay` package becomes a deprecated compatibility re-export after the replacement is published. Install the owning package shown below; a subpath is an import, not an npm package. See the [migration guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md).
+> Package consolidation: this is the API guide for `nostr-wot-sdk/relay`. The former `@nostr-wot/relay` package is a deprecated compatibility re-export. Install the owning package shown below; a subpath is an import, not an npm package. See the [migration guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md).
 
 Low-level Nostr relay utilities. A pool that manages WebSocket connections, a query batcher that merges concurrent filters, and a stats tracker that records per-relay latency / success rates. Extracted from the WoT SDK so any Nostr project can use these primitives without pulling in WoT scoring code.
 

@@ -1,6 +1,6 @@
 # @nostr-wot/identity/signing
 
-> Unreleased consolidation: this is the API guide for `@nostr-wot/identity/signing`. The former `@nostr-wot/signer-core` package becomes a deprecated compatibility re-export after the replacement is published. Install the owning package shown below; a subpath is an import, not an npm package. See the [migration guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md).
+> Package consolidation: this is the API guide for `@nostr-wot/identity/signing`. The former `@nostr-wot/signer-core` package is a deprecated compatibility re-export. Install the owning package shown below; a subpath is an import, not an npm package. See the [migration guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md).
 
 The signing pipeline every `@nostr-wot/*` host shares. A NIP-07 call in a browser extension, a NIP-46 `sign_event` from a relay, an Android NIP-55 intent and a LAN frame all become one `SignerRequest` and run through one `SignerCore.handle`. There is no path to a signature that does not pass through it.
 

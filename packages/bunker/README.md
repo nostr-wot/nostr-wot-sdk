@@ -1,6 +1,6 @@
 # @nostr-wot/identity/bunker
 
-> Unreleased consolidation: this is the API guide for `@nostr-wot/identity/bunker`. The former `@nostr-wot/bunker` package becomes a deprecated compatibility re-export after the replacement is published. Install the owning package shown below; a subpath is an import, not an npm package. See the [migration guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md).
+> Package consolidation: this is the API guide for `@nostr-wot/identity/bunker`. The former `@nostr-wot/bunker` package is a deprecated compatibility re-export. Install the owning package shown below; a subpath is an import, not an npm package. See the [migration guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md).
 
 The NIP-46 **responder**: the bunker / remote-signer side of Nostr Connect. `nostr-wot-sdk/signers` and the browser extension are NIP-46 clients; this is the other half, the thing they talk to.
 

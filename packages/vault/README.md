@@ -1,6 +1,6 @@
 # @nostr-wot/identity/vault
 
-> Unreleased consolidation: this is the API guide for `@nostr-wot/identity/vault`. The former `@nostr-wot/vault` package becomes a deprecated compatibility re-export after the replacement is published. Install the owning package shown below; a subpath is an import, not an npm package. See the [migration guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md).
+> Package consolidation: this is the API guide for `@nostr-wot/identity/vault`. The former `@nostr-wot/vault` package is a deprecated compatibility re-export. Install the owning package shown below; a subpath is an import, not an npm package. See the [migration guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md).
 
 The vault cryptography every `@nostr-wot/*` host shares: PBKDF2-HMAC-SHA-256 key derivation and AES-256-GCM, in pure JavaScript.
 

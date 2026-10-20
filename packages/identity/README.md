@@ -2,7 +2,7 @@
 
 Build the account and approval boundary of a Nostr signer. This package owns seed derivation, portable encrypted vaults, permission records, the signing pipeline and the NIP-46 responder. Use it in an extension, mobile signer or server that controls accounts. Applications that only request signatures should use `nostr-wot-sdk/signers`.
 
-> Unreleased package: these entry points replace accounts, vault, permissions, signer-core and bunker packages in the consolidation release. Publish this replacement before deprecating the old npm names. See the [migration guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md).
+> Identity package: these entry points replace accounts, vault, permissions, signer-core and bunker packages in the consolidation release. Publish this replacement before deprecating the old npm names. See the [migration guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md).
 
 ## Install
 

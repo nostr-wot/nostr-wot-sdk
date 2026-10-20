@@ -1,6 +1,6 @@
 # nostr-wot-sdk/storage
 
-> Unreleased consolidation: this is the API guide for `nostr-wot-sdk/storage`. The former `@nostr-wot/storage` package becomes a deprecated compatibility re-export after the replacement is published. Install the owning package shown below; a subpath is an import, not an npm package. See the [migration guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md).
+> Package consolidation: this is the API guide for `nostr-wot-sdk/storage`. The former `@nostr-wot/storage` package is a deprecated compatibility re-export. Install the owning package shown below; a subpath is an import, not an npm package. See the [migration guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md).
 
 The storage port every other `@nostr-wot/*` package writes against — one key/value interface, supplied by whatever host the code is running on.
 

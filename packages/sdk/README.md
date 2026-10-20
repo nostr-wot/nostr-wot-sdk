@@ -2,7 +2,7 @@
 
 The application foundation for Nostr: relay connections, social data, caching, signer clients, Blossom uploads and portable key/value storage. Import the modules you need; React is only required by React entry points.
 
-> Unreleased consolidation: these modules now live in this package. The old scoped names become compatibility wrappers after the replacement release is published. See the [migration guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md).
+> Package consolidation: these modules now live in this package. The old scoped names remain compatibility wrappers. See the [migration guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md).
 
 ## Install
 

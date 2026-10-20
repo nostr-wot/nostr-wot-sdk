@@ -1,6 +1,6 @@
 # Choose packages for your Nostr application
 
-This guide describes the unreleased eight-package consolidation. Use the [migration table](package-migration.md) when updating an existing consumer; install the replacement versions only once they are published.
+This guide describes the eight maintained packages. Use the [migration table](package-migration.md) when updating an existing consumer..
 
 ## Start with the job
 

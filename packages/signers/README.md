@@ -1,6 +1,6 @@
 # nostr-wot-sdk/signers
 
-> Unreleased consolidation: this is the API guide for `nostr-wot-sdk/signers`. The former `@nostr-wot/signers` package becomes a deprecated compatibility re-export after the replacement is published. Install the owning package shown below; a subpath is an import, not an npm package. See the [migration guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md).
+> Package consolidation: this is the API guide for `nostr-wot-sdk/signers`. The former `@nostr-wot/signers` package is a deprecated compatibility re-export. Install the owning package shown below; a subpath is an import, not an npm package. See the [migration guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md).
 
 Signer abstractions for Nostr — one interface, three backends. Used by every other `@nostr-wot/*` package that needs to sign or decrypt.
 

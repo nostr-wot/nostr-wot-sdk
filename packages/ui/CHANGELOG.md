@@ -1,6 +1,6 @@
 # @nostr-wot/ui
 
-## 2.0.0 (Unreleased)
+## 2.0.0
 
 ### Major changes
 

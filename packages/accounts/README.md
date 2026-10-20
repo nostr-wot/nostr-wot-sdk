@@ -1,6 +1,6 @@
 # @nostr-wot/identity/accounts
 
-> Unreleased consolidation: this is the API guide for `@nostr-wot/identity/accounts`. The former `@nostr-wot/accounts` package becomes a deprecated compatibility re-export after the replacement is published. Install the owning package shown below; a subpath is an import, not an npm package. See the [migration guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md).
+> Package consolidation: this is the API guide for `@nostr-wot/identity/accounts`. The former `@nostr-wot/accounts` package is a deprecated compatibility re-export. Install the owning package shown below; a subpath is an import, not an npm package. See the [migration guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md).
 
 The Nostr account primitives every `@nostr-wot/*` host shares: NIP-06 key derivation, import classification and NIP-49 encrypted keys, in pure JavaScript.
 

@@ -2,7 +2,7 @@
 
 TypeScript libraries for building Nostr applications and signers: read and publish social data, connect a signing backend, manage encrypted accounts, send private messages, take Lightning payments, and query a Web of Trust.
 
-**Unreleased package consolidation:** this branch reduces the maintained public surface from 18 packages to eight. The import paths below describe the replacement release, not a claim that it is already available on npm. Eleven former package names remain compatibility wrappers (19 workspaces including the new identity package); npm deprecation follows publication of their replacements. See the [migration guide](docs/package-migration.md).
+**Package consolidation:** the maintained public surface is reduced from 18 packages to eight. Eleven former package names remain compatibility wrappers (19 workspaces including the new identity package); npm deprecation follows publication of their replacements. See the [migration guide](docs/package-migration.md).
 
 ## Choose a package
 

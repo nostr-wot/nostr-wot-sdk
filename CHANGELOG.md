@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased — package consolidation
+## Package consolidation — 2026-10-20
 
 The maintained public surface changes from 18 packages to eight. Eleven former package names remain compatibility wrappers; the new identity package brings the workspace total to 19 packages during migration. Replacement publication and npm deprecation have not been performed by this change.
 
@@ -12,18 +12,18 @@ The maintained public surface changes from 18 packages to eight. Eleven former p
 
 | Package | Consolidation version | Result |
 | --- | --- | --- |
-| `nostr-wot-sdk` | 3.0.0 (unreleased) | Own relay, data, signer clients, Blossom and storage modules. |
-| `@nostr-wot/identity` | 1.0.0 (unreleased) | Own account, vault, permission, signing and bunker modules. |
-| `@nostr-wot/wot` | 3.0.0 (unreleased) | Own Oracle APIs and local graph modules. |
-| `@nostr-wot/dm` | 2.0.0 (unreleased) | Use the maintained SDK foundation; retain DM/cache/React APIs. |
-| `@nostr-wot/wallet` | 2.0.0 (unreleased) | Use the maintained SDK foundation; retain wallet/NWC/React APIs. |
-| `@nostr-wot/auth` | 5.0.0 (unreleased) | Use the maintained signer boundary; retain server/Next.js/client APIs. |
-| `@nostr-wot/ui` | 2.0.0 (unreleased) | Use the maintained session and signer modules; retain login UI and CSS. |
+| `nostr-wot-sdk` | 3.0.0 | Own relay, data, signer clients, Blossom and storage modules. |
+| `@nostr-wot/identity` | 1.0.0 | Own account, vault, permission, signing and bunker modules. |
+| `@nostr-wot/wot` | 3.0.0 | Own Oracle APIs and local graph modules. |
+| `@nostr-wot/dm` | 2.0.0 | Use the maintained SDK foundation; retain DM/cache/React APIs. |
+| `@nostr-wot/wallet` | 2.0.0 | Use the maintained SDK foundation; retain wallet/NWC/React APIs. |
+| `@nostr-wot/auth` | 5.0.0 | Use the maintained signer boundary; retain server/Next.js/client APIs. |
+| `@nostr-wot/ui` | 2.0.0 | Use the maintained session and signer modules; retain login UI and CSS. |
 | `@nostr-wot/pq` | 1.0.0 (unchanged) | Unchanged version and public package; no new PQ release is claimed. |
 
 ### Compatibility packages
 
-| Previous package | Wrapper version (unreleased) | Maintained import |
+| Previous package | Wrapper version | Maintained import |
 | --- | --- | --- |
 | `@nostr-wot/relay` | 1.0.1 | `nostr-wot-sdk/relay` |
 | `@nostr-wot/data` | 1.0.1 | `nostr-wot-sdk/data` |

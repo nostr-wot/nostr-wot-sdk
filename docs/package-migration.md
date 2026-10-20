@@ -1,6 +1,6 @@
 # Package consolidation migration
 
-This migration is unreleased. It reduces the maintained public packages from 18 to eight by moving implementations into their owners and leaving compatibility re-exports under the old names. There are eight maintained packages and eleven deprecated compatibility names, for 19 workspaces including the new identity package. It does not announce that replacement versions are already published or that npm deprecation has happened.
+This migration reduces the maintained public packages from 18 to eight by moving implementations into their owners and leaving compatibility re-exports under the old names. There are eight maintained packages and eleven deprecated compatibility names, for 19 workspaces including the new identity package.
 
 ## Replace package dependencies and imports
 
@@ -40,7 +40,7 @@ import { Nip07Signer } from 'nostr-wot-sdk/signers';
 import { useSession } from 'nostr-wot-sdk/data/react';
 ```
 
-Once the replacement release is published:
+Update dependencies:
 
 ```bash
 npm install nostr-wot-sdk nostr-tools

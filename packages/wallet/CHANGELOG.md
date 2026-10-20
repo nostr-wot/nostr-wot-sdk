@@ -1,6 +1,6 @@
 # @nostr-wot/wallet
 
-## 2.0.0 (Unreleased)
+## 2.0.0
 
 ### Major changes
 

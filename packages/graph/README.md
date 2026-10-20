@@ -1,6 +1,6 @@
 # @nostr-wot/wot/graph
 
-> Unreleased consolidation: this is the API guide for `@nostr-wot/wot/graph`. The former `@nostr-wot/graph` package becomes a deprecated compatibility re-export after the replacement is published. Install the owning package shown below; a subpath is an import, not an npm package. See the [migration guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md).
+> Package consolidation: this is the API guide for `@nostr-wot/wot/graph`. The former `@nostr-wot/graph` package is a deprecated compatibility re-export. Install the owning package shown below; a subpath is an import, not an npm package. See the [migration guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md).
 
 Build and query a **local** Web-of-Trust follow graph in the browser. Crawl kind:3 contact lists over relays, save them in IndexedDB, and compute social distance and trust scores locally — no extension and no remote Oracle required.
 

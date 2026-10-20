@@ -132,7 +132,7 @@ function Feed({ authors }: { authors: string[] }) {
 
 `useWoTInstance()` returns the underlying `WoT` instance for direct calls.
 
-## Local graph (unreleased consolidation)
+## Local graph
 
 ```bash
 npm install @nostr-wot/wot nostr-wot-sdk nostr-tools
