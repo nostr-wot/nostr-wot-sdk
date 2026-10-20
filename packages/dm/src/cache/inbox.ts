@@ -1,6 +1,6 @@
 import type { Event as NostrEvent, EventTemplate } from "nostr-tools";
-import type { NostrSigner } from "@nostr-wot/signers";
-import { fetchRelayList, getPool, sharedCoalescer } from "@nostr-wot/data";
+import type { NostrSigner } from "nostr-wot-sdk/signers";
+import { fetchRelayList, getPool, sharedCoalescer } from "nostr-wot-sdk/data";
 import {
   KIND_GIFT_WRAP,
   KIND_NIP04_DM,

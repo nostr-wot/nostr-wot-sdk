@@ -2,7 +2,7 @@ import { StrictMode } from 'react';
 import { SignerStorageProvider } from '../src/signer-storage-context';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Nip46Signer } from '@nostr-wot/signers';
+import { Nip46Signer } from 'nostr-wot-sdk/signers';
 import { Nip46Method } from '../src/login/methods/Nip46Method';
 import { LoginModal } from '../src/login/LoginModal';
 import { NostrSessionProvider } from '../src/session-shell';

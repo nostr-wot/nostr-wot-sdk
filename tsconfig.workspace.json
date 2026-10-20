@@ -1,0 +1,176 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "rootDir": ".",
+    "paths": {
+      "@nostr-wot/ui": [
+        "packages/ui/src/index.ts"
+      ],
+      "@nostr-wot/pq": [
+        "packages/pq/src/index.ts"
+      ],
+      "@nostr-wot/identity/accounts": [
+        "packages/identity/src/accounts/index.ts"
+      ],
+      "@nostr-wot/identity/vault": [
+        "packages/identity/src/vault/index.ts"
+      ],
+      "@nostr-wot/identity/permissions": [
+        "packages/identity/src/permissions/index.ts"
+      ],
+      "@nostr-wot/identity/signing": [
+        "packages/identity/src/signing/index.ts"
+      ],
+      "@nostr-wot/identity/bunker": [
+        "packages/identity/src/bunker/index.ts"
+      ],
+      "@nostr-wot/identity": [
+        "packages/identity/src/index.ts"
+      ],
+      "@nostr-wot/bunker": [
+        "packages/bunker/src/index.ts"
+      ],
+      "@nostr-wot/auth": [
+        "packages/auth/src/index.ts"
+      ],
+      "@nostr-wot/auth/next": [
+        "packages/auth/src/next.ts"
+      ],
+      "@nostr-wot/auth/client": [
+        "packages/auth/src/client/index.ts"
+      ],
+      "@nostr-wot/graph": [
+        "packages/graph/src/index.ts"
+      ],
+      "@nostr-wot/graph/react": [
+        "packages/graph/src/react/index.ts"
+      ],
+      "@nostr-wot/blossom": [
+        "packages/blossom/src/index.ts"
+      ],
+      "@nostr-wot/permissions": [
+        "packages/permissions/src/index.ts"
+      ],
+      "@nostr-wot/storage": [
+        "packages/storage/src/index.ts"
+      ],
+      "@nostr-wot/accounts": [
+        "packages/accounts/src/index.ts"
+      ],
+      "nostr-wot-sdk": [
+        "packages/sdk/src/index.ts"
+      ],
+      "nostr-wot-sdk/react": [
+        "packages/sdk/src/react/index.ts"
+      ],
+      "nostr-wot-sdk/relay": [
+        "packages/sdk/src/relay/index.ts"
+      ],
+      "nostr-wot-sdk/relay/react": [
+        "packages/sdk/src/relay/react/index.ts"
+      ],
+      "nostr-wot-sdk/data": [
+        "packages/sdk/src/data/index.ts"
+      ],
+      "nostr-wot-sdk/data/cache": [
+        "packages/sdk/src/data/cache/index.ts"
+      ],
+      "nostr-wot-sdk/signers": [
+        "packages/sdk/src/signers/index.ts"
+      ],
+      "nostr-wot-sdk/ui": [
+        "packages/sdk/src/ui/index.ts"
+      ],
+      "nostr-wot-sdk/dm": [
+        "packages/sdk/src/dm/index.ts"
+      ],
+      "nostr-wot-sdk/dm/react": [
+        "packages/sdk/src/dm/react/index.ts"
+      ],
+      "nostr-wot-sdk/wallet": [
+        "packages/sdk/src/wallet/index.ts"
+      ],
+      "nostr-wot-sdk/wallet/react": [
+        "packages/sdk/src/wallet/react/index.ts"
+      ],
+      "nostr-wot-sdk/auth": [
+        "packages/sdk/src/auth/index.ts"
+      ],
+      "nostr-wot-sdk/blossom": [
+        "packages/sdk/src/blossom/index.ts"
+      ],
+      "nostr-wot-sdk/graph": [
+        "packages/sdk/src/graph/index.ts"
+      ],
+      "nostr-wot-sdk/graph/react": [
+        "packages/sdk/src/graph/react/index.ts"
+      ],
+      "nostr-wot-sdk/relay/hub": [
+        "packages/sdk/src/relay/hub/index.ts"
+      ],
+      "nostr-wot-sdk/data/react": [
+        "packages/sdk/src/data/react/index.ts"
+      ],
+      "nostr-wot-sdk/storage": [
+        "packages/sdk/src/storage/index.ts"
+      ],
+      "@nostr-wot/dm": [
+        "packages/dm/src/index.ts"
+      ],
+      "@nostr-wot/dm/cache": [
+        "packages/dm/src/cache/index.ts"
+      ],
+      "@nostr-wot/dm/react": [
+        "packages/dm/src/react/index.ts"
+      ],
+      "@nostr-wot/wallet": [
+        "packages/wallet/src/index.ts"
+      ],
+      "@nostr-wot/wallet/react": [
+        "packages/wallet/src/react/index.ts"
+      ],
+      "@nostr-wot/wallet/nwc": [
+        "packages/wallet/src/nwc/index.ts"
+      ],
+      "@nostr-wot/wot": [
+        "packages/wot/src/index.ts"
+      ],
+      "@nostr-wot/wot/react": [
+        "packages/wot/src/react/index.ts"
+      ],
+      "@nostr-wot/wot/graph": [
+        "packages/wot/src/graph/index.ts"
+      ],
+      "@nostr-wot/wot/graph/react": [
+        "packages/wot/src/graph/react/index.ts"
+      ],
+      "@nostr-wot/relay": [
+        "packages/relay/src/index.ts"
+      ],
+      "@nostr-wot/relay/react": [
+        "packages/relay/src/react/index.ts"
+      ],
+      "@nostr-wot/relay/hub": [
+        "packages/relay/src/hub/index.ts"
+      ],
+      "@nostr-wot/data": [
+        "packages/data/src/index.ts"
+      ],
+      "@nostr-wot/data/cache": [
+        "packages/data/src/cache/index.ts"
+      ],
+      "@nostr-wot/data/react": [
+        "packages/data/src/react/index.ts"
+      ],
+      "@nostr-wot/signer-core": [
+        "packages/signer-core/src/index.ts"
+      ],
+      "@nostr-wot/signers": [
+        "packages/signers/src/index.ts"
+      ],
+      "@nostr-wot/vault": [
+        "packages/vault/src/index.ts"
+      ]
+    }
+  }
+}

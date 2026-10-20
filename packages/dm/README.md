@@ -4,28 +4,22 @@ Direct messages for Nostr — encryption primitives, a streaming inbox cache, an
 
 | Entry | What's in it | Depends on |
 |---|---|---|
-| `@nostr-wot/dm` | Crypto primitives: NIP-04 encrypt/decrypt, NIP-17 seal + gift-wrap | `nostr-tools`, `@nostr-wot/signers` |
-| `@nostr-wot/dm/cache` | Per-session inbox: live subscription, auto-decrypt, send, backfill, read cursors, encrypted-at-rest storage | + `@nostr-wot/data` |
+| `@nostr-wot/dm` | Crypto primitives: NIP-04 encrypt/decrypt, NIP-17 seal + gift-wrap | `nostr-tools`, `nostr-wot-sdk/signers` |
+| `@nostr-wot/dm/cache` | Per-session inbox: live subscription, auto-decrypt, send, backfill, read cursors, encrypted-at-rest storage | + `nostr-wot-sdk/data` |
 | `@nostr-wot/dm/react` | Hooks: `useDMSession`, `useThread`, `useConversations`, `useUnreadCount`, … | + `react` (peer) |
 
 ## Install
 
 ```bash
-npm i @nostr-wot/dm @nostr-wot/signers nostr-tools
-# add @nostr-wot/data + react if using /cache or /react
+npm i @nostr-wot/dm nostr-wot-sdk nostr-tools
+# add nostr-wot-sdk/data + react if using /cache or /react
 ```
 
 ---
 
 ## Layering
 
-Three packages, three jobs: `@nostr-wot/pq` holds the post-quantum primitives (ML-KEM-1024 +
-NIP-44 hybrid envelope), `@nostr-wot/signers` owns key material and is therefore the layer that
-performs post-quantum sealing, and `@nostr-wot/dm` (this package) only does transport — it
-builds the gift wrap and hands the plaintext to the signer, never touching a key. To send a
-post-quantum DM, pass the recipient's ML-KEM key through `sealAndGiftWrap`'s `pq` option; the
-signer does the rest, and `unwrapGiftWrap` needs no matching option because `nip44Decrypt`
-auto-routes on the self-describing envelope.
+Three packages, three jobs: `@nostr-wot/pq` holds the post-quantum primitives (ML-KEM-1024 + NIP-44 hybrid envelope), `nostr-wot-sdk/signers` owns key material and is therefore the layer that performs post-quantum sealing, and `@nostr-wot/dm` (this package) only does transport — it builds the gift wrap and hands the plaintext to the signer, never touching a key. To send a post-quantum DM, pass the recipient's ML-KEM key through `sealAndGiftWrap`'s `pq` option; the signer does the rest, and `unwrapGiftWrap` needs no matching option because `nip44Decrypt` auto-routes on the self-describing envelope.
 
 ```ts
 import { buildChatMessage, sealAndGiftWrap } from "@nostr-wot/dm";
@@ -48,7 +42,7 @@ Built on NIP-44 v2 + gift wrapping. Hides sender; recipient is visible only via 
 
 ```ts
 import { buildChatMessage, sealAndGiftWrap, unwrapGiftWrap } from "@nostr-wot/dm";
-import { Nip07Signer } from "@nostr-wot/signers";
+import { Nip07Signer } from "nostr-wot-sdk/signers";
 
 const signer = new Nip07Signer();
 const me = await signer.getPublicKey();
@@ -78,7 +72,7 @@ const plaintext = await decryptNip04(signer, event);
 
 ## Layer 2 — Cache (`/cache`)
 
-A complete inbox subsystem: subscribes to inbound events, auto-decrypts via your signer, dedupes, ingests into in-memory observables, and (optionally) persists to a `DMStorage` backend. Built on `@nostr-wot/data`'s `sharedCoalescer`, so DM subscriptions piggyback on the same connection pool used by profile/note fetchers.
+A complete inbox subsystem: subscribes to inbound events, auto-decrypts via your signer, dedupes, ingests into in-memory observables, and (optionally) persists to a `DMStorage` backend. Built on `nostr-wot-sdk/data`'s `sharedCoalescer`, so DM subscriptions piggyback on the same connection pool used by profile/note fetchers.
 
 ### Bootstrap a session
 
@@ -194,7 +188,7 @@ After each mutation the session also calls `evictIfNeeded(myPubkey, evictionCap)
 
 ```ts
 import { setFollowSet } from "@nostr-wot/dm/cache";
-import { fetchFollows } from "@nostr-wot/data";
+import { fetchFollows } from "nostr-wot-sdk/data";
 
 const follows = await fetchFollows(myPubkey);
 setFollowSet(myPubkey, new Set(follows.pubkeys));   // enables eviction
@@ -213,21 +207,9 @@ closeDMSession(session);                               // stop subscriptions
 await clearDMSession(myPubkey, { storage, clearStorage: true }); // wipe state
 ```
 
-### Adapting an NDK signer
+### Other signer backends
 
-If you already have an NDK-based app, wrap your `NDKSigner` once and use the SDK end-to-end:
-
-```ts
-import { ndkSignerAsNostrSigner } from "@nostr-wot/signers";
-import { NDKEvent } from "@nostr-dev-kit/ndk";
-
-const signer = ndkSignerAsNostrSigner({
-  ndk,
-  NDKEvent,
-});
-
-await initDMSession({ myPubkey, signer, relays });
-```
+An existing signer integration can implement `NostrSigner` from `nostr-wot-sdk/signers` and pass it to `initDMSession`. Supply the NIP-44 methods needed for NIP-17; the package does not export an NDK adapter.
 
 ---
 

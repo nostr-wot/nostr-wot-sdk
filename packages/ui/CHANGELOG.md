@@ -1,5 +1,12 @@
 # @nostr-wot/ui
 
+## 2.0.0
+
+### Major changes
+
+- Use `nostr-wot-sdk/data/react` for the shared session context and `nostr-wot-sdk/signers` for signer clients. Preserve login components, stylesheet exports and the configured signer-storage behavior.
+- Require applications using `nostr-wot-sdk/ui` compatibility imports to install `@nostr-wot/ui` explicitly. Document the maintained package imports and plaintext localStorage default.
+
 ## 1.0.0
 
 ### Major Changes

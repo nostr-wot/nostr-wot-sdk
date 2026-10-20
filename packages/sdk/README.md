@@ -1,115 +1,78 @@
 # nostr-wot-sdk
 
-Meta-package and unified React provider for the `@nostr-wot/*` family. Re-exports every scoped package, plus the recommended top-level `<NostrSdkProvider>` that wires up the data layer and (optionally) WoT context with one component.
+The application foundation for Nostr: relay connections, social data, caching, signer clients, Blossom uploads and portable key/value storage. Import the modules you need; React is only required by React entry points.
+
+> Package consolidation: these modules now live in this package. The old scoped names remain compatibility wrappers. See the [migration guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md).
 
 ## Install
 
 ```bash
-npm i nostr-wot-sdk
+npm install nostr-wot-sdk nostr-tools
+# Only for React entry points:
+npm install react
 ```
 
-This installs the meta and pulls in the scoped packages as transitive deps. New code can also depend on the scoped packages directly:
+Do not install a subpath such as `nostr-wot-sdk/data`. Install `nostr-wot-sdk` and use the subpath in your imports.
 
-```bash
-npm i @nostr-wot/data
-npm i @nostr-wot/dm
-npm i @nostr-wot/wot
-npm i @nostr-wot/relay
-npm i @nostr-wot/signers
-npm i @nostr-wot/blossom
-npm i @nostr-wot/wallet
-```
+## Modules
 
-## React provider (recommended top-level)
+| Import | Capabilities and API guide |
+| --- | --- |
+| `nostr-wot-sdk/data` | [Profiles, notes, threads, follows, reactions, reposts, zaps and NIP-65 relay discovery](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/packages/data/README.md). Also exposes the shared pool and subscription coalescer. |
+| `nostr-wot-sdk/data/cache` | Observable stale-while-revalidate caches and optional persistence. |
+| `nostr-wot-sdk/data/react` | Data hooks, `NostrDataProvider`, `NostrSessionProvider` and `useSession`. |
+| `nostr-wot-sdk/relay` | [RelayPool, RelayManager, QueryBatcher and RelayStats](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/packages/relay/README.md). Use this when building a custom data layer. |
+| `nostr-wot-sdk/relay/react` | Relay state providers and hooks. |
+| `nostr-wot-sdk/relay/hub` | Shared relay hub integration; see the relay guide for transport ownership. |
+| `nostr-wot-sdk/signers` | [Nip07Signer, Nip46Signer and PrivateKeySigner](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/packages/signers/README.md). |
+| `nostr-wot-sdk/blossom` | [Upload, mirror and delete blobs with signed authorization and server failover](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/packages/blossom/README.md). |
+| `nostr-wot-sdk/storage` | [KeyValueStore, MemoryStore and namespaced stores](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/packages/storage/README.md). |
 
-```tsx
-import { NostrSdkProvider } from "nostr-wot-sdk/react";
-
-<NostrSdkProvider
-  relays={["wss://relay.damus.io", "wss://nos.lol"]}
-  profileAggregators={["wss://purplepag.es"]}
-  persistence={{ namespace: "myapp", ttlMs: 86400_000 }}
-  wot={{ enabled: true, options: { maxHops: 2 } }}
->
-  <App />
-</NostrSdkProvider>;
-```
-
-`<NostrSdkProvider>` is the recommended root for any app using the SDK. It composes:
-
-- `<NostrDataProvider>` from `@nostr-wot/data/react` — configures default relays, profile aggregators, and SWR cache persistence
-- `<WoTProvider>` from `@nostr-wot/wot/react` (only when `wot.enabled: true`) — provides WoT scoring context
-
-WoT hooks (`useWoT`, `useIsInWoT`, `useBatchWoT`) require `wot.enabled: true`. Data hooks (`useProfile`, `useNote`, `useThread`, …) work either way.
-
-## Re-export map
-
-| Import from `nostr-wot-sdk` | Equivalent scoped package |
-|---|---|
-| `nostr-wot-sdk` | `@nostr-wot/wot` |
-| `nostr-wot-sdk/react` | `@nostr-wot/wot/react` + `@nostr-wot/data/react` + `<NostrSdkProvider>` |
-| `nostr-wot-sdk/relay` | `@nostr-wot/relay` |
-| `nostr-wot-sdk/relay/react` | `@nostr-wot/relay/react` |
-| `nostr-wot-sdk/data` | `@nostr-wot/data` |
-| `nostr-wot-sdk/data/cache` | `@nostr-wot/data/cache` |
-| `nostr-wot-sdk/signers` | `@nostr-wot/signers` |
-| `nostr-wot-sdk/ui` | `@nostr-wot/ui` |
-| `nostr-wot-sdk/dm` | `@nostr-wot/dm` |
-| `nostr-wot-sdk/dm/react` | `@nostr-wot/dm/react` |
-| `nostr-wot-sdk/wallet` | `@nostr-wot/wallet` |
-| `nostr-wot-sdk/wallet/react` | `@nostr-wot/wallet/react` |
-| `nostr-wot-sdk/auth` | `@nostr-wot/auth` |
-| `nostr-wot-sdk/blossom` | `@nostr-wot/blossom` |
-
-The whole family is surfaced through this meta, so you can either import via a
-subpath or depend on the scoped package directly:
+## Fetch data without React
 
 ```ts
-import { Nip07Signer } from "nostr-wot-sdk/signers";
-import { sealAndGiftWrap } from "nostr-wot-sdk/dm";
-import { useDMSession } from "nostr-wot-sdk/dm/react";
-import { uploadToBlossom } from "nostr-wot-sdk/blossom";
-import { NwcClient, requestZapInvoice } from "nostr-wot-sdk/wallet";
+import { fetchProfile, fetchFollows, setDefaultRelays } from 'nostr-wot-sdk/data';
+
+setDefaultRelays(['wss://relay.damus.io', 'wss://nos.lol']);
+const profile = await fetchProfile(userPubkey);
+const follows = await fetchFollows(userPubkey);
 ```
 
-> Note: `@nostr-wot/ui`'s stylesheet is not re-exported — import it from the
-> scoped package directly: `import "@nostr-wot/ui/styles.css"`. The
-> framework-specific `@nostr-wot/auth/next` and `@nostr-wot/auth/client`
-> entries are likewise only available on the scoped package.
+Pass hexadecimal Nostr public keys and event IDs. The `/cache` layer adds shared cached results; the `/react` layer subscribes components to them. Configure relays deliberately for your application. NIP-65 relay discovery is for public data and is not a substitute for the DM package's recipient inbox privacy rules.
 
-## Architecture
+## Request a signature
 
-```
-                 ┌────────────────────┐
-                 │   Your app         │
-                 └─────────┬──────────┘
-                           │
-                 ┌─────────▼──────────┐
-                 │ <NostrSdkProvider> │  ← unified config
-                 └─────────┬──────────┘
-            ┌──────────────┼─────────────┐
-            ▼              ▼             ▼
-      data fetchers   WoT scoring    DM cache
-            │              │             │
-            └──────────────┼─────────────┘
-                           ▼
-                ┌──────────────────┐
-                │ shared SimplePool│  ← one set of WebSocket
-                └──────────────────┘     connections
+```ts
+import { Nip07Signer, isNip07Available } from 'nostr-wot-sdk/signers';
+
+if (!isNip07Available()) throw new Error('A NIP-07 extension is required');
+const signer = new Nip07Signer();
+const event = await signer.signEvent({
+  kind: 1, content: 'Hello', tags: [],
+  created_at: Math.floor(Date.now() / 1000),
+});
 ```
 
-Every `@nostr-wot/*` package shares the same connection pool via `getPool()` / `setPool()` from `@nostr-wot/data`. Subscribe-once-fan-out-everywhere is enforced by `sharedCoalescer`, so DM inbox, profile reads, follower lists, and engagement queries are all coalesced on the wire.
+`Nip07Signer` requires a browser extension. `Nip46Signer` connects to a remote signer and supports bunker URIs or QR pairing. Close the signer when finished, and cancel abandoned QR pairing handles. `PrivateKeySigner` keeps a key in your process; use it only where that key can be trusted to the application.
 
-## Per-package docs
+Encryption methods on `NostrSigner` are optional. Check support before invoking them. A backend that cannot satisfy an explicitly requested post-quantum operation must fail rather than downgrade it.
 
-- [@nostr-wot/data](https://www.npmjs.com/package/@nostr-wot/data) — fetchers, cache, hooks
-- [@nostr-wot/relay](https://www.npmjs.com/package/@nostr-wot/relay) — pool, batcher, stats
-- [@nostr-wot/signers](https://www.npmjs.com/package/@nostr-wot/signers) — NIP-07/46 + private key
-- [@nostr-wot/dm](https://www.npmjs.com/package/@nostr-wot/dm) — NIP-04, NIP-17, cache, hooks
-- [@nostr-wot/blossom](https://www.npmjs.com/package/@nostr-wot/blossom) — uploads
-- [@nostr-wot/wallet](https://www.npmjs.com/package/@nostr-wot/wallet) — NWC + zaps
-- [@nostr-wot/wot](https://www.npmjs.com/package/@nostr-wot/wot) — Web-of-Trust scoring
+## React sessions
+
+Import the shared session provider and hooks from `nostr-wot-sdk/data/react`. Add `@nostr-wot/ui` for a login interface; add `@nostr-wot/dm`, `@nostr-wot/wallet` or `@nostr-wot/wot` for those capabilities. Use one shared session context so each capability sees the same active signer.
+
+The historical `NostrSdkProvider` remains available from `nostr-wot-sdk/react`; its WoT dependency remains installed with the SDK. For new integrations, compose the data/session providers with `WoTProvider` from `@nostr-wot/wot/react` when WoT context is needed. React modules are client-side integrations; do not construct browser signers during server rendering.
+
+## Compatibility imports
+
+The package root retains the historical WoT API, and `/react`, `/graph` and `/graph/react` retain their WoT compatibility exports. `@nostr-wot/wot` remains a direct SDK dependency for this compatibility. The `/dm`, `/dm/react`, `/wallet`, `/wallet/react`, `/auth` and `/ui` compatibility entry points require the corresponding optional peer package: install it explicitly before importing the entry. These capabilities are no longer installed automatically with the SDK.
+
+For new code, use `@nostr-wot/wot`, `@nostr-wot/wot/react`, `@nostr-wot/wot/graph`, `@nostr-wot/dm`, `@nostr-wot/wallet`, `@nostr-wot/auth` and `@nostr-wot/ui` directly. Import UI CSS from `@nostr-wot/ui/styles.css`; auth's `/client` and `/next` adapters belong to `@nostr-wot/auth`.
+
+## Runtime and cleanup
+
+Network modules need the relevant fetch/WebSocket APIs; portable storage has no DOM requirement. React hooks need React; browser cache persistence needs browser storage. Close subscriptions and signer-owned transports on teardown. A caller-supplied pool stays caller-owned. `MemoryStore` is ephemeral and does not encrypt values; `namespaced` separates keys, not security domains.
 
 ## License
 
-GNU General Public License version 3 only (`GPL-3.0-only`) — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+GNU General Public License version 3 only (`GPL-3.0-only`). See [LICENSE](LICENSE) and [NOTICE](NOTICE).

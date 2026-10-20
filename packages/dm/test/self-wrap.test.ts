@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { finalizeEvent, generateSecretKey, getPublicKey, nip44 } from "nostr-tools";
-import type { NostrSigner } from "@nostr-wot/signers";
+import type { NostrSigner } from "nostr-wot-sdk/signers";
 import { sealAndGiftWrap, sealAndGiftWrapForSelf, unwrapGiftWrapForSelf } from "../src/index";
 
 function identity(): { pubkey: string; signer: NostrSigner } {

@@ -4,8 +4,8 @@ import { useState, type ReactNode } from "react";
 import {
   isNip07Available,
   type NostrSigner,
-} from "@nostr-wot/signers";
-import { useLogin, useLogout } from "@nostr-wot/data/react";
+} from "nostr-wot-sdk/signers";
+import { useLogin, useLogout } from "nostr-wot-sdk/data/react";
 import { cx } from "../utils";
 import type { ClassSlots, LoginMethodId, LoginWidgetSlot, StyleSlots } from "../types";
 import { performBackendAuth } from "../auth-handshake";

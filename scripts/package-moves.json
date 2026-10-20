@@ -1,0 +1,57 @@
+{
+  "relay": {
+    "package": "nostr-wot-sdk",
+    "subpath": "relay",
+    "replacementVersion": "3.0.0"
+  },
+  "data": {
+    "package": "nostr-wot-sdk",
+    "subpath": "data",
+    "replacementVersion": "3.0.0"
+  },
+  "signers": {
+    "package": "nostr-wot-sdk",
+    "subpath": "signers",
+    "replacementVersion": "3.0.0"
+  },
+  "blossom": {
+    "package": "nostr-wot-sdk",
+    "subpath": "blossom",
+    "replacementVersion": "3.0.0"
+  },
+  "storage": {
+    "package": "nostr-wot-sdk",
+    "subpath": "storage",
+    "replacementVersion": "3.0.0"
+  },
+  "accounts": {
+    "package": "@nostr-wot/identity",
+    "subpath": "accounts",
+    "replacementVersion": "1.0.0"
+  },
+  "vault": {
+    "package": "@nostr-wot/identity",
+    "subpath": "vault",
+    "replacementVersion": "1.0.0"
+  },
+  "permissions": {
+    "package": "@nostr-wot/identity",
+    "subpath": "permissions",
+    "replacementVersion": "1.0.0"
+  },
+  "signer-core": {
+    "package": "@nostr-wot/identity",
+    "subpath": "signing",
+    "replacementVersion": "1.0.0"
+  },
+  "bunker": {
+    "package": "@nostr-wot/identity",
+    "subpath": "bunker",
+    "replacementVersion": "1.0.0"
+  },
+  "graph": {
+    "package": "@nostr-wot/wot",
+    "subpath": "graph",
+    "replacementVersion": "3.0.0"
+  }
+}

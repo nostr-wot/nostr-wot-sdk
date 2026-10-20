@@ -6,12 +6,12 @@ The extension owns browser state, UI and transport attestation. The SDK owns por
 
 | Package | Reusable behavior | Extension-owned adapter |
 | --- | --- | --- |
-| `@nostr-wot/storage` | Key/value store contract and namespaces | Map the existing browser storage area without renaming deployed keys. |
-| `@nostr-wot/accounts` | NIP-06 derivation, NIP-19/NIP-49 and safe account projection | Wallet-specific metadata, profile UI and account selection presentation. |
-| `@nostr-wot/permissions` | Global/site inheritance, conservative migrations, destination grants and backend opt-in | Supply account/site inventory, trusted registry pairs, connection checks and settings UI. |
-| `@nostr-wot/vault` | Password vault lifecycle, scoped secrets, passkey record encryption and recovery parsing | WebAuthn/provider selection, automatic-unlock presentation, passkey lifecycle orchestration and storage transactions. |
-| `@nostr-wot/signer-core` | Request snapshots, permission checks, individual authentication disclosure, signing and remote-result verification | Browser/frame attestation, connected-site policy, privileged endpoints, approval UI and destination-grant persistence. |
-| `@nostr-wot/signers` | NIP-46 pairing, identity reads and owned transport disposal | Account-scoped client cache and revocation on account or vault changes. |
+| `nostr-wot-sdk/storage` | Key/value store contract and namespaces | Map the existing browser storage area without renaming deployed keys. |
+| `@nostr-wot/identity/accounts` | NIP-06 derivation, NIP-19/NIP-49 and safe account projection | Wallet-specific metadata, profile UI and account selection presentation. |
+| `@nostr-wot/identity/permissions` | Global/site inheritance, conservative migrations, destination grants and backend opt-in | Supply account/site inventory, trusted registry pairs, connection checks and settings UI. |
+| `@nostr-wot/identity/vault` | Password vault lifecycle, scoped secrets, passkey record encryption and recovery parsing | WebAuthn/provider selection, automatic-unlock presentation, passkey lifecycle orchestration and storage transactions. |
+| `@nostr-wot/identity/signing` | Request snapshots, permission checks, individual authentication disclosure, signing and remote-result verification | Browser/frame attestation, connected-site policy, privileged endpoints, approval UI and destination-grant persistence. |
+| `nostr-wot-sdk/signers` | NIP-46 pairing, identity reads and owned transport disposal | Account-scoped client cache and revocation on account or vault changes. |
 | `@nostr-wot/pq` | Hybrid encryption and post-quantum attestations | Native approval and public profile presentation. |
 
 ## Rules and authentication

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { useSession } from "@nostr-wot/data/react";
+import { useSession } from "nostr-wot-sdk/data/react";
 import { cx } from "../utils";
 import { LoginModal, type LoginModalProps } from "./LoginModal";
 import type { ClassSlots, LoginButtonSlot, StyleSlots } from "../types";

@@ -8,7 +8,7 @@
 // transient toasts).
 
 import { useEffect } from 'react';
-import { getPool, getDefaultRelays } from '@nostr-wot/data';
+import { getPool, getDefaultRelays } from 'nostr-wot-sdk/data';
 import { validateZapReceipt, type RawNostrEvent, type ValidatedZapReceipt } from '../zap-receipt';
 
 export function useZapReceipts(

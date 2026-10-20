@@ -1,30 +1,20 @@
-# @nostr-wot/bunker
+# @nostr-wot/identity/bunker
 
-The NIP-46 **responder**: the bunker / remote-signer side of Nostr Connect. `@nostr-wot/signers`
-and the browser extension are NIP-46 clients; this is the other half, the thing they talk to.
+> Package consolidation: this is the API guide for `@nostr-wot/identity/bunker`. The former `@nostr-wot/bunker` package is a deprecated compatibility re-export. Install the owning package shown below; a subpath is an import, not an npm package. See the [migration guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md).
 
-It is a transport adapter and nothing more. It listens on relays for kind 24133 requests
-addressed to a connection key, decrypts the NIP-44 payload, hands the request to one injected
-function, and publishes the encrypted response. Vaults, permissions, accounts and approval UI
-never enter this package: every policy decision is the handler's.
+The NIP-46 **responder**: the bunker / remote-signer side of Nostr Connect. `nostr-wot-sdk/signers` and the browser extension are NIP-46 clients; this is the other half, the thing they talk to.
+
+It is a transport adapter and nothing more. It listens on relays for kind 24133 requests addressed to a connection key, decrypts the NIP-44 payload, hands the request to one injected function, and publishes the encrypted response. Vaults, permissions, accounts and approval UI never enter this package: every policy decision is the handler's.
 
 ## Install
 
 ```bash
-npm i @nostr-wot/bunker nostr-tools
+npm i @nostr-wot/identity nostr-tools
 ```
 
 ### Module format
 
-ESM only, as every package in this release is. `import` it, or `await import()` it from
-CommonJS; there is no `require` entry point. One format rather than two is deliberate: a dual
-CJS/ESM build can be loaded twice in one process, once per format, and a package that holds
-state (a vault session, a bunker's client and secret registries) would then keep two of it,
-which in a signer is a defect rather than an inconvenience.
-
-The two packages the stack already published, `@nostr-wot/pq` and `@nostr-wot/signers`, do
-still ship CommonJS beside ESM. Dropping it there would break consumers who have it today, so
-it stays, and this is where that split is written down.
+Use ESM `import` as shown here. Module-format support is specific to the owning package and entry point; do not infer it from another package in the family. The identity entry points are ESM-only.
 
 ## The contract
 
@@ -40,14 +30,9 @@ interface BunkerRequest {
 type BunkerHandler = (request: BunkerRequest, context: BunkerRequestContext) => Promise<string>;
 ```
 
-The second argument is optional. `context.sendAuthUrl(url)` sends an interim `auth_url`
-response on the same request id; the promise you return still delivers the real result.
+The second argument is optional. `context.sendAuthUrl(url)` sends an interim `auth_url` response on the same request id; the promise you return still delivers the real result.
 
-**What a rejection looks like on the wire.** Only a `BunkerError`'s message is forwarded to the
-client. Any other throw (a vault exception, a JSON parse error, anything with internal detail)
-becomes `error: "request rejected"`. Throw `BunkerError` for text the caller should read, or
-pass `mapError(err, request)` to set your own policy. A handler that has not settled after
-`handlerTimeoutMs` (default 120 s, `0` disables) is answered with `request timed out`.
+**What a rejection looks like on the wire.** Only a `BunkerError`'s message is forwarded to the client. Any other throw (a vault exception, a JSON parse error, anything with internal detail) becomes `error: "request rejected"`. Throw `BunkerError` for text the caller should read, or pass `mapError(err, request)` to set your own policy. A handler that has not settled after `handlerTimeoutMs` (default 120 s, `0` disables) is answered with `request timed out`.
 
 ## Two keys, never conflated
 
@@ -60,8 +45,8 @@ pass `mapError(err, request)` to set your own policy. A handler that has not set
 ## Usage
 
 ```ts
-import { BunkerError, BunkerServer } from "@nostr-wot/bunker";
-import { PrivateKeySigner } from "@nostr-wot/signers";
+import { BunkerError, BunkerServer } from "@nostr-wot/identity/bunker";
+import { PrivateKeySigner } from "nostr-wot-sdk/signers";
 
 const user = new PrivateKeySigner(userSecretKey); // the identity; lives behind the handler
 
@@ -105,8 +90,7 @@ await server.acceptNostrConnect(scannedUri);
 
 ### Surviving a restart
 
-A phone kills and restarts the process constantly, so pairings must not live only in memory.
-Everything a host needs to persist is one `BunkerState`:
+A phone kills and restarts the process constantly, so pairings must not live only in memory. Everything a host needs to persist is one `BunkerState`:
 
 ```ts
 interface BunkerState {
@@ -119,95 +103,25 @@ interface BunkerState {
 }
 ```
 
-`onStateChange(state)` hands out a fresh one after every change (mint, bind, confirm, release,
-revoke, lapse, admit, forget; one snapshot per successful restore); `exportState()` returns one
-on demand; `restore(state)` rehydrates it on the way back up under the same connection key,
-before or after `start()`. A restored secret keeps its binding: a different client presenting
-it is refused exactly as before the restart. Restored clients carry on without re-pairing, on
-their own relays. Pending approvals are exported as bound but unconfirmed, so the same client
-may retry and nobody else can.
+`onStateChange(state)` hands out a fresh one after every change (mint, bind, confirm, release, revoke, lapse, admit, forget; one snapshot per successful restore); `exportState()` returns one on demand; `restore(state)` rehydrates it on the way back up under the same connection key, before or after `start()`. A restored secret keeps its binding: a different client presenting it is refused exactly as before the restart. Restored clients carry on without re-pairing, on their own relays. Pending approvals are exported as bound but unconfirmed, so the same client may retry and nobody else can.
 
-**What the MAC buys.** The export is authenticated under the connection key, and `restore`
-verifies it before reading anything else. A state that was edited, assembled by hand, or
-signed by anyone who does not hold the connection key is refused with
-`state authentication failed`. That is the case that matters on a phone: the state sits in
-ordinary storage and the key sits in the keychain, and the weaker domain cannot forge a pairing
-on its own. It is exactly as strong as the key's storage: whoever holds the connection secret
-key can sign any state (`signBunkerState` is exported for migration tooling that does).
+**What the MAC buys.** The export is authenticated under the connection key, and `restore` verifies it before reading anything else. A state that was edited, assembled by hand, or signed by anyone who does not hold the connection key is refused with `state authentication failed`. That is the case that matters on a phone: the state sits in ordinary storage and the key sits in the keychain, and the weaker domain cannot forge a pairing on its own. It is exactly as strong as the key's storage: whoever holds the connection secret key can sign any state (`signBunkerState` is exported for migration tooling that does).
 
-**Revocation survives a storage rollback.** Every `revokeSecret` bumps `generation`;
-`onGenerationChange` hands the new value to the host, which keeps it beside the key in the
-keychain, and passes it back as the `generation` option on startup. `restore` refuses a state
-whose generation is behind the host's, so restoring an export taken before a revoke does not
-bring the revoked client back. The generation is inside the MAC, so it cannot be edited upward.
-A host that lost its counter (starts at 0) adopts the state's generation: as strong as the
-keychain, no more. The `generation` option must be a non-negative integer; anything else throws,
-because keychain APIs return strings and a `"1"` silently read as `0` would drop the guarantee
-with no signal. Parse before passing.
+**Revocation survives a storage rollback.** Every `revokeSecret` bumps `generation`; `onGenerationChange` hands the new value to the host, which keeps it beside the key in the keychain, and passes it back as the `generation` option on startup. `restore` refuses a state whose generation is behind the host's, so restoring an export taken before a revoke does not bring the revoked client back. The generation is inside the MAC, so it cannot be edited upward. A host that lost its counter (starts at 0) adopts the state's generation: as strong as the keychain, no more. The `generation` option must be a non-negative integer; anything else throws, because keychain APIs return strings and a `"1"` silently read as `0` would drop the guarantee with no signal. Parse before passing.
 
-**Which to write first after a revoke.** `onStateChange` fires with the new state before
-`onGenerationChange` fires with the new counter, and that is the order to persist in: storage
-first, keychain second. A crash between the two leaves storage at generation N+1 and the
-keychain at N; on restart the host passes N, the state is ahead, and it is adopted: nothing is
-lost, and the rollback window is the length of one write, which an attacker would have to hit
-at that instant. The other order, keychain first, turns the same crash into a keychain at N+1
-with storage still at N, and on restart every pairing is refused as behind: the bunker forgets
-everyone, safely but destructively. Storage first is the recommendation. `exportState()` inside
-`onGenerationChange` is consistent (the revoked client and its secret are already gone) and
-restores.
+**Which to write first after a revoke.** `onStateChange` fires with the new state before `onGenerationChange` fires with the new counter, and that is the order to persist in: storage first, keychain second. A crash between the two leaves storage at generation N+1 and the keychain at N; on restart the host passes N, the state is ahead, and it is adopted: nothing is lost, and the rollback window is the length of one write, which an attacker would have to hit at that instant. The other order, keychain first, turns the same crash into a keychain at N+1 with storage still at N, and on restart every pairing is refused as behind: the bunker forgets everyone, safely but destructively. Storage first is the recommendation. `exportState()` inside `onGenerationChange` is consistent (the revoked client and its secret are already gone) and restores.
 
-**The rest of `restore`, in order.** `version` is read first, because it decides whether a MAC
-is required: a version 2 state must be signed, and stripping its `mac` does not turn it into a
-pre-2 state; versions above 2 are refused. Then the MAC is verified, before anything else is
-read. A pre-2 state (no `version`) migrates once with `restore(state, { allowUnsigned: true })`.
-Be precise about what that flag can and cannot do: `version` and `mac` sit in the same storage
-the attacker can write, so nothing in the blob proves a state is genuinely pre-2, and someone who
-strips both fields, or edits `version` to 1, presents a legitimate-looking legacy state. What
-closes that is the host's generation, which lives in the keychain: at 1 or more (the host has
-revoked at least once) an unsigned state is refused as behind; at 0 the library requires the
-host to have passed `generation: 0` itself, so the legacy path is asserted, never reached by
-omission, and a host that asserts it is trusting its storage for that one restore. Gate the
-flag on a keychain marker, never on "the stored state has no mac", persist the signed export
-afterwards, and drop the flag. The state must belong to this connection key and not be behind
-the host's generation; no approval may be pending (`pendingApprovals` says how many, `whenIdle()`
-resolves when none is, so a host with `handlerTimeoutMs: 0` and an unanswered prompt knows when
-to retry); the MAC must verify; then the whole object is validated (shapes and types, relay URLs
-by the pairing rules, pubkeys on the curve, every client backed by a secret in the same state
-bound to it and confirmed with the same relays, no duplicates, `confirmed` only with a
-`clientPubkey`, within the ceilings). Only then is anything applied, all at once, with nothing
-emitted until it has succeeded, so a host persisting on every callback never sees a partial
-state. Where memory already holds a binding or a client, memory wins: a live handshake outranks
-a stored record; a secret bound in memory to a different client refuses the whole restore.
+**The rest of `restore`, in order.** `version` is read first, because it decides whether a MAC is required: a version 2 state must be signed, and stripping its `mac` does not turn it into a pre-2 state; versions above 2 are refused. Then the MAC is verified, before anything else is read. A pre-2 state (no `version`) migrates once with `restore(state, { allowUnsigned: true })`. Be precise about what that flag can and cannot do: `version` and `mac` sit in the same storage the attacker can write, so nothing in the blob proves a state is genuinely pre-2, and someone who strips both fields, or edits `version` to 1, presents a legitimate-looking legacy state. What closes that is the host's generation, which lives in the keychain: at 1 or more (the host has revoked at least once) an unsigned state is refused as behind; at 0 the library requires the host to have passed `generation: 0` itself, so the legacy path is asserted, never reached by omission, and a host that asserts it is trusting its storage for that one restore. Gate the flag on a keychain marker, never on "the stored state has no mac", persist the signed export afterwards, and drop the flag. The state must belong to this connection key and not be behind the host's generation; no approval may be pending (`pendingApprovals` says how many, `whenIdle()` resolves when none is, so a host with `handlerTimeoutMs: 0` and an unanswered prompt knows when to retry); the MAC must verify; then the whole object is validated (shapes and types, relay URLs by the pairing rules, pubkeys on the curve, every client backed by a secret in the same state bound to it and confirmed with the same relays, no duplicates, `confirmed` only with a `clientPubkey`, within the ceilings). Only then is anything applied, all at once, with nothing emitted until it has succeeded, so a host persisting on every callback never sees a partial state. Where memory already holds a binding or a client, memory wins: a live handshake outranks a stored record; a secret bound in memory to a different client refuses the whole restore.
 
 ### Secrets do not pile up
 
-`revokeSecret(secret)` revokes a secret in the sense a user expects: `connect` with it is refused
-from then on, an approval pending for it is discarded when the handler answers (the client gets
-`secret revoked`, nothing is admitted), and the client bound to it is disconnected. Unclaimed
-secrets lapse after `secretTtlMs` (default 15 minutes, `createBunkerUri({ ttlMs })` per mint,
-`0` disables); the sweep is O(1) until the earliest expiry has passed and never runs on behalf
-of an unauthenticated request, which checks its one secret instead. A confirmed binding never
-expires, since paired clients reconnect with it indefinitely.
+`revokeSecret(secret)` revokes a secret in the sense a user expects: `connect` with it is refused from then on, an approval pending for it is discarded when the handler answers (the client gets `secret revoked`, nothing is admitted), and the client bound to it is disconnected. Unclaimed secrets lapse after `secretTtlMs` (default 15 minutes, `createBunkerUri({ ttlMs })` per mint, `0` disables); the sweep is O(1) until the earliest expiry has passed and never runs on behalf of an unauthenticated request, which checks its one secret instead. A confirmed binding never expires, since paired clients reconnect with it indefinitely.
 
-Ceilings, live and restored alike: `maxSecrets` (256; minting past it throws), `maxClients` (64;
-admissions in flight count, per request, so a `connect` past it is refused with `too many
-clients` even while another is pending, and a client whose first attempt was rejected keeps the
-slot its retry holds), `maxRelaysPerClient` (8; a longer `nostrconnect://` URI or client record
-is refused). On a scan, both ceilings are host-facing errors, not wire-visible ones.
+Ceilings, live and restored alike: `maxSecrets` (256; minting past it throws), `maxClients` (64; admissions in flight count, per request, so a `connect` past it is refused with `too many clients` even while another is pending, and a client whose first attempt was rejected keeps the slot its retry holds), `maxRelaysPerClient` (8; a longer `nostrconnect://` URI or client record is refused). On a scan, both ceilings are host-facing errors, not wire-visible ones.
 
 ### Relays are per client
 
-Relay selection is a privacy control, not a delivery detail. A client's responses go to the
-relays it was paired on: the `bunker://` URI's relays for a bunker-initiated pairing, the
-client's own `nostrconnect://` relays for a client-initiated one. A relay one client introduced
-is never used for another client's traffic, `switch_relays` answers with the asking client's own
-set, and a client-introduced relay is dropped when that client leaves. `server.relays` is the
-host-configured set, `server.listeningRelays` everything currently subscribed,
-`server.relaysFor(pubkey)` one client's set. Relays are identified the way nostr-tools' pool
-identifies them (`normalizeURL`: lower-case host, no trailing slash, no default port), so two
-spellings of one relay are one relay everywhere. A pending pairing never writes to a secret's relays,
-so a rejected scan leaves no trace on a host-minted secret, and `stop()` closes every socket the
-server opened, publish-only ones included.
+Relay selection is a privacy control, not a delivery detail. A client's responses go to the relays it was paired on: the `bunker://` URI's relays for a bunker-initiated pairing, the client's own `nostrconnect://` relays for a client-initiated one. A relay one client introduced is never used for another client's traffic, `switch_relays` answers with the asking client's own set, and a client-introduced relay is dropped when that client leaves. `server.relays` is the host-configured set, `server.listeningRelays` everything currently subscribed, `server.relaysFor(pubkey)` one client's set. Relays are identified the way nostr-tools' pool identifies them (`normalizeURL`: lower-case host, no trailing slash, no default port), so two spellings of one relay are one relay everywhere. A pending pairing never writes to a secret's relays, so a rejected scan leaves no trace on a host-minted secret, and `stop()` closes every socket the server opened, publish-only ones included.
 
 ### Out of scope, deliberately
 
@@ -217,33 +131,14 @@ server opened, publish-only ones included.
 
 ## Connect timeout caveat
 
-`connectTimeoutMs` (default 3000) bounds how long a relay may take to accept. In nostr-tools
-2.24.1 a connect that times out leaves its socket open and unreachable: the relay's handlers
-are nulled without a close, and the pool forgets the relay, so `stop()` cannot close it. Each
-attempt against a slow relay, retries included, leaks one socket for the process lifetime.
-Prefer relays that accept promptly, set the timeout generously on hosts that run for hours,
-and see the package report for the upstream defect.
+`connectTimeoutMs` (default 3000) bounds how long a relay may take to accept. In nostr-tools 2.24.1 a connect that times out leaves its socket open and unreachable: the relay's handlers are nulled without a close, and the pool forgets the relay, so `stop()` cannot close it. Each attempt against a slow relay, retries included, leaks one socket for the process lifetime. Prefer relays that accept promptly, set the timeout generously on hosts that run for hours, and see the package report for the upstream defect.
 
 ## Vendoring
 
-Build, then `npm pack`. The build script (`tsup && node ../../scripts/dist-stamp.mjs stamp`,
-the stamp written after tsup and its declaration worker have both exited) writes
-`dist/.src-hash`: a hash of every build input (`src/`, `tsup.config.ts`, `tsconfig.json`,
-`package.json`, the TypeScript config as tsc resolves it so the monorepo's `tsconfig.base.json`
-counts, and the tsup/esbuild/typescript versions) and a hash of every file the build produced.
-`npm run check:dist -w @nostr-wot/bunker` fails when `dist/` is missing, behind any input, or no
-longer what the build produced (tampered, or partially copied or deleted); `--dist DIR` checks a
-packed or vendored copy against this tree.
+Build, then `npm pack`. The build script (`tsup && node ../../scripts/dist-stamp.mjs stamp`, the stamp written after tsup and its declaration worker have both exited) writes `dist/.src-hash`: a hash of every build input (`src/`, `tsup.config.ts`, `tsconfig.json`, `package.json`, the TypeScript config as tsc resolves it so the monorepo's `tsconfig.base.json` counts, and the tsup/esbuild/typescript versions) and a hash of every file the build produced. `npm run check:dist -w @nostr-wot/identity` fails when `dist/` is missing, behind any input, or no longer what the build produced (tampered, or partially copied or deleted); `--dist DIR` checks a packed or vendored copy against this tree.
 
-That machinery is no longer this package's own. It lives at `scripts/dist-stamp.mjs` and every
-package in the repo with a `check:dist` uses it, which is how its neighbours got the outputs
-hash they were missing. The CI workflow runs the check after the build, proves it bites on a
-tampered and on a partial copy of every one of those packages, and checks each packed tarball.
-`packages/vault/test/dist-freshness.test.ts` holds the negative cases against a fixture package,
-and against a copy of a real `dist/` when one has been built.
+That machinery is no longer this package's own. It lives at `scripts/dist-stamp.mjs` and every package in the repo with a `check:dist` uses it, which is how its neighbours got the outputs hash they were missing. The CI workflow runs the check after the build, proves it bites on a tampered and on a partial copy of every one of those packages, and checks each packed tarball. `packages/identity/test/vault/dist-freshness.test.ts` holds the negative cases against a fixture package, and against a copy of a real `dist/` when one has been built.
 
 ## React Native
 
-Pass `websocketImplementation` with the host's WebSocket constructor. It is installed through
-nostr-tools' `useWebSocketImplementation`, the same way `@nostr-wot/graph` does it. Or inject
-a ready `pool`.
+Pass `websocketImplementation` with the host's WebSocket constructor. It is installed through nostr-tools' `useWebSocketImplementation`, the same way `@nostr-wot/wot/graph` does it. Or inject a ready `pool`.

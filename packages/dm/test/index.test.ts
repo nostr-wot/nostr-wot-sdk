@@ -7,7 +7,7 @@ import {
   nip44,
   type Event,
 } from "nostr-tools";
-import { PrivateKeySigner } from "@nostr-wot/signers";
+import { PrivateKeySigner } from "nostr-wot-sdk/signers";
 import {
   buildChatMessage,
   sealAndGiftWrap,

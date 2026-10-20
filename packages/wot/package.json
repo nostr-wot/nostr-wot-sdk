@@ -1,6 +1,6 @@
 {
   "name": "@nostr-wot/wot",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "description": "Web-of-Trust distance queries for Nostr over an Oracle/relays. WoT class + React hooks.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "GPL-3.0-only",
@@ -48,6 +48,26 @@
         "types": "./dist/react/index.d.cts",
         "default": "./dist/react/index.cjs"
       }
+    },
+    "./graph": {
+      "import": {
+        "types": "./dist/graph/index.d.ts",
+        "default": "./dist/graph/index.js"
+      },
+      "require": {
+        "types": "./dist/graph/index.d.cts",
+        "default": "./dist/graph/index.cjs"
+      }
+    },
+    "./graph/react": {
+      "import": {
+        "types": "./dist/graph/react/index.d.ts",
+        "default": "./dist/graph/react/index.js"
+      },
+      "require": {
+        "types": "./dist/graph/react/index.d.cts",
+        "default": "./dist/graph/react/index.cjs"
+      }
     }
   },
   "files": [
@@ -57,22 +77,32 @@
     "NOTICE"
   ],
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && node ../../scripts/dist-stamp.mjs stamp",
     "dev": "tsup --watch",
     "test": "vitest run",
     "test:run": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "check:dist": "node ../../scripts/dist-stamp.mjs check"
   },
   "peerDependencies": {
-    "react": ">=16.8.0"
+    "react": ">=16.8.0",
+    "nostr-tools": ">=2.0.0",
+    "nostr-wot-sdk": "^3.0.0"
   },
   "peerDependenciesMeta": {
     "react": {
+      "optional": true
+    },
+    "nostr-wot-sdk": {
       "optional": true
     }
   },
   "sideEffects": false,
   "devDependencies": {
-    "vitest": "^4.0.18"
-  }
+    "vitest": "^4.0.18",
+    "fake-indexeddb": "^6.0.0",
+    "tsup": "^8.0.1",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {}
 }

@@ -5,7 +5,7 @@ import {
   Nip46Signer,
   type NostrConnectHandle,
   type NostrSigner,
-} from "@nostr-wot/signers";
+} from "nostr-wot-sdk/signers";
 import { generateSecretKey, nip19 } from "nostr-tools";
 import QRCode from "qrcode";
 import {

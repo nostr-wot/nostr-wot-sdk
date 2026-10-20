@@ -5,7 +5,7 @@ import {
   Nip07Signer,
   isNip07Available,
   type NostrSigner,
-} from "@nostr-wot/signers";
+} from "nostr-wot-sdk/signers";
 
 export interface Nip07MethodExtras {
   // Reserved for parity with other methods. NIP-07 has no extra material.

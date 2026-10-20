@@ -1,6 +1,6 @@
 # Passkey recovery for applications
 
-The `@nostr-wot/vault` recovery APIs support a single private key, a seed payload, or a complete vault snapshot. Full-vault recovery is the recommended default for an app that manages multiple accounts. Recovery is separate from event archives and from the password-only `Vault` class lifecycle.
+The `@nostr-wot/identity/vault` recovery APIs support a single private key, a seed payload, or a complete vault snapshot. Full-vault recovery is the recommended default for an app that manages multiple accounts. Recovery is separate from event archives and from the password-only `Vault` class lifecycle.
 
 ## Platform boundary
 
@@ -30,7 +30,7 @@ Required event tags are `d`, `rp`, `algo=aes-256-gcm`, `kdf=hkdf-sha256` and `v`
 import {
   saveRecovery, restoreRecovery, serializePasskeyBackup,
   type RecoveryProvider, type RecoveryTransport,
-} from '@nostr-wot/vault';
+} from '@nostr-wot/identity/vault';
 
 // Implement these using your existing native/browser credential and relay clients.
 const provider: RecoveryProvider = myPasskeyAdapter;

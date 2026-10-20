@@ -1,1 +1,21 @@
-export * from '@nostr-wot/relay';
+export { QueryBatcher } from './QueryBatcher';
+export { RelayPool } from './RelayPool';
+export { RelayStats } from './RelayStats';
+export { RelayManager, type RelayManagerOptions } from './RelayManager';
+
+export type {
+  PoolLike,
+  SubCloser,
+  NostrEvent,
+  NostrFilter,
+  QueryBatcherOptions,
+  QueryOptions,
+  RelayPoolOptions,
+  RelayStatus,
+  RelayStatsOptions,
+  RelayMetrics,
+  RelayStatsData,
+  RelayStatsPersistence,
+} from './types';
+
+export { parseRelayUrl, isPublicWssUrl, type RelayUrlPolicy, type ParseRelayUrlOptions } from './url';

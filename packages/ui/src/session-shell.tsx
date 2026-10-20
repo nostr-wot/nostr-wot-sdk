@@ -7,7 +7,7 @@ import {
   useSession,
   type NostrSessionProviderProps as BaseProviderProps,
   type SessionSigner,
-} from "@nostr-wot/data/react";
+} from "nostr-wot-sdk/data/react";
 import {
   localStorageSignerStorage,
   type SignerStorage,

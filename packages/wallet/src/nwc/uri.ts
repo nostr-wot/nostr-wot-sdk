@@ -13,7 +13,7 @@
  * No app imports: a mini-package.
  */
 import { normalizeURL } from 'nostr-tools/utils';
-import { parseRelayUrl } from '@nostr-wot/relay';
+import { parseRelayUrl } from 'nostr-wot-sdk/relay';
 import { getPublicKey } from 'nostr-tools/pure';
 import { NwcError } from './errors';
 

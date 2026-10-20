@@ -1,4 +1,6 @@
-# @nostr-wot/permissions
+# @nostr-wot/identity/permissions
+
+> Package consolidation: this is the API guide for `@nostr-wot/identity/permissions`. The former `@nostr-wot/permissions` package is a deprecated compatibility re-export. Install the owning package shown below; a subpath is an import, not an npm package. See the [migration guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md).
 
 The authorization layer every `@nostr-wot/*` signer funnels through: given a caller, a method and an event kind, may this happen.
 
@@ -7,14 +9,12 @@ NIP-07 in a browser extension, NIP-55 from an Android app and NIP-46 from a remo
 ## Install
 
 ```bash
-npm i @nostr-wot/permissions
+npm i @nostr-wot/identity
 ```
 
 ### Module format
 
-ESM only, as every package in this release is. `import` it, or `await import()` it from CommonJS; there is no `require` entry point. One format rather than two is deliberate: a dual CJS/ESM build can be loaded twice in one process, once per format, and a package that holds state (a vault session, a bunker's client and secret registries) would then keep two of it, which in a signer is a defect rather than an inconvenience.
-
-The two packages the stack already published, `@nostr-wot/pq` and `@nostr-wot/signers`, do still ship CommonJS beside ESM. Dropping it there would break consumers who have it today, so it stays, and this is where that split is written down.
+Use ESM `import` as shown here. Module-format support is specific to the owning package and entry point; do not infer it from another package in the family. The identity entry points are ESM-only.
 
 ## The cascade
 
@@ -23,7 +23,7 @@ Three levels are consulted, most specific first: the kind-specific key (`signEve
 **Deny wins.** An explicit `deny` at any consulted level ends the matter. A kind-specific `allow` cannot override a method-level or wildcard `deny`, and a broad `*` allow cannot bypass a narrower deny. Only when nothing denies does specificity decide, in the order kind > method > wildcard. A bucket that says nothing about a request returns `ask`.
 
 ```ts
-import { resolve } from '@nostr-wot/permissions';
+import { resolve } from '@nostr-wot/identity/permissions';
 
 resolve({ '*': 'allow' }, 'signEvent', 1); // 'allow'
 resolve({ 'signEvent:1': 'allow', '*': 'deny' }, 'signEvent', 1); // 'deny'
@@ -50,8 +50,8 @@ Because of that collapse, nothing ever consults a raw `signEvent:4`, `:13`, `:14
 ## Usage
 
 ```ts
-import { MemoryStore } from '@nostr-wot/storage';
-import { Permissions } from '@nostr-wot/permissions';
+import { MemoryStore } from 'nostr-wot-sdk/storage';
+import { Permissions } from '@nostr-wot/identity/permissions';
 
 const permissions = new Permissions(new MemoryStore(), { logger: console });
 
@@ -88,7 +88,7 @@ A kind-22242 (NIP-42) or kind-27235 (NIP-98) event is not a publication, it is a
 So those events get their own question, with five parts instead of two.
 
 ```ts
-import { parseAuthentication, Permissions } from '@nostr-wot/permissions';
+import { parseAuthentication, Permissions } from '@nostr-wot/identity/permissions';
 
 const permissions = new Permissions(store);
 
@@ -163,7 +163,9 @@ Keys and shape are the browser extension's, unchanged, so a migrated extension r
 
 ## Host requirements
 
-The `@nostr-wot` shared packages (`storage`, `accounts`, `vault`, `permissions`, `signer-core`) run on one rule: nothing platform-specific is reached for, and what a host must supply is injected or declared. Two globals are declared requirements of the family rather than avoided, because `@noble/hashes` and `@noble/ciphers` use them internally and the vault and accounts packages use them for the same UTF-8 conversions: **`TextEncoder`** and **`TextDecoder`**. Two more are required and easy to miss because nothing in these packages' own source names them: **`crypto.getRandomValues`** on `globalThis`, which `@noble`'s `randomBytes` reaches for (the vault's salt, IV and cache key; the ncryptsec salt and nonce) and THROWS without — on Hermes that means importing `react-native-get-random-values` before anything else — and timers, **`setTimeout`** / `clearTimeout`, which run the vault's auto-lock and the queue's request timeout, and **`AbortController`**, which the queue hands a remote signer port so a timeout, a switch or a disposal can abort the call in flight. Two more come in with the post-quantum path: **`atob`** and **`btoa`**, which `@nostr-wot/pq`'s base64 helpers reach for (with a `Buffer` fallback Hermes does not have either) to decode a stored ML-KEM key and to read a payload's envelope header. Missing them throws nothing; it silently makes every hybrid payload unrecognisable, which is why they are declared here rather than left to be discovered. Node, browsers and React Native 0.74 or newer have all seven except that React Native has to polyfill the random source. Storage, the clock and password stretching are injected as ports. `structuredClone`, `URL`, WebCrypto's `subtle`, the DOM and the WebExtension namespaces are never used, and `packages/vault/test/boundaries.test.ts` plus the ESLint config enforce that.
+The portable account, vault, permission and signing modules use injected storage and host ports. They require `TextEncoder`, `TextDecoder`, secure `crypto.getRandomValues`, timers and `AbortController`; post-quantum paths additionally require `atob`/`btoa` or the supported Buffer fallback. Initialize the necessary React Native/Hermes polyfills before importing these modules, including `react-native-get-random-values` for secure randomness. Do not substitute a non-cryptographic random source.
+
+The portable cryptographic core does not require the DOM, WebExtension APIs or WebCrypto `subtle`. Platform adapters such as WebAuthn ceremonies and relay transports have their own requirements. See the [identity runtime guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/packages/identity/README.md#runtime-requirements).
 
 This package itself uses neither `TextEncoder` nor `TextDecoder`, and clones the permission tree with a JSON round trip. Its origin parsing is its own and never consults the host's `URL`.
 

@@ -80,7 +80,7 @@ That's it. Four files. `<5min` of work.
 
 ```ts
 import { loginWithSigner, fetchMe, logout } from "@nostr-wot/auth/client";
-import { Nip07Signer } from "@nostr-wot/signers";
+import { Nip07Signer } from "nostr-wot-sdk/signers";
 
 const signer = new Nip07Signer();
 const { jwt, pubkey } = await loginWithSigner({

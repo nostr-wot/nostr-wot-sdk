@@ -1,128 +1,104 @@
-# @nostr-wot/relay
+# nostr-wot-sdk/relay
+
+> Package consolidation: this is the API guide for `nostr-wot-sdk/relay`. The former `@nostr-wot/relay` package is a deprecated compatibility re-export. Install the owning package shown below; a subpath is an import, not an npm package. See the [migration guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md).
 
 Low-level Nostr relay utilities. A pool that manages WebSocket connections, a query batcher that merges concurrent filters, and a stats tracker that records per-relay latency / success rates. Extracted from the WoT SDK so any Nostr project can use these primitives without pulling in WoT scoring code.
 
-> Most apps want **`@nostr-wot/data`** instead — it builds on top of these primitives and exposes higher-level fetchers (profiles, notes, threads, follows). Reach for `@nostr-wot/relay` only when you need to roll your own data layer or instrument relay performance.
+> Most apps want **`nostr-wot-sdk/data`** instead — it builds on top of these primitives and exposes higher-level fetchers (profiles, notes, threads, follows). Reach for `nostr-wot-sdk/relay` only when you need to roll your own data layer or instrument relay performance.
 
 ## Install
 
 ```bash
-npm i @nostr-wot/relay nostr-tools
+npm i nostr-wot-sdk nostr-tools
 ```
 
 ## Two entrypoints
 
 | Import path | What's in it |
 |---|---|
-| `@nostr-wot/relay` | `RelayPool`, `RelayManager`, `QueryBatcher`, `RelayStats` |
-| `@nostr-wot/relay/react` | React provider + hooks for the above |
+| `nostr-wot-sdk/relay` | `RelayPool`, `RelayManager`, `QueryBatcher`, `RelayStats` |
+| `nostr-wot-sdk/relay/react` | React provider + hooks for the above |
 
-## What's in the box
+## RelayPool
 
-### `RelayPool`
-
-A drop-in replacement for `nostr-tools`' `SimplePool` with reconnect handling and pluggable WebSocket implementations (e.g. for binary-frame coercion behind compressing proxies).
+Wrap a compatible `PoolLike` transport with configured relay URLs, batching, subscriptions and connection status. `RelayPool` is not a drop-in `SimplePool` replacement; pass a `SimplePool` instance through `pool` or initialize one with `ensurePool`.
 
 ```ts
-import { RelayPool } from "@nostr-wot/relay";
+import { SimplePool } from "nostr-tools";
+import { RelayPool } from "nostr-wot-sdk/relay";
 
 const pool = new RelayPool({
-  relays: ["wss://relay.damus.io", "wss://nos.lol"],
-  websocketImplementation: MyWebSocket,
+  urls: ["wss://relay.damus.io", "wss://nos.lol"],
+  pool: new SimplePool(),
 });
-
-const sub = pool.subscribeMany(
-  pool.relays(),
-  [{ kinds: [1], limit: 50 }],
-  {
-    onevent: (e) => { /* ... */ },
-    oneose: () => { /* ... */ },
-  },
+const subscription = pool.subscribe(
+  { kinds: [1], limit: 50 },
+  { onEvent: event => console.log(event.id) },
 );
-
-await pool.publish(pool.relays(), signedEvent);
-sub.close();
+await pool.publish(signedEvent);
+subscription.close();
+pool.destroy();
 ```
 
-### `RelayManager`
+`query(filter)` batches reads; `queryImmediate(filter)` flushes immediately. `getUrls`, `setUrls`, `addRelay` and `removeRelay` manage relay selection. `getStatuses` returns a map of connection booleans, and `getConnectedCount` counts connected relays. A subscription reports `connected`, `eose` or `disconnected`; close its returned handle on teardown. Calling `subscribe` before initializing the underlying pool throws.
 
-Higher-level orchestrator: tracks which relays are connected, applies a per-relay reconnect policy, surfaces a status observable for UIs.
+## QueryBatcher
+
+Merge compatible reads over a supplied transport. The default debounce window is 100 ms; the default first-event timeout is 3000 ms and maximum subscription wait is 5000 ms. Supply options to the constructor's second argument.
 
 ```ts
-import { RelayManager } from "@nostr-wot/relay";
+import { SimplePool } from "nostr-tools";
+import { QueryBatcher } from "nostr-wot-sdk/relay";
 
-const manager = new RelayManager({
-  relays: ["wss://relay.damus.io"],
-  reconnectBackoffMs: [1000, 5000, 15000],
-});
-
-manager.onStatusChange((url, status) => {
-  // status: "connecting" | "connected" | "closed" | "error"
-});
-
-await manager.connect();
+const transport = new SimplePool();
+const urls = ["wss://relay.damus.io"];
+const batcher = new QueryBatcher(transport, { debounceMs: 100 });
+const events = await batcher.query(urls, { kinds: [0], authors: [pubkey] });
+batcher.destroy();
+transport.close(urls);
 ```
 
-### `QueryBatcher`
+Use `queryImmediate` when a user action should not wait for debounce. `nostr-wot-sdk/data` also exposes its higher-level shared subscription coalescer for applications using the social-data fetchers.
 
-Merges concurrent reads with the same relay-set into a single REQ within a debounce window. Useful when many components ask for different events at once and you want to coalesce them on the wire.
+## RelayStats
+
+Track success counts, failures, average latency and backoff per relay. Persistence is optional and injected through `init(adapter)`; there is no default localStorage persistence.
 
 ```ts
-import { QueryBatcher } from "@nostr-wot/relay";
+import { RelayStats } from "nostr-wot-sdk/relay";
 
-const batcher = new QueryBatcher(pool, {
-  debounceMs: 50,
-  subscriptionTimeoutMs: 8000,
-});
-
-const events = await batcher.querySync(
-  [{ kinds: [0], authors: [pubkey] }],
-  { relays: ["wss://relay.damus.io"], timeoutMs: 5000 },
-);
+const stats = new RelayStats();
+await stats.init();
+stats.recordSuccess("wss://relay.damus.io", 142);
+stats.recordFailure("wss://nos.lol");
+const metrics = stats.getMetrics("wss://relay.damus.io");
+const urls = stats.getPrioritizedUrls(["wss://relay.damus.io", "wss://nos.lol"]);
+stats.destroy();
 ```
 
-If you're using `@nostr-wot/data`, the `sharedCoalescer` exported from there is a singleton `QueryBatcher`-equivalent that the entire SDK shares.
+`getAllMetrics` reads all relay metrics, `isBackedOff` reports active backoff, and `persist` saves through the configured adapter. Destroy the tracker when its owner is disposed.
 
-### `RelayStats`
+## RelayManager
 
-Per-relay metrics: latency, EOSE timings, success/error counts. Persists optionally via a pluggable `RelayStatsPersistence` (defaults to `localStorage`).
+`RelayManager` is an abstract feed-lifecycle base class that composes a pool, batcher and statistics. Subclass it and implement `getRelayUrls`, `persistRelayUrls`, `getTimeWindowSeconds` and `getLatestCachedTimestamp` to connect application settings and caches. For a general-purpose relay client, use `RelayPool` directly.
 
-```ts
-import { RelayStats } from "@nostr-wot/relay";
-
-const stats = new RelayStats({
-  persistence: { kind: "localStorage", namespace: "myapp" },
-});
-
-stats.recordLatency("wss://relay.damus.io", 142);
-const metrics = stats.snapshot("wss://relay.damus.io");
-// → { medianLatencyMs, successCount, errorCount, ... }
-```
-
-## React (`/react`)
+## React
 
 ```tsx
-import { RelayPoolProvider, useRelayPool, useRelayStats } from "@nostr-wot/relay/react";
+import { SimplePool } from "nostr-tools";
+import { RelayProvider, useRelayStatuses } from "nostr-wot-sdk/relay/react";
 
-<RelayPoolProvider relays={["wss://relay.damus.io"]}>
-  <App />
-</RelayPoolProvider>;
+<RelayProvider urls={["wss://relay.damus.io"]} createPool={() => new SimplePool()}>
+  <StatusBadge />
+</RelayProvider>;
 
 function StatusBadge() {
-  const { connectedCount, totalCount } = useRelayPool();
-  return <span>{connectedCount}/{totalCount} relays</span>;
+  const { connectedCount, statuses } = useRelayStatuses();
+  return <span>{connectedCount}/{statuses.size} relays</span>;
 }
 ```
 
-## Types
-
-```ts
-interface RelayPoolOptions { relays: string[]; websocketImplementation?: typeof WebSocket; }
-type RelayStatus = "connecting" | "connected" | "closed" | "error";
-interface RelayMetrics { medianLatencyMs: number; successCount: number; errorCount: number; }
-```
-
-See `src/types.ts` for the full surface.
+`useRelayPool` returns the `RelayPool` instance, `useQueryBatcher` returns its batcher, and `useRelayStats` returns a tracker or `null` when statistics are disabled. These hooks require `RelayProvider`. Install React separately when using this entry point.
 
 ## License
 
@@ -136,7 +112,7 @@ Parsing does not infer a scheme, sort query parameters, remove fragments, or str
 
 ## RelayHub
 
-Import `createRelayHub`, `getRelayHub`, `currentRelayHub`, and the hub types from `@nostr-wot/relay/hub`. The hub owns subscriptions, queries, publishing, authentication leases, bounded caches, and identity-scoped pooled connections. `createRelayHub(options)` creates an independent instance; `getRelayHub(options)` shares one module-level instance and honors options only on first creation. `currentRelayHub()` observes that singleton without creating it. Use one package installation/import mode for callers that must share it.
+Import `createRelayHub`, `getRelayHub`, `currentRelayHub`, and the hub types from `nostr-wot-sdk/relay/hub`. The hub owns subscriptions, queries, publishing, authentication leases, bounded caches, and identity-scoped pooled connections. `createRelayHub(options)` creates an independent instance; `getRelayHub(options)` shares one module-level instance and honors options only on first creation. `currentRelayHub()` observes that singleton without creating it. Use one package installation/import mode for callers that must share it.
 
 `FakeRelayFactory` supports deterministic transport tests without network sockets. `resetRelayHubForTests()` disposes and clears the shared instance between tests. The hub subpath is separate from the default relay utilities, so consumers needing URL validation do not load the connection manager.
 

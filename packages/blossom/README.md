@@ -1,20 +1,22 @@
-# @nostr-wot/blossom
+# nostr-wot-sdk/blossom
+
+> Package consolidation: this is the API guide for `nostr-wot-sdk/blossom`. The former `@nostr-wot/blossom` package is a deprecated compatibility re-export. Install the owning package shown below; a subpath is an import, not an npm package. See the [migration guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md).
 
 [Blossom](https://github.com/hzrd149/blossom) content-addressed uploads, mirrors, and deletion, with signed [BUD-11 authorization](https://github.com/hzrd149/blossom/blob/master/buds/11.md) and validated [BUD-02 descriptors](https://github.com/hzrd149/blossom/blob/master/buds/02.md).
 
 ## Install
 
 ```bash
-npm i @nostr-wot/blossom nostr-tools
+npm i nostr-wot-sdk nostr-tools
 ```
 
 ## Upload
 
-Supply any signer exposing an asynchronous `signEvent` method, including the signers in `@nostr-wot/signers`:
+Supply any signer exposing an asynchronous `signEvent` method, including the signers in `nostr-wot-sdk/signers`:
 
 ```ts
-import { uploadToBlossom } from "@nostr-wot/blossom";
-import { Nip07Signer } from "@nostr-wot/signers";
+import { uploadToBlossom } from "nostr-wot-sdk/blossom";
+import { Nip07Signer } from "nostr-wot-sdk/signers";
 
 const blob = await uploadToBlossom(file, {
   signer: new Nip07Signer(),
@@ -34,7 +36,7 @@ Public uploads use one signature across servers by default. Set `bindAuthToServe
 Encrypt the attachment before calling this helper. It creates a fresh disposable signing identity for each upload, uses that identity across its fallback attempts, and scopes each authorization to the destination server. Both upload destinations and returned URLs must use HTTPS. The body is sent as `application/octet-stream`.
 
 ```ts
-import { uploadEncryptedBlob } from "@nostr-wot/blossom";
+import { uploadEncryptedBlob } from "nostr-wot-sdk/blossom";
 
 const blob = await uploadEncryptedBlob(ciphertext, {
   servers: ["https://my.blossom", "https://blossom.primal.net"],
@@ -64,7 +66,7 @@ When all servers fail, `BlossomUploadError` exposes a readonly `reasons` array c
 Mirroring downloads the original bytes and uploads to each target, returning descriptors for successful copies. Individual target failures do not discard successful results; a failure downloading the source rejects the operation.
 
 ```ts
-import { mirrorBlob } from "@nostr-wot/blossom";
+import { mirrorBlob } from "nostr-wot-sdk/blossom";
 
 const copies = await mirrorBlob(existingBlob.url, {
   signer,
@@ -78,7 +80,7 @@ const copies = await mirrorBlob(existingBlob.url, {
 Deletion returns the server's success status. The authorization is scoped to that server. A server may retain a blob referenced by other users.
 
 ```ts
-import { deleteBlob } from "@nostr-wot/blossom";
+import { deleteBlob } from "nostr-wot-sdk/blossom";
 
 const deleted = await deleteBlob(blob.sha256, {
   signer,

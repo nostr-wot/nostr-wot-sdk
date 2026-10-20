@@ -10,7 +10,7 @@ Two complementary helpers for Nostr-aware wallets:
 ## Install
 
 ```bash
-npm i @nostr-wot/wallet @nostr-wot/signers nostr-tools
+npm i @nostr-wot/wallet nostr-wot-sdk nostr-tools
 ```
 
 ## NIP-47 — Nostr Wallet Connect
@@ -65,7 +65,7 @@ The full zap flow: discover the recipient's LNURL endpoint from their profile, b
 
 ```ts
 import { requestZapInvoice } from "@nostr-wot/wallet";
-import { Nip07Signer } from "@nostr-wot/signers";
+import { Nip07Signer } from "nostr-wot-sdk/signers";
 
 const signer = new Nip07Signer();
 const { invoice, zapRequest } = await requestZapInvoice(signer, {
@@ -81,7 +81,7 @@ const { invoice, zapRequest } = await requestZapInvoice(signer, {
 await nwcClient.payInvoice({ invoice });
 ```
 
-The zap receipt (kind-9735) lands on the recipient's relays once the LNURL service publishes it; consumers can subscribe to `kinds: [9735], #e: [eventId]` to count zaps. The `parseZapMsats` helper in `@nostr-wot/data` decodes the receipt's bolt11 amount.
+The zap receipt (kind-9735) lands on the recipient's relays once the LNURL service publishes it; consumers can subscribe to `kinds: [9735], #e: [eventId]` to count zaps. The `parseZapMsats` helper in `nostr-wot-sdk/data` decodes the receipt's bolt11 amount.
 
 ### Lower-level
 

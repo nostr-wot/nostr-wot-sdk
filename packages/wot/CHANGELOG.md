@@ -1,5 +1,12 @@
 # @nostr-wot/wot
 
+## 3.0.0
+
+### Major changes
+
+- Own the local follow-graph implementation at `@nostr-wot/wot/graph` and its React integration at `/graph/react`, alongside the existing Oracle API. The former `@nostr-wot/graph` package becomes a compatibility re-export.
+- Require consumers of graph entry points to install the optional `nostr-wot-sdk` peer for relay transport. Oracle-only consumers do not need that peer. Preserve graph storage, crawl, scoring and cancellation behavior.
+
 ## 2.0.0
 
 ### Major Changes

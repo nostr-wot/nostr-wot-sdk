@@ -80,6 +80,9 @@ jobs:
       - name: Verify release
         run: npm run typecheck && npm run test:run
 
+      - name: Verify package layout and installed compatibility
+        run: npm run test:layout && npm run test:packed
+
       - name: Every packed tarball carries the dist that was just verified
         # No package rebuilds during pack or publish any more (there is no `prepack`), so the
         # tarball `npm publish` would upload has to hold exactly the bytes check:dist verified
@@ -114,3 +117,9 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: "true"
+
+      - name: Apply compatibility-package migration notices
+        run: npm run deprecate:compat -- --apply
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

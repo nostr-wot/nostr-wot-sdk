@@ -1,12 +1,10 @@
-# @nostr-wot/signer-core
+# @nostr-wot/identity/signing
 
-The signing pipeline every `@nostr-wot/*` host shares. A NIP-07 call in a browser extension,
-a NIP-46 `sign_event` from a relay, an Android NIP-55 intent and a LAN frame all become one
-`SignerRequest` and run through one `SignerCore.handle`. There is no path to a signature that
-does not pass through it.
+> Package consolidation: this is the API guide for `@nostr-wot/identity/signing`. The former `@nostr-wot/signer-core` package is a deprecated compatibility re-export. Install the owning package shown below; a subpath is an import, not an npm package. See the [migration guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md).
 
-This is the component that decides whether a caller gets a signature. It is a security
-control, not glue, and its order is fixed:
+The signing pipeline every `@nostr-wot/*` host shares. A NIP-07 call in a browser extension, a NIP-46 `sign_event` from a relay, an Android NIP-55 intent and a LAN frame all become one `SignerRequest` and run through one `SignerCore.handle`. There is no path to a signature that does not pass through it.
+
+This is the component that decides whether a caller gets a signature. It is a security control, not glue, and its order is fixed:
 
 1. Resolve the active account.
 2. Check permissions. A deny at any consulted level ends the request: it never reaches a
@@ -17,35 +15,26 @@ control, not glue, and its order is fixed:
 6. Zero key material.
 7. Record an activity entry, respond.
 
-Permissions are checked before lock state. A denied permission holds whether or not the key
-is available. Reordering these steps is a regression, not a refactor.
+Permissions are checked before lock state. A denied permission holds whether or not the key is available. Reordering these steps is a regression, not a refactor.
 
 ## Install
 
 ```bash
-npm i @nostr-wot/signer-core
+npm i @nostr-wot/identity
 ```
 
 ### Module format
 
-ESM only, as every package in this release is. `import` it, or `await import()` it from
-CommonJS; there is no `require` entry point. One format rather than two is deliberate: a dual
-CJS/ESM build can be loaded twice in one process, once per format, and a package that holds
-state (a vault session, a bunker's client and secret registries) would then keep two of it,
-which in a signer is a defect rather than an inconvenience.
-
-The two packages the stack already published, `@nostr-wot/pq` and `@nostr-wot/signers`, do
-still ship CommonJS beside ESM. Dropping it there would break consumers who have it today, so
-it stays, and this is where that split is written down.
+Use ESM `import` as shown here. Module-format support is specific to the owning package and entry point; do not infer it from another package in the family. The identity entry points are ESM-only.
 
 ## Use
 
 ```ts
-import { SignerCore } from '@nostr-wot/signer-core';
+import { SignerCore } from '@nostr-wot/identity/signing';
 
 const core = new SignerCore({
-  vault,        // @nostr-wot/vault
-  permissions,  // @nostr-wot/permissions
+  vault,        // @nostr-wot/identity/vault
+  permissions,  // @nostr-wot/identity/permissions
   identity,     // your source of truth for the active account, locked or not
   approval,     // your prompt: present(request, account) and cancel(origin, requestId, reason)
   activity,     // your log: record(entry)
@@ -60,32 +49,13 @@ const signed = await core.handle({
 });
 ```
 
-`handle` resolves with the method's result and rejects with a `SignerError` carrying a stable
-`code` for every refusal. A refusal is never a `null` or an empty result, and its message is
-always fixed text: whatever a port, a store, the vault or a cipher threw is given to the
-`logger` and to the activity entry's `reason`, never to the caller. `SignerError` carries
-`wireVisible: true`, which is what `@nostr-wot/bunker` checks before forwarding a message.
+`handle` resolves with the method's result and rejects with a `SignerError` carrying a stable `code` for every refusal. A refusal is never a `null` or an empty result, and its message is always fixed text: whatever a port, a store, the vault or a cipher threw is given to the `logger` and to the activity entry's `reason`, never to the caller. `SignerError` carries `wireVisible: true`, which is what `@nostr-wot/identity/bunker` checks before forwarding a message.
 
-`identity` is required. The permission check needs the account and runs before lock state is
-consulted, and a locked vault cannot name its account, so the host has to. Keep the active
-account id outside the vault, as the extension does.
+`identity` is required. The permission check needs the account and runs before lock state is consulted, and a locked vault cannot name its account, so the host has to. Keep the active account id outside the vault, as the extension does.
 
-Whenever the active account changes, call `core.onActiveAccountChanged(previousId, nextId)`.
-It rejects everything queued for the previous account and clears the `getPublicKey`
-cooldown, so a caller cannot receive the new account's identity from a prompt shown for the
-old one.
+Whenever the active account changes, call `core.onActiveAccountChanged(previousId, nextId)`. It rejects everything queued for the previous account and clears the `getPublicKey` cooldown, so a caller cannot receive the new account's identity from a prompt shown for the old one.
 
-When the host stops trusting a caller (a remote client revoked, a paired device removed, a
-site forgotten), call `core.revokeOrigin(originKey, reason?)`. It clears that origin's
-`getPublicKey` cooldown, which would otherwise admit a revoked client's next `connect`
-without a prompt for up to a minute, and rejects everything the origin has queued, prompts
-on screen included, and stops a batch already executing between items — the items it had
-already signed come back signed, the rest as `rejected` carrying the reason. The key is
-canonicalised as the boundary canonicalises it, and every spelling of a site is covered:
-`example.com` revokes `https://example.com` and `http://example.com:8080`, and the other way
-round. It is `onActiveAccountChanged` scoped to an origin. It is not a deny: store a
-permission for that. `core.clearCooldown(originKey)` is the narrow form, for re-asking
-without cutting the caller off.
+When the host stops trusting a caller (a remote client revoked, a paired device removed, a site forgotten), call `core.revokeOrigin(originKey, reason?)`. It clears that origin's `getPublicKey` cooldown, which would otherwise admit a revoked client's next `connect` without a prompt for up to a minute, and rejects everything the origin has queued, prompts on screen included, and stops a batch already executing between items — the items it had already signed come back signed, the rest as `rejected` carrying the reason. The key is canonicalised as the boundary canonicalises it, and every spelling of a site is covered: `example.com` revokes `https://example.com` and `http://example.com:8080`, and the other way round. It is `onActiveAccountChanged` scoped to an origin. It is not a deny: store a permission for that. `core.clearCooldown(originKey)` is the narrow form, for re-asking without cutting the caller off.
 
 ## Params per method
 
@@ -98,129 +68,35 @@ without cutting the caller off.
 | `nip04Decrypt`, `nip44Decrypt` | `{ pubkey, ciphertext }` |
 | `signPqAttestation` | none |
 
-Everything is validated by `validateRequest` at the boundary and nowhere else: an integer
-`kind`, a string `content`, an array of string arrays as `tags`, pubkeys as 64 lowercase hex
-characters, and the extension's size limits, applied before anything large is copied or
-serialised. What comes out is a frozen deep copy: the prompt shows it and the signer signs it,
-so the two cannot drift.
+Everything is validated by `validateRequest` at the boundary and nowhere else: an integer `kind`, a string `content`, an array of string arrays as `tags`, pubkeys as 64 lowercase hex characters, and the extension's size limits, applied before anything large is copied or serialised. What comes out is a frozen deep copy: the prompt shows it and the signer signs it, so the two cannot drift.
 
-Origins are canonical. A `web` identifier is either an http(s) origin, which is what a
-browser's `location.origin` is and what `@nostr-wot/permissions` keys on — canonicalised by
-that package's own `canonicalHttpOrigin` (scheme and host lowercased, a default port dropped,
-credentials or a path refused; never the host's `URL`, which on React Native folds nothing),
-with `http://` and `https://` as different keys and the legacy bare-hostname rule read
-underneath — or a bare hostname, lower-cased with trailing dots removed. Anything else with
-a `:` is refused, so a web caller cannot spell another transport's namespace; that includes a
-bare `localhost:3000` or `[::1]`, which arrive as `http://localhost:3000` and `http://[::1]:8080`
-anyway. A `nip46` identifier is a lowercase hex pubkey.
+Origins are canonical. A `web` identifier is either an http(s) origin, which is what a browser's `location.origin` is and what `@nostr-wot/identity/permissions` keys on — canonicalised by that package's own `canonicalHttpOrigin` (scheme and host lowercased, a default port dropped, credentials or a path refused; never the host's `URL`, which on React Native folds nothing), with `http://` and `https://` as different keys and the legacy bare-hostname rule read underneath — or a bare hostname, lower-cased with trailing dots removed. Anything else with a `:` is refused, so a web caller cannot spell another transport's namespace; that includes a bare `localhost:3000` or `[::1]`, which arrive as `http://localhost:3000` and `http://[::1]:8080` anyway. A `nip46` identifier is a lowercase hex pubkey.
 
-The envelope is bounded too, before anything is copied: `id` at 256 characters,
-`origin.identifier` at 512, `origin.displayName` at 128 and `origin.icon` at 2048. All four are
-written verbatim into every activity entry, denied requests included, so an unbounded one would
-let any connected page fill the user's storage. An opaque origin (`location.origin === 'null'`:
-a sandboxed iframe, a `data:` page, Chrome's `file://`) is refused as a web identifier, because
-every such page reports the same string and one remembered allow would cover all of them.
+The envelope is bounded too, before anything is copied: `id` at 256 characters, `origin.identifier` at 512, `origin.displayName` at 128 and `origin.icon` at 2048. All four are written verbatim into every activity entry, denied requests included, so an unbounded one would let any connected page fill the user's storage. An opaque origin (`location.origin === 'null'`: a sandboxed iframe, a `data:` page, Chrome's `file://`) is refused as a web identifier, because every such page reports the same string and one remembered allow would cover all of them.
 
 ## Post-quantum
 
-The extension already handles post-quantum payloads; a signer that shares its vault and
-does not is a bridge that drops messages, which is worse than one that refuses them. So
-the pipeline does what the extension does, spelled the same, and the cryptography is
-`@nostr-wot/pq`'s: ML-KEM-1024 and ML-DSA-87 keys, the `kind:10203` attestation, the hybrid
-ML-KEM + NIP-44 envelope.
+The extension already handles post-quantum payloads; a signer that shares its vault and does not is a bridge that drops messages, which is worse than one that refuses them. So the pipeline does what the extension does, spelled the same, and the cryptography is `@nostr-wot/pq`'s: ML-KEM-1024 and ML-DSA-87 keys, the `kind:10203` attestation, the hybrid ML-KEM + NIP-44 envelope.
 
-**Keys.** An account's post-quantum keys are resolved by `withPqKeys(vault, account, fn)`,
-in the extension's order: imported keys first (an account only holds them when it could
-not derive, and they are what its published attestation advertises), otherwise derived
-from the seed phrase at the account's own derivation path (`derivationPath`, else
-`derivationIndex`, else 0), so two sub-accounts on one seed do not share keys and an
-account restored at a custom path derives under that path. Nothing is stored: derived keys
-are recomputed per request from the mnemonic already in the vault. Only a 24-word phrase
-may derive; a 12-word phrase is refused (`unsupported`, "Post-quantum keys require a 24-word
-seed phrase") rather than handed a 128-bit key that looks strong, and an account with no
-phrase and no import is refused with "This account has no seed phrase, so it cannot use
-post-quantum keys". Those refusals reach the caller on purpose, after the permission gate
-and any prompt: `schemes` advertises what the signer accepts, not what the selected account
-can do, and the caller has to be able to tell the user which of the reasons it hit.
+**Keys.** An account's post-quantum keys are resolved by `withPqKeys(vault, account, fn)`, in the extension's order: imported keys first (an account only holds them when it could not derive, and they are what its published attestation advertises), otherwise derived from the seed phrase at the account's own derivation path (`derivationPath`, else `derivationIndex`, else 0), so two sub-accounts on one seed do not share keys and an account restored at a custom path derives under that path. Nothing is stored: derived keys are recomputed per request from the mnemonic already in the vault. Only a 24-word phrase may derive; a 12-word phrase is refused (`unsupported`, "Post-quantum keys require a 24-word seed phrase") rather than handed a 128-bit key that looks strong, and an account with no phrase and no import is refused with "This account has no seed phrase, so it cannot use post-quantum keys". Those refusals reach the caller on purpose, after the permission gate and any prompt: `schemes` advertises what the signer accepts, not what the selected account can do, and the caller has to be able to tell the user which of the reasons it hit.
 
-`withPqKeys` is the only path to the secrets. It hands its callback live key material and
-registers every secret with the vault through `withDerivedSecrets`, so one `lock()` zeroes
-the derived ML-KEM and ML-DSA keys where they are rather than whenever the callback happens
-to finish — exactly as `withPrivkey`'s copy is zeroed, and held to it by a test that locks
-mid-callback and reads all three. A result computed under a session that moved is voided,
-and no secret bytes are returned: a callback that hands the buffer back gets zeros. It is
-opened only for a request that needs it; a classic request never reads the seed phrase or
-the imported keys.
+`withPqKeys` is the only path to the secrets. It hands its callback live key material and registers every secret with the vault through `withDerivedSecrets`, so one `lock()` zeroes the derived ML-KEM and ML-DSA keys where they are rather than whenever the callback happens to finish — exactly as `withPrivkey`'s copy is zeroed, and held to it by a test that locks mid-callback and reads all three. A result computed under a session that moved is voided, and no secret bytes are returned: a callback that hands the buffer back gets zeros. It is opened only for a request that needs it; a classic request never reads the seed phrase or the imported keys.
 
-**Decrypt routes on the payload.** `nip44Decrypt` takes no flag. The envelope is
-self-describing (a version byte and an algorithm byte), so the boundary decides the route
-once (`scheme: 'pq' | 'classic'` on the validated params, required, never defaulted): a
-hybrid payload decrypts through the post-quantum path, a classic one through the path
-everyone uses today, byte for byte, and anything else fails as `operation_failed`. Never
-silently, never partially.
+**Decrypt routes on the payload.** `nip44Decrypt` takes no flag. The envelope is self-describing (a version byte and an algorithm byte), so the boundary decides the route once (`scheme: 'pq' | 'classic'` on the validated params, required, never defaulted): a hybrid payload decrypts through the post-quantum path, a classic one through the path everyone uses today, byte for byte, and anything else fails as `operation_failed`. Never silently, never partially.
 
-**And a broken hybrid payload is reported as hybrid.** `pq`'s `classifyEnvelope` answers three
-things where a boolean answered two: a whole envelope, one whose header names our version and
-which we cannot open (truncated, an algorithm byte we do not implement, base64 this host cannot
-decode), and somebody else's payload. The middle case used to come back false and be routed
-classic, so it failed as `operation_failed` with `scheme: 'classic'` in the activity log, which
-sends whoever is debugging it to NIP-44 code that never saw a payload like it. It now carries
-`scheme: 'pq'`, `envelope: 'unreadable'` on the validated params, and is refused with "This
-post-quantum payload is not a readable hybrid envelope" — in the caller's error and in the
-entry's `reason`. The header is read without a host base64 decoder for exactly this reason: a
-host missing `atob` would otherwise route every valid hybrid payload classic. A payload claiming
-a version we have never heard of is indistinguishable from a classic ciphertext of that version
-and stays classic; that is the limit of what the wire format allows, and it is not papered over.
+**And a broken hybrid payload is reported as hybrid.** `pq`'s `classifyEnvelope` answers three things where a boolean answered two: a whole envelope, one whose header names our version and which we cannot open (truncated, an algorithm byte we do not implement, base64 this host cannot decode), and somebody else's payload. The middle case used to come back false and be routed classic, so it failed as `operation_failed` with `scheme: 'classic'` in the activity log, which sends whoever is debugging it to NIP-44 code that never saw a payload like it. It now carries `scheme: 'pq'`, `envelope: 'unreadable'` on the validated params, and is refused with "This post-quantum payload is not a readable hybrid envelope" — in the caller's error and in the entry's `reason`. The header is read without a host base64 decoder for exactly this reason: a host missing `atob` would otherwise route every valid hybrid payload classic. A payload claiming a version we have never heard of is indistinguishable from a classic ciphertext of that version and stays classic; that is the limit of what the wire format allows, and it is not papered over.
 
-**Encrypt is opt-in, exactly as the extension.** `nip44Encrypt` seals hybrid only when the
-caller passes `opts: { scheme: 'pq', recipientKemKey }`, the recipient's ML-KEM-1024 key as
-2092 base64 characters from their `kind:10203`. It is never inferred from a relay lookup:
-that would put network I/O inside a signing operation and leave only two answers when the
-lookup fails, break every caller or fall back to classic silently, and a silent downgrade
-is the failure the whole scheme exists to prevent. The application that fetched the
-attestation passes the key it has. The options are validated at the boundary as the
-extension validates them, and any other spelling is `invalid_request` rather than classic.
-The sending account needs its own post-quantum keys too, as in the extension.
+**Encrypt is opt-in, exactly as the extension.** `nip44Encrypt` seals hybrid only when the caller passes `opts: { scheme: 'pq', recipientKemKey }`, the recipient's ML-KEM-1024 key as 2092 base64 characters from their `kind:10203`. It is never inferred from a relay lookup: that would put network I/O inside a signing operation and leave only two answers when the lookup fails, break every caller or fall back to classic silently, and a silent downgrade is the failure the whole scheme exists to prevent. The application that fetched the attestation passes the key it has. The options are validated at the boundary as the extension validates them, and any other spelling is `invalid_request` rather than classic. The sending account needs its own post-quantum keys too, as in the extension.
 
-**A remote account cannot do post-quantum, and is told so.** A bunker knows nothing about
-the envelope; it would answer a hybrid encrypt with classic ciphertext the caller cannot
-tell apart. A post-quantum request on a NIP-46 account is refused at the routing step,
-after the permission gate, before the remote port sees it: "Remote signers do not support
-post-quantum encryption", "Remote signers cannot read post-quantum messages". Classic
-requests still go to the bunker.
+**A remote account cannot do post-quantum, and is told so.** A bunker knows nothing about the envelope; it would answer a hybrid encrypt with classic ciphertext the caller cannot tell apart. A post-quantum request on a NIP-46 account is refused at the routing step, after the permission gate, before the remote port sees it: "Remote signers do not support post-quantum encryption", "Remote signers cannot read post-quantum messages". Classic requests still go to the bunker.
 
-**The attestation is a signing request like any other.** `signPqAttestation` builds and
-signs the account's own `kind:10203`: the ML-KEM and ML-DSA public keys, `origin: derived`
-with `seed_strength: 256` for keys from the seed or `origin: independent` with no seed
-strength for imported ones, the ML-DSA proof of possession, then the secp256k1 signature,
-in the extension's tag order. It runs the whole pipeline under the `signEvent` rule for kind
-10203: a stored deny on that kind, or on signing at all, refuses it without a prompt; a
-remembered approval is stored as `signEvent:10203`. The result is the signed event; the
-host publishes it. `verifyPqAttestation(event)` is the check for someone else's: kind,
-secp256k1 signature, then the tags, with `usable: false` and typed problems otherwise.
+**The attestation is a signing request like any other.** `signPqAttestation` builds and signs the account's own `kind:10203`: the ML-KEM and ML-DSA public keys, `origin: derived` with `seed_strength: 256` for keys from the seed or `origin: independent` with no seed strength for imported ones, the ML-DSA proof of possession, then the secp256k1 signature, in the extension's tag order. It runs the whole pipeline under the `signEvent` rule for kind 10203: a stored deny on that kind, or on signing at all, refuses it without a prompt; a remembered approval is stored as `signEvent:10203`. The result is the signed event; the host publishes it. `verifyPqAttestation(event)` is the check for someone else's: kind, secp256k1 signature, then the tags, with `usable: false` and typed problems otherwise.
 
-**And the prompt shows that event, not the method name.** The attestation is the one method
-whose event this pipeline computes rather than receives, so it computes it *before* asking and
-hands the approval port a `signEvent` request carrying the full `kind:10203` — every tag, the
-proof of possession, the `created_at` — which is what a host's existing event preview renders,
-with no case for a method name it has never heard of. The template the prompt shows is the
-template that gets signed: the proof of possession is randomised, so rebuilding it after
-approval would put a different event on the wire than the one the user saw.
+**And the prompt shows that event, not the method name.** The attestation is the one method whose event this pipeline computes rather than receives, so it computes it *before* asking and hands the approval port a `signEvent` request carrying the full `kind:10203` — every tag, the proof of possession, the `created_at` — which is what a host's existing event preview renders, with no case for a method name it has never heard of. The template the prompt shows is the template that gets signed: the proof of possession is randomised, so rebuilding it after approval would put a different event on the wire than the one the user saw.
 
-That has one visible consequence. Building the event needs the account's post-quantum keys, so
-for `signPqAttestation` the unlock runs **before** the prompt rather than after it, and an
-account whose keys cannot be resolved is refused instead of being asked. The alternative —
-prompt first, showing a preview — could only show the event with the proof of possession
-missing, because computing that is what needs the key; that is showing the user something other
-than what gets signed, on the one screen where the difference is the point. Opening the vault is
-not consent to sign: the permission cascade short-circuits a deny before any unlock, the prompt
-still follows, and a refusal still refuses. The cost is a biometric before the approval screen
-instead of after it, which is a user-experience cost and not a security one. The activity entry
-keeps `method: 'signPqAttestation'` and now carries the event it signed, as a `signEvent` entry
-does.
+That has one visible consequence. Building the event needs the account's post-quantum keys, so for `signPqAttestation` the unlock runs **before** the prompt rather than after it, and an account whose keys cannot be resolved is refused instead of being asked. The alternative — prompt first, showing a preview — could only show the event with the proof of possession missing, because computing that is what needs the key; that is showing the user something other than what gets signed, on the one screen where the difference is the point. Opening the vault is not consent to sign: the permission cascade short-circuits a deny before any unlock, the prompt still follows, and a refusal still refuses. The cost is a biometric before the approval screen instead of after it, which is a user-experience cost and not a security one. The activity entry keeps `method: 'signPqAttestation'` and now carries the event it signed, as a `signEvent` entry does.
 
-**What it costs.** ML-KEM and ML-DSA are not free, and everything below runs synchronously
-on the JavaScript thread. Measured on Node 24, Apple silicon, mean of 100:
+**What it costs.** ML-KEM and ML-DSA are not free, and everything below runs synchronously on the JavaScript thread. Measured on Node 24, Apple silicon, mean of 100:
 
 | Operation | Time |
 | --- | --- |
@@ -231,15 +107,9 @@ on the JavaScript thread. Measured on Node 24, Apple silicon, mean of 100:
 | of which: seed phrase to keys, per request (PBKDF2-SHA512 then two keygens) | 15.5 ms |
 | of which: ML-DSA-87 sign (proof of possession; rejection sampling, so it varies) | 25.7 ms (max 121 ms) |
 
-Fifteen of every post-quantum request's milliseconds are the per-request derivation the
-extension also pays. Hermes without a JIT is commonly 10 to 30 times slower than V8 on
-this kind of arithmetic, so a host on a phone should expect a few hundred milliseconds per
-post-quantum message and a second or more for the attestation. Measure on the device before
-deciding whether to move the work off the UI thread.
+Fifteen of every post-quantum request's milliseconds are the per-request derivation the extension also pays. Hermes without a JIT is commonly 10 to 30 times slower than V8 on this kind of arithmetic, so a host on a phone should expect a few hundred milliseconds per post-quantum message and a second or more for the attestation. Measure on the device before deciding whether to move the work off the UI thread.
 
-A batch of N post-quantum items is N of those in a row, and it **yields between every one**,
-which is the only reason it is usable on a phone. Same harness, Node 24 on Apple silicon, one
-64-item batch per row, with a 1 ms timer running alongside it:
+A batch of N post-quantum items is N of those in a row, and it **yields between every one**, which is the only reason it is usable on a phone. Same harness, Node 24 on Apple silicon, one 64-item batch per row, with a 1 ms timer running alongside it:
 
 | 64-item batch | Total | Longest unbroken block | Timer ticks during the batch |
 | --- | --- | --- | --- |
@@ -248,24 +118,13 @@ which is the only reason it is usable on a phone. Same harness, Node 24 on Apple
 | post-quantum `nip44Encrypt` | 1430 ms (was 1354) | 23.9 ms (was 1354) | 63 (was 0) |
 | `signPqAttestation` | 2847 ms (was 2778) | 70.5 ms (was 2778) | 63 + 63 (was 0) |
 
-The totals are ~1 ms per item worse, which is the clamped timer, and the longest stretch the
-thread is busy falls from the whole batch to one operation. Before this, a 1 ms timer running
-next to a 64-item batch did not fire at all until the batch was over: everything the pipeline
-awaits between items is a microtask, and a microtask runs before the next timer, before layout
-and before a touch handler. So the batch was one contiguous block — 1.4 s of it on Node, tens
-of seconds under Hermes, on a device the user could not interact with. Batching exists because
-iOS charges a gesture per signature, so a batch that freezes the phone defeats its own purpose.
+The totals are ~1 ms per item worse, which is the clamped timer, and the longest stretch the thread is busy falls from the whole batch to one operation. Before this, a 1 ms timer running next to a 64-item batch did not fire at all until the batch was over: everything the pipeline awaits between items is a microtask, and a microtask runs before the next timer, before layout and before a touch handler. So the batch was one contiguous block — 1.4 s of it on Node, tens of seconds under Hermes, on a device the user could not interact with. Batching exists because iOS charges a gesture per signature, so a batch that freezes the phone defeats its own purpose.
 
-The work itself is unchanged: 64 post-quantum items still cost what 64 post-quantum items cost,
-and a host that wants a smaller unit sends a smaller batch. What changed is that the device
-stays alive through it, a host can show progress, and `revokeOrigin` is honoured in the same
-gap. Nothing is cancelled by the yield, and `handle` for a single request is untouched.
+The work itself is unchanged: 64 post-quantum items still cost what 64 post-quantum items cost, and a host that wants a smaller unit sends a smaller batch. What changed is that the device stays alive through it, a host can show progress, and `revokeOrigin` is honoured in the same gap. Nothing is cancelled by the yield, and `handle` for a single request is untouched.
 
 ## Batches
 
-One request carrying many items, one approval, many signatures. On iOS every signature costs
-a user gesture that nothing can suppress, so ten reactions and two zaps are twelve prompts,
-roughly a minute of the user's attention; one batch is one prompt.
+One request carrying many items, one approval, many signatures. On iOS every signature costs a user gesture that nothing can suppress, so ten reactions and two zaps are twelve prompts, roughly a minute of the user's attention; one batch is one prompt.
 
 ```ts
 const result = await core.handleBatch({
@@ -284,8 +143,7 @@ for (const item of result.items) {
 }
 ```
 
-A batch is a first-class request, not a loop over single ones, and it runs the same pipeline
-in the same order. What differs is deliberate, and each rule is written on `#runBatch`:
+A batch is a first-class request, not a loop over single ones, and it runs the same pipeline in the same order. What differs is deliberate, and each rule is written on `#runBatch`:
 
 - **Every item is shown.** The `ApprovalPort` gets `presentBatch(batch, account)` with the
   whole frozen batch: every item, full content, every tag. It is answered once, for the whole
@@ -335,31 +193,15 @@ in the same order. What differs is deliberate, and each rule is written on `#run
   are refused as items; a transport answers them through `handle`. A remote (NIP-46) account
   cannot batch: the bunker runs its own approval per request.
 
-Every item lands in the activity log under its own id with `batchId` set, whatever happened.
-`onActiveAccountChanged` rejects a queued batch as it rejects a single request, and the
-port's `cancel` names the batch id.
+Every item lands in the activity log under its own id with `batchId` set, whatever happened. `onActiveAccountChanged` rejects a queued batch as it rejects a single request, and the port's `cancel` names the batch id.
 
 ## Remote signers
 
-A remote (`nip46`) account's `signEvent` goes out through `RemoteSignerPort.execute`, and what
-comes back is verified before the caller sees it: the author is the account the request was
-resolved for, the kind, content and tags are the ones the request named, a stated `created_at`
-came back unchanged (an unstated one is the remote's to choose, as it is locally), and the
-signature verifies. Only the seven fields a signature covers are returned, so a decorated reply
-cannot smuggle unverified data into an object a caller treats as verified. A bunker is a separate
-process reached over relays; unverified, it can return a signature over a different event than
-the one asked for, which the caller then publishes as the account's own words.
+A remote (`nip46`) account's `signEvent` goes out through `RemoteSignerPort.execute`, and what comes back is verified before the caller sees it: the author is the account the request was resolved for, the kind, content and tags are the ones the request named, a stated `created_at` came back unchanged (an unstated one is the remote's to choose, as it is locally), and the signature verifies. Only the seven fields a signature covers are returned, so a decorated reply cannot smuggle unverified data into an object a caller treats as verified. A bunker is a separate process reached over relays; unverified, it can return a signature over a different event than the one asked for, which the caller then publishes as the account's own words.
 
-The refusals are named separately, because they are different things for a host to report:
-`author_mismatch` for another key's signature, and `operation_failed` with
-`Remote signer changed the approved event`, `... did not return an event`,
-`... did not return a signed event` or `... returned an invalid signature`.
+The refusals are named separately, because they are different things for a host to report: `author_mismatch` for another key's signature, and `operation_failed` with `Remote signer changed the approved event`, `... did not return an event`, `... did not return a signed event` or `... returned an invalid signature`.
 
-One trap worth knowing if you write your own verification: `nostr-tools` memoises verification on
-a module-private symbol that `finalizeEvent` stamps, and an object spread copies own symbol
-properties. A port that uses `nostr-tools` itself can sign one event, spread it with a different
-`id`, and hand back something `verifyEvent` returns `true` for. Verification here runs on a
-freshly built plain object, which carries no such stamp.
+One trap worth knowing if you write your own verification: `nostr-tools` memoises verification on a module-private symbol that `finalizeEvent` stamps, and an object spread copies own symbol properties. A port that uses `nostr-tools` itself can sign one event, spread it with a different `id`, and hand back something `verifyEvent` returns `true` for. Verification here runs on a freshly built plain object, which carries no such stamp.
 
 ## Optional ports
 
@@ -372,75 +214,33 @@ freshly built plain object, which carries no such stamp.
 
 ## Queue
 
-`MAX_PENDING_PER_ORIGIN` (5) caps the prompts one origin may have open; unlock markers and
-in-flight remote work do not count toward it, and are bounded by the in-flight caps instead.
-`REQUEST_TIMEOUT_MS` (120 s) rejects anything unanswered. `core.pending()` lists what is
-waiting, for a badge or a list; `core.cancel(origin, id)` settles one from the host's side, and
-the port's `cancel(origin, id, reason)` is told the origin for the same reason,
-scoped to the origin because NIP-46 request ids are chosen by the client.
+`MAX_PENDING_PER_ORIGIN` (5) caps the prompts one origin may have open; unlock markers and in-flight remote work do not count toward it, and are bounded by the in-flight caps instead. `REQUEST_TIMEOUT_MS` (120 s) rejects anything unanswered. `core.pending()` lists what is waiting, for a badge or a list; `core.cancel(origin, id)` settles one from the host's side, and the port's `cancel(origin, id, reason)` is told the origin for the same reason, scoped to the origin because NIP-46 request ids are chosen by the client.
 
-## Wiring to `@nostr-wot/bunker`
+## Wiring to `@nostr-wot/identity/bunker`
 
-Pass `handlerTimeoutMs: 0` to the bunker. This pipeline owns the request timeout; two
-120-second clocks on one request race each other and leave one side holding a live entry.
+Pass `handlerTimeoutMs: 0` to the bunker. This pipeline owns the request timeout; two 120-second clocks on one request race each other and leave one side holding a live entry.
 
 ## Permission keys
 
-A web identifier is stored as itself: the exact origin (`https://example.com`), or the bare
-hostname older stores used. Every other origin kind is prefixed: `nip46:<pubkey>`,
-`nip55:<package>`, `lan:<device>`, `local:<id>`. See `permissionOrigin`.
+A web identifier is stored as itself: the exact origin (`https://example.com`), or the bare hostname older stores used. Every other origin kind is prefixed: `nip46:<pubkey>`, `nip55:<package>`, `lan:<device>`, `local:<id>`. See `permissionOrigin`.
 
-An approved **authentication** event (kind 22242 for NIP-42, kind 27235 for NIP-98) is never
-remembered as a permission, however `remember` and `rememberKind` are set, and whether it arrived
-alone or in a batch. Such an event is a credential for the relay or HTTP service named in its own
-tags, and a permission keyed by method and kind names neither, so storing one grants "may
-authenticate to any destination this caller subsequently names":
-[GHSA-vx4h-56qj-wcp7][ghsa]. A remembered **refusal** is still stored, because deny wins and
-there is nothing broader to replace it with. The consent that can be remembered safely is a
-destination grant, on `Permissions.authentication` in
-[`@nostr-wot/permissions`](../permissions#authentication-destinations).
+An approved **authentication** event (kind 22242 for NIP-42, kind 27235 for NIP-98) is never remembered as a permission, however `remember` and `rememberKind` are set, and whether it arrived alone or in a batch. Such an event is a credential for the relay or HTTP service named in its own tags, and a permission keyed by method and kind names neither, so storing one grants "may authenticate to any destination this caller subsequently names": [GHSA-vx4h-56qj-wcp7][ghsa]. A remembered **refusal** is still stored, because deny wins and there is nothing broader to replace it with. The consent that can be remembered safely is a destination grant, on `Permissions.authentication` in [`@nostr-wot/identity/permissions`](../permissions#authentication-destinations).
 
 [ghsa]: https://github.com/advisories/GHSA-vx4h-56qj-wcp7
 
 ## Host requirements
 
-The `@nostr-wot` shared packages (`storage`, `accounts`, `vault`, `permissions`, `signer-core`)
-run on one rule: nothing platform-specific is reached for, and what a host must supply is
-injected or declared. Two globals are declared requirements of the family rather than
-avoided, because `@noble/hashes` and `@noble/ciphers` use them internally and the vault and
-accounts packages use them for the same UTF-8 conversions: **`TextEncoder`** and
-**`TextDecoder`**. Two more are required and easy to miss because nothing in these packages'
-own source names them: **`crypto.getRandomValues`** on `globalThis`, which `@noble`'s
-`randomBytes` reaches for (the vault's salt, IV and cache key; the ncryptsec salt and nonce)
-and THROWS without — on Hermes that means importing `react-native-get-random-values` before
-anything else — and timers, **`setTimeout`** / `clearTimeout`, which run the vault's auto-lock
-and the queue's request timeout, and **`AbortController`**, which the queue hands a remote
-signer port so a timeout, a switch or a disposal can abort the call in flight. Two more come in
-with the post-quantum path: **`atob`** and **`btoa`**, which `@nostr-wot/pq`'s base64 helpers
-reach for (with a `Buffer` fallback Hermes does not have either) to decode a stored ML-KEM key
-and to read a payload's envelope header. Missing them throws nothing; it silently makes every
-hybrid payload unrecognisable, which is why they are declared here rather than left to be
-discovered. Node, browsers and React Native 0.74 or newer have all seven except that React
-Native has to polyfill the random source. Storage, the clock and password stretching are injected as
-ports. `structuredClone`, `URL`, WebCrypto's `subtle`, the DOM and the WebExtension namespaces
-are never used, and `packages/vault/test/boundaries.test.ts` plus the ESLint config enforce
-that.
+The portable account, vault, permission and signing modules use injected storage and host ports. They require `TextEncoder`, `TextDecoder`, secure `crypto.getRandomValues`, timers and `AbortController`; post-quantum paths additionally require `atob`/`btoa` or the supported Buffer fallback. Initialize the necessary React Native/Hermes polyfills before importing these modules, including `react-native-get-random-values` for secure randomness. Do not substitute a non-cryptographic random source.
 
-This package needs them through `@nostr-wot/vault` and `@nostr-wot/accounts`. Its own
-`utf8ByteLength` counts UTF-8 bytes without encoding, not to avoid `TextEncoder` but so the
-boundary never allocates an encoded copy of untrusted input before the size limit has bitten.
+The portable cryptographic core does not require the DOM, WebExtension APIs or WebCrypto `subtle`. Platform adapters such as WebAuthn ceremonies and relay transports have their own requirements. See the [identity runtime guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/packages/identity/README.md#runtime-requirements).
 
-The post-quantum path's cryptography adds no requirement of its own: `@noble/post-quantum`
-reaches for `crypto.getRandomValues` (ML-KEM encapsulation, ML-DSA's hedged signing) and
-nothing else, and that is already on the list. Its base64 is what adds `atob` and `btoa`
-above, and an older React Native host needs a polyfill for them as it does for the random
-source. Without one the failure is loud rather than silent: a payload that names the hybrid
-envelope but cannot be decoded is refused as a post-quantum payload, with that in the error
-and in the activity entry, instead of being routed classic and failing there.
+This package needs them through `@nostr-wot/identity/vault` and `@nostr-wot/identity/accounts`. Its own `utf8ByteLength` counts UTF-8 bytes without encoding, not to avoid `TextEncoder` but so the boundary never allocates an encoded copy of untrusted input before the size limit has bitten.
+
+The post-quantum path's cryptography adds no requirement of its own: `@noble/post-quantum` reaches for `crypto.getRandomValues` (ML-KEM encapsulation, ML-DSA's hedged signing) and nothing else, and that is already on the list. Its base64 is what adds `atob` and `btoa` above, and an older React Native host needs a polyfill for them as it does for the random source. Without one the failure is loud rather than silent: a payload that names the hybrid envelope but cannot be decoded is refused as a post-quantum payload, with that in the error and in the activity entry, instead of being routed classic and failing there.
 
 ## Authentication requests
 
-The signing boundary parses kind 22242 and 27235 with `@nostr-wot/permissions` before asking. Malformed or ambiguous tags, stale timestamps and insecure destinations fail before signing. Authentication always reaches the local approval port, including remote accounts and callers with a broad allow. The third `present(request, account, context)` argument contains the parsed protocol, exact URL, method and cross-origin status; the approval must explicitly return `{ allow: true, authenticationScope: 'once' }`. A generic allow is insufficient. Authentication items must be sent individually rather than in a batch.
+The signing boundary parses kind 22242 and 27235 with `@nostr-wot/identity/permissions` before asking. Malformed or ambiguous tags, stale timestamps and insecure destinations fail before signing. By default, authentication reaches the local approval port, including remote accounts and callers with a broad event-kind allow. Explicit destination grants and host self-authentication are described below. The third `present(request, account, context)` argument contains the parsed protocol, exact URL, method and cross-origin status; the approval must explicitly return `{ allow: true, authenticationScope: 'once' }`. A generic allow is insufficient. Authentication items must be sent individually rather than in a batch.
 
 The core uses the transport-attested web origin. A web host that resolves it itself provides `authentication.originFor(request, account)`. Never derive this value from event tags. `authentication.assertAllowed` lets the host enforce connected-site state, frame restrictions, privileged endpoint policy and destination-grant revocation. It runs before approval and again before and after signing, along with timestamp, permission and account checks. Hosts implementing remembered grants or opt-in backend automation can use `AuthenticationGrants` in their approval adapter and must revalidate that authorization in `assertAllowed`; the core does not silently turn kind rules into destination grants.
 
@@ -449,7 +249,7 @@ The core uses the transport-attested web origin. A web host that resolves it its
 A phone signer's callers are a NIP-46 client (a pubkey its pairing proved), an Android package (the name the binder reported), a LAN peer (a paired device id) and the app itself. None of those is a web origin, and an `originFor` that maps them to one would be inventing an identity. Such a host configures `authentication.requesterFor(request, account)` instead, returning the typed `AuthenticationRequester` its transport established:
 
 ```ts
-import { requesterOf, type AuthenticationPolicy } from '@nostr-wot/signer-core';
+import { requesterOf, type AuthenticationPolicy } from '@nostr-wot/identity/signing';
 
 const authentication: AuthenticationPolicy = {
   // Right only when every transport establishes identity before building the request.

@@ -2,8 +2,7 @@
 
 Post-quantum identity keys for Nostr.
 
-Derives ML-KEM-1024 and ML-DSA-87 keys from a NIP-06 seed, and builds, parses and
-verifies the `kind:10203` attestation that advertises them.
+Derives ML-KEM-1024 and ML-DSA-87 keys from a NIP-06 seed, and builds, parses and verifies the `kind:10203` attestation that advertises them.
 
 ```bash
 npm install @nostr-wot/pq
@@ -11,8 +10,7 @@ npm install @nostr-wot/pq
 
 ## Why
 
-A Nostr public key is published to every relay it touches, and Shor's algorithm recovers a
-private key from a public key. Two harms follow, with very different deadlines:
+A Nostr public key is published to every relay it touches, and Shor's algorithm recovers a private key from a public key. Two harms follow, with very different deadlines:
 
 - **Encrypted messages become readable retroactively.** NIP-44 derives its conversation key
   from an ECDH secret between two secp256k1 keys, so anyone archiving encrypted events today
@@ -24,9 +22,7 @@ Only the first can be fixed *in advance*, which is what this package addresses.
 
 ## The idea: siblings, not children
 
-The obvious design — deriving the post-quantum key *from* the Nostr private key — is
-circular. An adversary who recovers `nsec` from `npub` runs the same derivation and gets the
-post-quantum key too.
+The obvious design — deriving the post-quantum key *from* the Nostr private key — is circular. An adversary who recovers `nsec` from `npub` runs the same derivation and gets the post-quantum key too.
 
 Instead both keys are derived **from the same BIP-39 seed, independently**:
 
@@ -35,9 +31,7 @@ kem_seed = HKDF-SHA256(seed, info = "nip-pqc/v1/ml-kem-1024/<account>", 64)
 dsa_seed = HKDF-SHA256(seed, info = "nip-pqc/v1/ml-dsa-87/<account>",  32)
 ```
 
-BIP-32 and HKDF are one-way, so recovering the secp256k1 private key reveals nothing about
-the seed and therefore nothing about the post-quantum keys. One mnemonic still restores
-everything.
+BIP-32 and HKDF are one-way, so recovering the secp256k1 private key reveals nothing about the seed and therefore nothing about the post-quantum keys. One mnemonic still restores everything.
 
 > `derivePqKeys` takes the **seed**, not a private key. Passing a private key produces
 > different, unrelated keys and defeats the entire design.
@@ -54,12 +48,7 @@ const seed = mnemonicToSeedSync(mnemonic); // 24 words
 const { kem, dsa } = derivePqKeys(seed, 0);
 ```
 
-The second argument names the account: a NIP-06 account index, or the canonical BIP-32 path
-the account was restored at. A path in the NIP-06 sequence (`m/44'/1237'/0'/0/{n}`) selects
-the same keys as the index `n`; any other path gets its own namespace, `path/<path>`, and is
-never collapsed to its last child index, so two custom paths sharing a last index do not
-share post-quantum keys. A path that is not canonical (`h` for hardened, whitespace) is
-refused rather than derived under a spelling no other implementation would produce.
+The second argument names the account: a NIP-06 account index, or the canonical BIP-32 path the account was restored at. A path in the NIP-06 sequence (`m/44'/1237'/0'/0/{n}`) selects the same keys as the index `n`; any other path gets its own namespace, `path/<path>`, and is never collapsed to its last child index, so two custom paths sharing a last index do not share post-quantum keys. A path that is not canonical (`h` for hardened, whitespace) is refused rather than derived under a spelling no other implementation would produce.
 
 ### Publish an attestation
 
@@ -78,9 +67,7 @@ const event = finalizeEvent({
 }, secretKey);
 ```
 
-`origin: 'derived'` asserts that one mnemonic restores these keys, so it is only valid from
-a 256-bit (24-word) seed. Anything weaker must be published as `'independent'` and backed up
-separately.
+`origin: 'derived'` asserts that one mnemonic restores these keys, so it is only valid from a 256-bit (24-word) seed. Anything weaker must be published as `'independent'` and backed up separately.
 
 ### Check whether someone can receive post-quantum messages
 
@@ -100,38 +87,21 @@ const { cipherText, sharedSecret } = encapsulate(att.kem!);
 const key = hybridKey(sharedSecret, nip44ConversationKey);
 ```
 
-`parseAttestation` is strict on purpose. A malformed or unproven attestation returns
-`usable: false` with an explicit problem list rather than being partially accepted — the
-failure worth engineering against is a sender *believing* a recipient is reachable
-post-quantum when they are not.
+`parseAttestation` is strict on purpose. A malformed or unproven attestation returns `usable: false` with an explicit problem list rather than being partially accepted — the failure worth engineering against is a sender *believing* a recipient is reachable post-quantum when they are not.
 
-`verifyAttestation` is the whole check for an event fetched from a relay: a wrong kind or a
-signature that does not verify yields `usable: false` with no key at all (`wrongKind`,
-`badSignature`) before a single tag is read. `parseAttestation` underneath it reads the tags
-only and does **not** verify the event's secp256k1 signature; use it when the signature has
-already been checked.
+`verifyAttestation` is the whole check for an event fetched from a relay: a wrong kind or a signature that does not verify yields `usable: false` with no key at all (`wrongKind`, `badSignature`) before a single tag is read. `parseAttestation` underneath it reads the tags only and does **not** verify the event's secp256k1 signature; use it when the signature has already been checked.
 
 ## Proof of possession
 
-A secp256k1 signature over the attestation proves the identity published those bytes, not
-that it holds the post-quantum keys. So the ML-DSA key counter-signs a message binding the
-npub and both keys together. ML-KEM cannot sign, which is why this is also what gives the
-encapsulation key its possession proof.
+A secp256k1 signature over the attestation proves the identity published those bytes, not that it holds the post-quantum keys. So the ML-DSA key counter-signs a message binding the npub and both keys together. ML-KEM cannot sign, which is why this is also what gives the encapsulation key its possession proof.
 
 ## Hybrid, not replacement
 
-`hybridKey` combines the KEM secret with the classic NIP-44 conversation key through a KDF,
-so the result is no weaker than either input. The post-quantum secret must never be used
-alone: a flaw in a comparatively young lattice scheme must not be able to make Nostr
-messaging *worse* than it is today.
+`hybridKey` combines the KEM secret with the classic NIP-44 conversation key through a KDF, so the result is no weaker than either input. The post-quantum secret must never be used alone: a flaw in a comparatively young lattice scheme must not be able to make Nostr messaging *worse* than it is today.
 
 ## The message envelope
 
-A self-describing payload carrying an ML-KEM-1024 ciphertext and an
-XChaCha20-Poly1305-sealed message. It fits anywhere a string does — in practice as the
-`content` of a NIP-17 kind:14 rumor, sealed and gift-wrapped per NIP-59 **with no change
-to either**. Relays need no changes and clients that have not implemented it are
-unaffected.
+A self-describing payload carrying an ML-KEM-1024 ciphertext and an XChaCha20-Poly1305-sealed message. It fits anywhere a string does — in practice as the `content` of a NIP-17 kind:14 rumor, sealed and gift-wrapped per NIP-59 **with no change to either**. Relays need no changes and clients that have not implemented it are unaffected.
 
 ```ts
 import { encryptPq, decryptPq } from '@nostr-wot/pq';
@@ -142,9 +112,7 @@ const payload = encryptPq('hello', att.kem!, nip44ConversationKey, parties);
 const text    = decryptPq(payload, myKem.secretKey, nip44ConversationKey, parties);
 ```
 
-Two ways to look at a payload before opening it. `isPqEnvelope(payload)` is the boolean a
-cipher routes on. `classifyEnvelope(payload)` is the one a caller that reports failures should
-use, because a boolean cannot tell "somebody else's ciphertext" from "ours and broken":
+Two ways to look at a payload before opening it. `isPqEnvelope(payload)` is the boolean a cipher routes on. `classifyEnvelope(payload)` is the one a caller that reports failures should use, because a boolean cannot tell "somebody else's ciphertext" from "ours and broken":
 
 | `classifyEnvelope` | Means |
 | --- | --- |
@@ -152,17 +120,11 @@ use, because a boolean cannot tell "somebody else's ciphertext" from "ours and b
 | `'pq-unreadable'` | The header names **our** version and we cannot open it: truncated, an algorithm byte we do not implement, or base64 this host cannot decode. |
 | `'classic'` | Nothing claims to be ours. NIP-44's version byte is 0x02, so its ciphertext lands here, as does anything that is not base64. |
 
-The version and algorithm bytes are decoded from the first four base64 characters inline,
-without `atob` or `Buffer`, so a host that has neither still gets `'pq-unreadable'` for a valid
-envelope rather than being told it is classic and sent to the wrong code. A payload claiming a
-version this package has never heard of cannot be distinguished from a classic ciphertext of
-that version, so it is called classic — the honest answer, not a guess.
+The version and algorithm bytes are decoded from the first four base64 characters inline, without `atob` or `Buffer`, so a host that has neither still gets `'pq-unreadable'` for a valid envelope rather than being told it is classic and sent to the wrong code. A payload claiming a version this package has never heard of cannot be distinguished from a classic ciphertext of that version, so it is called classic — the honest answer, not a guess.
 
 ### Send a gift-wrapped direct message
 
-Most callers want this rather than the raw envelope. It composes the envelope with NIP-17
-and NIP-59 — the result is an ordinary `kind:1059` gift wrap that today's relays accept
-and today's clients ignore.
+Most callers want this rather than the raw envelope. It composes the envelope with NIP-17 and NIP-59 — the result is an ordinary `kind:1059` gift wrap that today's relays accept and today's clients ignore.
 
 ```ts
 import { createPqDirectMessage, openPqDirectMessage, inboxFilter } from '@nostr-wot/pq';
@@ -186,10 +148,7 @@ for (const w of await pool.querySync(myInboxRelays, inboxFilter(myPubkey))) {
 }
 ```
 
-`openPqDirectMessage` returns `null` for a classic gift wrap rather than throwing, so a
-post-quantum client does not choke on ordinary messages. It throws only when a message is
-malformed or fails authentication — including when a rumor claims an author the seal did
-not sign, which is the forgery a naive implementation would display as genuine.
+`openPqDirectMessage` returns `null` for a classic gift wrap rather than throwing, so a post-quantum client does not choke on ordinary messages. It throws only when a message is malformed or fails authentication — including when a rumor claims an author the seal did not sign, which is the forgery a naive implementation would display as genuine.
 
 ### Wire format
 
@@ -234,19 +193,13 @@ Measured on the complete `kind:1059` event, serialized as a relay sees it:
 | a long note (4 KB) | 11,429 B | 14,161 B | +2,732 B | 1.2x |
 | a document (16 KB) | 38,737 B | 44,197 B | +5,460 B | 1.1x |
 
-**~3 KB constant overhead, about 2.4x on a typical chat message.** At 100 messages a day
-that is **+300 KB/day, or +107 MB/year per conversation** — the number relay operators will
-care about, and the strongest argument anyone will make against adopting this.
+**~3 KB constant overhead, about 2.4x on a typical chat message.** At 100 messages a day that is **+300 KB/day, or +107 MB/year per conversation** — the number relay operators will care about, and the strongest argument anyone will make against adopting this.
 
-Worth noting that NIP-59 is already expensive for its own reasons: a *classic* two-character
-"hi" costs 1,533 bytes. Gift wrap has a ~1.5 KB floor no matter what. Post-quantum raises
-that floor; it does not create it.
+Worth noting that NIP-59 is already expensive for its own reasons: a *classic* two-character "hi" costs 1,533 bytes. Gift wrap has a ~1.5 KB floor no matter what. Post-quantum raises that floor; it does not create it.
 
 ### Where the layering saves 16-28%
 
-NIP-59 base64-encodes at every layer, so anything placed in the rumor is expanded by 4/3
-three times over. Putting the envelope at the **seal** layer instead of inside the rumor
-removes an entire expansion of the 1568-byte ML-KEM ciphertext:
+NIP-59 base64-encodes at every layer, so anything placed in the rumor is expanded by 4/3 three times over. Putting the envelope at the **seal** layer instead of inside the rumor removes an entire expansion of the 1568-byte ML-KEM ciphertext:
 
 | message | envelope in rumor | envelope at seal | saved |
 |---|---|---|---|
@@ -255,15 +208,11 @@ removes an entire expansion of the 1568-byte ML-KEM ciphertext:
 | 1 KB | 8,701 B | 7,333 B | 1,368 B (15.7%) |
 | 4 KB | 16,893 B | 14,161 B | 2,732 B (16.2%) |
 
-This is a framing optimisation, not a cryptographic compromise — nothing is weakened, and
-it is arguably the more natural placement, since the seal is already where NIP-59 puts the
-rumor's confidentiality. The envelope replaces that layer's encryption rather than nesting
-inside it.
+This is a framing optimisation, not a cryptographic compromise — nothing is weakened, and it is arguably the more natural placement, since the seal is already where NIP-59 puts the rumor's confidentiality. The envelope replaces that layer's encryption rather than nesting inside it.
 
 ### Speed
 
-**1.27 ms to encrypt, 1.60 ms to decrypt** a 280-byte message (Node 20, Apple silicon,
-average of 100).
+**1.27 ms to encrypt, 1.60 ms to decrypt** a 280-byte message (Node 20, Apple silicon, average of 100).
 
 ## What this does not do
 
@@ -276,9 +225,7 @@ average of 100).
 
 ## Parameter sets
 
-ML-KEM-1024 and ML-DSA-87 (NIST Category 5) — the sets mandated by NSA CNSA 2.0. Australia's
-ISM withdraws approval for ML-KEM-768 and ML-DSA-65 after 2030, so the smaller sets would
-mean shipping parameters already scheduled for withdrawal.
+ML-KEM-1024 and ML-DSA-87 (NIST Category 5) — the sets mandated by NSA CNSA 2.0. Australia's ISM withdraws approval for ML-KEM-768 and ML-DSA-65 after 2030, so the smaller sets would mean shipping parameters already scheduled for withdrawal.
 
 ## References
 

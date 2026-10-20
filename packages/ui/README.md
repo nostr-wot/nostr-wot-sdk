@@ -9,12 +9,12 @@ Headless React UI for Nostr — login modal/widget, session provider, themable v
 | `<LoginModal>` | Portal-based modal wrapping the login widget |
 | `<LoginWidget>` | Inline form: NIP-07 / NIP-46 / generate / import |
 
-Backed by `@nostr-wot/signers` for the four login methods. Reads/writes the same session context that `@nostr-wot/dm`, `@nostr-wot/blossom`, and `@nostr-wot/wallet` consume — so once the user signs in here, every other hook in the SDK has the signer.
+Backed by `nostr-wot-sdk/signers` for the four login methods. Reads/writes the same session context that `@nostr-wot/dm`, `nostr-wot-sdk/blossom`, and `@nostr-wot/wallet` consume — so once the user signs in here, every other hook in the SDK has the signer.
 
 ## Install
 
 ```bash
-npm i @nostr-wot/ui @nostr-wot/data @nostr-wot/signers nostr-tools react react-dom
+npm i @nostr-wot/ui nostr-wot-sdk nostr-tools react react-dom
 ```
 
 ```ts
@@ -27,7 +27,7 @@ import "@nostr-wot/ui/styles.css";
 
 ```tsx
 import { NostrSessionProvider, LoginButton, useSession } from "@nostr-wot/ui";
-import { NostrDataProvider } from "@nostr-wot/data/react";
+import { NostrDataProvider } from "nostr-wot-sdk/data/react";
 import "@nostr-wot/ui/styles.css";
 
 export default function App() {
@@ -57,7 +57,7 @@ function Page() {
 }
 ```
 
-If you're using the meta package, `<NostrSdkProvider>` already mounts the session provider for you:
+Existing applications can keep the compatibility `<NostrSdkProvider>`, which already mounts the session provider. New integrations can use the explicit providers shown above:
 
 ```tsx
 import { NostrSdkProvider } from "nostr-wot-sdk/react";
@@ -240,7 +240,7 @@ Pass `profileSetup` to extend the "Generate" flow with a second step asking for 
 
 ## Hooks
 
-Re-exports from `@nostr-wot/data/react` so you can import everything from `@nostr-wot/ui`:
+Re-exports from `nostr-wot-sdk/data/react` so you can import everything from `@nostr-wot/ui`:
 
 | Hook | Returns |
 |---|---|

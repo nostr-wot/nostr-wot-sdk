@@ -1,7 +1,7 @@
 {
   "name": "nostr-wot-sdk",
-  "version": "2.0.0",
-  "description": "Meta-package re-exporting the @nostr-wot/* family (wot, relay, data, signers, ui, dm, wallet, auth, blossom) under subpaths. Existing imports keep working; new code should depend on the scoped packages directly.",
+  "version": "3.0.0",
+  "description": "Nostr application tools: relays, profiles, notes, signer clients, file uploads and storage, with explicit subpath imports.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "GPL-3.0-only",
   "keywords": [
@@ -191,6 +191,32 @@
         "types": "./dist/graph/react/index.d.cts",
         "default": "./dist/graph/react/index.cjs"
       }
+    },
+    "./relay/hub": {
+      "import": {
+        "types": "./dist/relay/hub/index.d.ts",
+        "default": "./dist/relay/hub/index.js"
+      },
+      "require": {
+        "types": "./dist/relay/hub/index.d.cts",
+        "default": "./dist/relay/hub/index.cjs"
+      }
+    },
+    "./data/react": {
+      "import": {
+        "types": "./dist/data/react/index.d.ts",
+        "default": "./dist/data/react/index.js"
+      },
+      "require": {
+        "types": "./dist/data/react/index.d.cts",
+        "default": "./dist/data/react/index.cjs"
+      }
+    },
+    "./storage": {
+      "import": {
+        "types": "./dist/storage/index.d.ts",
+        "default": "./dist/storage/index.js"
+      }
     }
   },
   "files": [
@@ -200,28 +226,47 @@
     "NOTICE"
   ],
   "scripts": {
-    "build": "tsup",
-    "typecheck": "tsc --noEmit"
+    "build": "tsup && node ../../scripts/dist-stamp.mjs stamp",
+    "typecheck": "tsc --noEmit",
+    "check:dist": "node ../../scripts/dist-stamp.mjs check",
+    "test": "vitest run",
+    "test:run": "vitest run"
   },
   "dependencies": {
-    "@nostr-wot/auth": "^4.0.0",
-    "@nostr-wot/blossom": "^1.0.0",
-    "@nostr-wot/data": "^1.0.0",
-    "@nostr-wot/graph": "^1.0.0",
-    "@nostr-wot/dm": "^1.0.0",
-    "@nostr-wot/relay": "^1.0.0",
-    "@nostr-wot/signers": "^2.0.0",
-    "@nostr-wot/ui": "^1.0.0",
-    "@nostr-wot/wallet": "^1.0.0",
-    "@nostr-wot/wot": "^2.0.0"
+    "@nostr-wot/wot": "^3.0.0",
+    "@noble/hashes": "^1.5.0",
+    "@nostr-wot/pq": "^1.0.0"
   },
   "peerDependencies": {
-    "react": ">=16.8.0"
+    "react": ">=16.8.0",
+    "nostr-tools": ">=2.0.0",
+    "@nostr-wot/auth": "^4.0.0 || ^5.0.0",
+    "@nostr-wot/dm": "^1.0.0 || ^2.0.0",
+    "@nostr-wot/wallet": "^1.0.0 || ^2.0.0",
+    "@nostr-wot/ui": "^1.0.0 || ^2.0.0"
   },
   "peerDependenciesMeta": {
     "react": {
       "optional": true
+    },
+    "@nostr-wot/auth": {
+      "optional": true
+    },
+    "@nostr-wot/dm": {
+      "optional": true
+    },
+    "@nostr-wot/wallet": {
+      "optional": true
+    },
+    "@nostr-wot/ui": {
+      "optional": true
     }
   },
-  "sideEffects": false
+  "sideEffects": false,
+  "devDependencies": {
+    "vitest": "^4.0.18",
+    "nostr-tools": "^2.24.1",
+    "typescript": "^5.3.0",
+    "tsup": "^8.0.1"
+  }
 }

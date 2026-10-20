@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { SimplePool, Event, Filter } from 'nostr-tools';
 import { NwcClient, parseNwcUri } from '../src/nwc';
 import { codeForWalletError } from '../src/nwc/errors';
-import { FakeRelayFactory } from '@nostr-wot/relay/hub';
+import { FakeRelayFactory } from 'nostr-wot-sdk/relay/hub';
 import { FakeNwcWallet } from './support/fake-nwc-wallet';
 
 describe('root NWC API compatibility', () => {

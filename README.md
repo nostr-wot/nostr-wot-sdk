@@ -1,169 +1,90 @@
-# nostr-wot-sdk monorepo
+# Nostr WoT SDK
 
-A set of focused packages that compose into a full Nostr stack — data, signers, login UI, DMs, blossom uploads, wallets, WoT, and a server-side auth helper. Pick the slices you need; the meta package re-exports the core for back-compat.
+TypeScript libraries for building Nostr applications and signers: read and publish social data, connect a signing backend, manage encrypted accounts, send private messages, take Lightning payments, and query a Web of Trust.
 
-## Packages
+**Package consolidation:** the maintained public surface is reduced from 18 packages to eight. Eleven former package names remain compatibility wrappers (19 workspaces including the new identity package); npm deprecation follows publication of their replacements. See the [migration guide](docs/package-migration.md).
 
-### Data + transport
+## Choose a package
 
-| Package | Scope | Depends on |
-|---|---|---|
-| **[`@nostr-wot/data`](./packages/data)** | Profiles, notes, threads, follows, engagement (reactions/reposts/zaps) + NIP-65 outbox + subscription coalescer. Optional SWR cache + React hooks at `/cache` and `/react` subpaths. Also hosts the shared `<NostrSessionProvider>` (single mount point for the active signer). | `nostr-tools` (peer) |
-| **[`@nostr-wot/relay`](./packages/relay)** | Standalone relay utilities — pool, query batcher, stats. Lower-level than `@nostr-wot/data`. | `nostr-tools` (peer) |
-| **[`@nostr-wot/wot`](./packages/wot)** | Web-of-Trust scoring + browser-extension bridge. Includes `<NostrSdkProvider>` (the recommended top-level React provider) and React/Solid hooks. | `@nostr-wot/data` |
-
-### Auth + UI
-
-| Package | Scope | Depends on |
-|---|---|---|
-| **[`@nostr-wot/signers`](./packages/signers)** | One `NostrSigner` interface, four backends — `Nip07Signer` (extension), `Nip46Signer` (bunker, with `nostrconnect://` QR + auth-URL relay), `Nip55Signer` (Android/Amber), `PrivateKeySigner`. Plus NDK bridges in both directions (`ndkSignerAsNostrSigner`, `nostrSignerAsNdkSigner`). | `nostr-tools` (peer) |
-| **[`@nostr-wot/bunker`](./packages/bunker)** | NIP-46 responder (the bunker side). `BunkerServer` listens for kind 24133 requests, verifies pairing secrets, dedupes, and hands every request to one injected handler. Both `bunker://` and `nostrconnect://` pairing; NIP-44 transport only. | `@nostr-wot/relay`, `nostr-tools` (peer) |
-| **[`@nostr-wot/ui`](./packages/ui)** | Headless React login UI — `<NostrSessionProvider>`, `<LoginButton>`, `<LoginModal>`, `<LoginWidget>`. Four login methods, NIP-46 QR + paste tabs, optional profile-setup wizard, pluggable encrypted-at-rest signer storage, branding slots, themable via CSS variables (built-in `light` / `dark` / `la-crypta` themes). Built-in `@nostr-wot/auth` handshake when you set `authBaseUrl`. | `@nostr-wot/data`, `@nostr-wot/signers` |
-| **[`@nostr-wot/auth`](./packages/auth)** | Server-side NIP-98 challenge / verify / JWT for Nostr login. Web-standard handlers + Next.js shim + a client helper that pairs with `@nostr-wot/ui`'s `authBaseUrl`. | — |
-
-### Shared signer core
-
-| Package | Scope |
+| Package | Use it for |
 | --- | --- |
-| [`@nostr-wot/storage`](./packages/storage) | Portable key/value storage adapters. |
-| [`@nostr-wot/accounts`](./packages/accounts) | Account records, key import and seed derivation. |
-| [`@nostr-wot/permissions`](./packages/permissions) | Global/site rules and destination-scoped authentication. |
-| [`@nostr-wot/vault`](./packages/vault) | Password vault lifecycle and portable passkey record encryption. |
-| [`@nostr-wot/signer-core`](./packages/signer-core) | Approval, authorization and signing over host-supplied ports. |
+| [`nostr-wot-sdk`](packages/sdk/README.md) | Relay connections, profiles, notes, follows, cache and React session hooks, NIP-07/46 signer clients, Blossom uploads, and portable storage ports. Import individual modules such as `nostr-wot-sdk/data`. |
+| [`@nostr-wot/identity`](packages/identity/README.md) | Building a signer or account manager: seed derivation, encrypted vaults and passkey recovery, permissions, approval and signing, and a NIP-46 responder. |
+| [`@nostr-wot/wot`](packages/wot/README.md) | Query an Oracle for follow distance or crawl a local IndexedDB graph with `/graph`. |
+| [`@nostr-wot/dm`](packages/dm/README.md) | NIP-17 gift-wrapped messages, legacy NIP-04, inbox caching, read cursors, and React hooks. |
+| [`@nostr-wot/wallet`](packages/wallet/README.md) | NIP-47 wallet connections, invoice payments, and NIP-57 zaps. |
+| [`@nostr-wot/auth`](packages/auth/README.md) | HTTP login with NIP-98, challenge verification, JWT sessions, and Web/Next.js handlers. |
+| [`@nostr-wot/ui`](packages/ui/README.md) | React login button, modal or inline widget with extension, bunker, generated-key and imported-key flows. |
+| [`@nostr-wot/pq`](packages/pq/README.md) | Seed-derived ML-KEM/ML-DSA identity keys, attestations and hybrid encrypted envelopes. |
 
-See [extension integration](./docs/extension-shared-core.md) for storage compatibility and browser-owned responsibilities.
-
-### Capability packages
-
-| Package | Scope | Depends on |
-|---|---|---|
-| **[`@nostr-wot/dm`](./packages/dm)** | Direct messages — NIP-04 legacy + NIP-17 sealed gift-wraps. `/cache` adds a follow-aware DM session with backfill, read cursors, kind-10050 inbox publish, and at-rest encryption (NIP-44-self KEK, non-extractable AES-GCM). `/react` adds `useDMSession`, `useUnreadCount`, etc. | `@nostr-wot/signers` (peer) |
-| **[`@nostr-wot/blossom`](./packages/blossom)** | Blossom file hosting (BUD-01) — `uploadToBlossom`, `mirrorBlob`, `deleteBlob` with kind-24242 signed auth and server failover. | `@nostr-wot/signers` (peer) |
-| **[`@nostr-wot/wallet`](./packages/wallet)** | NIP-47 NWC client (pay invoice, balance, info) + NIP-57 zap helpers (`requestZapInvoice`, `buildZapRequest`, LNURL-pay resolution). | `@nostr-wot/signers` (peer) |
-
-### Meta
-
-| Package | Scope | Depends on |
-|---|---|---|
-| **[`nostr-wot-sdk`](./packages/sdk)** | Back-compat meta-package re-exporting `data` / `relay` / `wot`. Existing imports keep working. | the three scoped packages |
-
-## Install
-
-Pick what you need:
+Install packages; import their subpaths. For example, `npm install nostr-wot-sdk` provides `nostr-wot-sdk/data`, but `npm install nostr-wot-sdk/data` is not a package install. Add the capability packages your application actually imports and their required peers.
 
 ```bash
-# Login UI + signers + data — the most common starting point for a React app
-npm i @nostr-wot/ui @nostr-wot/data @nostr-wot/signers nostr-tools react react-dom
+# Data and signing in a browser or a compatible server runtime
+npm install nostr-wot-sdk nostr-tools
 
-# Add capabilities as needed
-npm i @nostr-wot/dm @nostr-wot/blossom @nostr-wot/wallet
+# React login; use the same React instance throughout your app
+npm install @nostr-wot/ui nostr-wot-sdk nostr-tools react react-dom
 
-# Server-side login (Next.js, Hono, plain Web handlers)
-npm i @nostr-wot/auth
+# A signer host with portable account and vault management
+npm install @nostr-wot/identity nostr-wot-sdk nostr-tools
 
-# WoT scoring + extension bridge
-npm i @nostr-wot/wot
-
-# Low-level pool / batcher
-npm i @nostr-wot/relay
-
-# Back-compat meta (data + relay + wot under the original name)
-npm i nostr-wot-sdk
+# Add only the capabilities you need
+npm install @nostr-wot/dm @nostr-wot/wallet @nostr-wot/wot
 ```
 
-## What the UI does
+## Read a profile
 
-`@nostr-wot/ui` is the React login surface. Drop `<NostrSessionProvider>` at the top of your tree and `<LoginButton>` anywhere — the user picks a method, the SDK constructs the corresponding `NostrSigner`, and stores it in a shared session context that every other `@nostr-wot/*` package reads from.
+```ts
+import { fetchProfile, setDefaultRelays } from 'nostr-wot-sdk/data';
 
-| Method | What it does |
-|---|---|
-| **NIP-07** | Connects to `window.nostr` (Alby, nos2x, Flamingo, Nostore). If no extension is detected, shows a CTA pointing to `nostr-wot.com/download` (overridable). |
-| **NIP-46** | Two tabs: scan a `nostrconnect://` QR (desktop ↔ phone) or paste a `bunker://` URI. Auth-URL prompts from the bunker render as a green pulsing banner. Pairings auto-restore on next load. |
-| **Generate** | Generates a fresh keypair on-device, shows nsec/npub for backup, optionally publishes a kind-0 profile (name/about/picture) to your relay set. |
-| **Import** | Pastes nsec or 64-char hex private key. |
-
-It's headless by default — ship `@nostr-wot/ui/styles.css` for the default look (light / dark via `prefers-color-scheme`, plus a built-in `la-crypta` theme), or skip the import and bring your own classes via the `classes={{...}}` slot props on every component. CSS-variable theming scopes cleanly under `[data-nui-root]`.
-
-Production knobs:
-
-- `authBaseUrl` — auto-runs the NIP-98 challenge → sign → verify handshake against `@nostr-wot/auth` server endpoints, including JWT cookie set by the server
-- `onLogin` — awaited hook receiving `{ signer, pubkey, method }`; throw to keep the modal open with an inline error
-- `signerStorage` — pluggable adapter for persisted login state (NIP-46 pairing, remembered nsec). Default is plaintext localStorage; swap in a WebAuthn-pinned AES-GCM adapter, IndexedDB, server-side, etc.
-- `slots={{ header, footer, beforeMethods, afterMethods }}` — branding insertion points around the method list
-- `profileSetup` — extends the Generate flow with a name/about/picture step that publishes kind-0
-
-Once signed in, `@nostr-wot/dm`, `@nostr-wot/blossom`, and `@nostr-wot/wallet` hooks read the active signer from session context — no prop-drilling.
-
-## Architecture
-
-```
-                ┌──────────────────────────────┐
-                │ Your Nostr-aware React app   │
-                └──────────────┬───────────────┘
-                               │
-              ┌────────────────▼────────────────┐
-              │  <NostrSdkProvider>             │  nostr-wot-sdk (or compose
-              │  └─ <NostrSessionProvider>      │   the providers yourself)
-              │  └─ <NostrDataProvider>         │
-              │  └─ (opt-in) WoT context        │
-              └────────────────┬────────────────┘
-                               │
-   ┌───────────────────┬───────┼───────┬────────────────┬────────────┐
-   ▼                   ▼       ▼       ▼                ▼            ▼
-@nostr-wot/ui     @nostr-wot   data    signers      dm/blossom   @nostr-wot
-(login modal,     /wot         (fetch, (Nip07/46/   /wallet      /auth
- widget, button)  (scoring,    cache,   55, PK,     (read signer  (server NIP-98
-                  ext bridge)  outbox,  NDK ↔)      from session)  + JWT)
-                               session
-                               provider)
-                                  │
-                                  ▼
-                            nostr-tools (peer)
+setDefaultRelays(['wss://relay.damus.io', 'wss://nos.lol']);
+const profile = await fetchProfile(userPubkey); // user's 64-character hex public key
+console.log(profile);
 ```
 
-`@nostr-wot/data` is the portable artifact — SWR observable + per-kind caches + NIP-65 outbox + the shared session context in ~1000 LOC. Runtime-agnostic, no NDK dependency, peer-deps only on `nostr-tools` (and `react` for the `/react` entry).
+## Connect an existing signer
 
-The session provider lives in `@nostr-wot/data/react` (not `ui`) on purpose: non-UI packages can read the active signer without dragging in the React UI bundle.
+```ts
+import { Nip07Signer, isNip07Available } from 'nostr-wot-sdk/signers';
 
-## Development
+if (!isNip07Available()) throw new Error('Install a NIP-07 signer extension');
+const signer = new Nip07Signer();
+const pubkey = await signer.getPublicKey();
+const event = await signer.signEvent({
+  kind: 1,
+  content: 'Hello from my app',
+  tags: [],
+  created_at: Math.floor(Date.now() / 1000),
+});
+```
 
-npm-workspaces monorepo.
+Signing does not publish the event. Use the relay module when you are ready to publish. A signer client belongs in an app that requests signatures; `@nostr-wot/identity/signing` belongs in the host that owns accounts and decides whether requests are allowed.
+
+## Runtime and security boundaries
+
+Use `/react` entry points in React applications and install React separately. Browser extension signing requires `window.nostr`; the local graph requires IndexedDB. Server relay clients need a compatible WebSocket implementation. Portable identity code takes storage and host capabilities through explicit interfaces; React Native hosts must supply secure random values and the documented globals.
+
+Login state is not automatically encrypted: the UI's default signer storage uses plaintext localStorage. Supply a protected `signerStorage` adapter when retaining private keys or pairing credentials. The vault provides encryption and scoped secret access, while your host owns unlock UI, transport identity, WebAuthn assertions and authorization. Review each module's defaults before integrating it.
+
+## Guides
+
+- [Package and runtime guide](docs/package-guide.md): which module to use, installation, defaults and teardown.
+- [Migration guide](docs/package-migration.md): every retired name and its replacement.
+- [Passkey recovery](docs/passkey-recovery.md): provider storage, recovery records and explicit relay fallback.
+- [Extension integration](docs/extension-shared-core.md): portable core versus browser-owned responsibilities.
+
+## Development and release
 
 ```bash
-git clone git@github.com:nostr-wot/nostr-wot-sdk.git
-cd nostr-wot-sdk
 npm install
-npm run build       # builds all packages in dependency order
+npm run build
 npm test
+npm run build -w nostr-wot-sdk
 ```
 
-Per-package work:
-```bash
-npm run build -w @nostr-wot/data
-npm run dev -w @nostr-wot/ui
-```
-
-## Publishing
-
-Each scoped package versions and publishes independently. The meta-package bumps in lock-step with the highest scoped version so installs stay coherent.
-
-```bash
-cd packages/data    && npm publish --access public
-cd packages/relay   && npm publish --access public
-cd packages/wot     && npm publish --access public
-cd packages/signers && npm publish --access public
-cd packages/ui      && npm publish --access public
-cd packages/auth    && npm publish --access public
-cd packages/dm      && npm publish --access public
-cd packages/blossom && npm publish --access public
-cd packages/wallet  && npm publish --access public
-cd packages/sdk     && npm publish --access public
-```
+Build before packing or publishing: there is no publish hook that refreshes `dist/`. Follow the repository release preflight and changeset workflow so the verified build is the artifact published. Compatibility packages remain available to existing consumers; publish replacements successfully before adding npm deprecation notices. See [AGENTS.md](AGENTS.md) for repository conventions.
 
 ## License
 
-GNU General Public License version 3 only (`GPL-3.0-only`) — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
-
-### Passkey recovery
-
-`@nostr-wot/vault` provides reusable passkey recovery for private keys, seeds and complete vaults, including provider-confirmed largeBlob storage and explicit relay fallback. See the [application integration guide](docs/passkey-recovery.md).
+GNU General Public License version 3 only (`GPL-3.0-only`). See [LICENSE](LICENSE) and [NOTICE](NOTICE).

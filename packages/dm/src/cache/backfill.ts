@@ -8,7 +8,7 @@
  * fetches.
  */
 
-import { sharedCoalescer } from "@nostr-wot/data";
+import { sharedCoalescer } from "nostr-wot-sdk/data";
 import type { Event as NostrEvent, Filter } from "nostr-tools";
 import {
   KIND_GIFT_WRAP,

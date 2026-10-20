@@ -2,8 +2,47 @@
 
 All notable changes to this project will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## Package consolidation — 2026-10-20
+
+The maintained public surface changes from 18 packages to eight. Eleven former package names remain compatibility wrappers; the new identity package brings the workspace total to 19 packages during migration. Replacement publication and npm deprecation have not been performed by this change.
+
+### Maintained packages
+
+| Package | Consolidation version | Result |
+| --- | --- | --- |
+| `nostr-wot-sdk` | 3.0.0 | Own relay, data, signer clients, Blossom and storage modules. |
+| `@nostr-wot/identity` | 1.0.0 | Own account, vault, permission, signing and bunker modules. |
+| `@nostr-wot/wot` | 3.0.0 | Own Oracle APIs and local graph modules. |
+| `@nostr-wot/dm` | 2.0.0 | Use the maintained SDK foundation; retain DM/cache/React APIs. |
+| `@nostr-wot/wallet` | 2.0.0 | Use the maintained SDK foundation; retain wallet/NWC/React APIs. |
+| `@nostr-wot/auth` | 5.0.0 | Use the maintained signer boundary; retain server/Next.js/client APIs. |
+| `@nostr-wot/ui` | 2.0.0 | Use the maintained session and signer modules; retain login UI and CSS. |
+| `@nostr-wot/pq` | 1.0.0 (unchanged) | Unchanged version and public package; no new PQ release is claimed. |
+
+### Compatibility packages
+
+| Previous package | Wrapper version | Maintained import |
+| --- | --- | --- |
+| `@nostr-wot/relay` | 1.0.1 | `nostr-wot-sdk/relay` |
+| `@nostr-wot/data` | 1.0.1 | `nostr-wot-sdk/data` |
+| `@nostr-wot/signers` | 2.0.1 | `nostr-wot-sdk/signers` |
+| `@nostr-wot/blossom` | 1.0.1 | `nostr-wot-sdk/blossom` |
+| `@nostr-wot/storage` | 1.0.1 | `nostr-wot-sdk/storage` |
+| `@nostr-wot/accounts` | 1.0.1 | `@nostr-wot/identity/accounts` |
+| `@nostr-wot/vault` | 1.1.1 | `@nostr-wot/identity/vault` |
+| `@nostr-wot/permissions` | 1.0.1 | `@nostr-wot/identity/permissions` |
+| `@nostr-wot/bunker` | 1.0.1 | `@nostr-wot/identity/bunker` |
+| `@nostr-wot/signer-core` | 1.0.1 | `@nostr-wot/identity/signing` |
+| `@nostr-wot/graph` | 1.0.1 | `@nostr-wot/wot/graph` |
+
+### Migration behavior
+
+- Install the owning npm package and import its subpath; subpaths are not standalone packages to install. Supported nested imports, including data cache/React, relay hub/React and graph React, move with their modules.
+- Keep historical SDK root/WoT, React and graph exports. SDK DM, wallet, auth and UI compatibility exports require the matching capability package to be installed explicitly.
+- Preserve implementations, protocol behavior and stored account/vault/graph data while moving ownership. Keep platform-neutral identity/storage boundaries and the single ESM identity runtime.
+- Publish and verify maintained replacements before publishing/deprecating compatibility wrappers. No packages are published by these changelog entries. See the [migration guide](docs/package-migration.md) and [package guide](docs/package-guide.md).
 
 ## @nostr-wot/graph 0.3.0 / nostr-wot-sdk 1.0.2 — 2026-09-20
 

@@ -15,8 +15,8 @@ import {
   type DMMessage,
   type DMSession,
 } from "../cache";
-import type { NostrSigner } from "@nostr-wot/signers";
-import { useSigner as useSessionSigner } from "@nostr-wot/data/react";
+import type { NostrSigner } from "nostr-wot-sdk/signers";
+import { useSigner as useSessionSigner } from "nostr-wot-sdk/data/react";
 import type { DMStorage, SendDMOptions } from "../cache/types";
 
 export interface UseDMSessionArgs {

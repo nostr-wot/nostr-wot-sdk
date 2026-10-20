@@ -24,7 +24,7 @@
 //   node scripts/release-preflight.mjs [root]
 //
 // `root` (default: the repository above this script) is there so the suite can run it against a
-// fixture tree; see `packages/vault/test/dist-freshness.test.ts`.
+// fixture tree; see `packages/identity/test/vault/dist-freshness.test.ts`.
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';

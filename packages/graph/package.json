@@ -1,7 +1,7 @@
 {
   "name": "@nostr-wot/graph",
-  "version": "1.0.0",
-  "description": "Local Web-of-Trust follow graph in the browser: crawl kind:3 contact lists over relays, persist to IndexedDB (interned + delta-encoded), compute social distance/score locally.",
+  "version": "1.0.1",
+  "description": "Deprecated compatibility wrapper for @nostr-wot/wot/graph.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "GPL-3.0-only",
   "repository": {
@@ -47,30 +47,13 @@
     "NOTICE"
   ],
   "scripts": {
-    "build": "tsup",
-    "dev": "tsup --watch",
+    "build": "tsup && node ../../scripts/dist-stamp.mjs stamp",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "test:run": "vitest run",
-    "benchmark": "npm run build && node bench/efficiency.mjs"
+    "check:dist": "node ../../scripts/dist-stamp.mjs check"
   },
   "dependencies": {
-    "@nostr-wot/relay": "*"
-  },
-  "peerDependencies": {
-    "nostr-tools": ">=2.0.0",
-    "react": ">=16.8.0"
-  },
-  "peerDependenciesMeta": {
-    "react": {
-      "optional": true
-    }
-  },
-  "devDependencies": {
-    "fake-indexeddb": "^6.0.0",
-    "tsup": "^8.0.1",
-    "typescript": "^5.3.0",
-    "vitest": "^4.0.18"
+    "@nostr-wot/wot": "^3.0.0",
+    "nostr-wot-sdk": "^3.0.0"
   },
   "sideEffects": false,
   "keywords": [
@@ -85,5 +68,6 @@
     "indexeddb",
     "kind-3",
     "decentralized"
-  ]
+  ],
+  "deprecated": "Use @nostr-wot/wot/graph instead. The implementation moved to @nostr-wot/wot; this package only forwards the existing API. See https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md"
 }

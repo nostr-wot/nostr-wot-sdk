@@ -41,7 +41,7 @@ export interface WoTProviderProps {
  *
  * @example
  * ```tsx
- * import { WoTProvider } from '@nostr-wot/wot/react';
+ * import { WoTProvider } from '.';
  *
  * function App() {
  *   return (

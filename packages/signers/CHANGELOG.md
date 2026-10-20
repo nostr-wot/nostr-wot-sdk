@@ -1,5 +1,12 @@
 # @nostr-wot/signers
 
+## 2.0.1
+
+### Patch changes
+
+- Replace the implementation with a compatibility re-export of `nostr-wot-sdk/signers` from `nostr-wot-sdk` 3.0.0. Preserve the existing public import entry points; new consumers should install the maintained owner and import its module directly.
+- Mark this package for deprecation after its replacement is published and available. See the [migration guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md).
+
 ## 2.0.0
 
 ### Major Changes

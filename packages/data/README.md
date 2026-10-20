@@ -1,4 +1,6 @@
-# @nostr-wot/data
+# nostr-wot-sdk/data
+
+> Package consolidation: this is the API guide for `nostr-wot-sdk/data`. The former `@nostr-wot/data` package is a deprecated compatibility re-export. Install the owning package shown below; a subpath is an import, not an npm package. See the [migration guide](https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md).
 
 Pure-function Nostr data layer. Profiles, notes, threads, follows, follower lists, engagement (reactions / reposts / zaps), NIP-65 outbox-model relay discovery, and a streaming subscription coalescer. Optional SWR cache + React hooks ship as separate entrypoints.
 
@@ -6,16 +8,16 @@ Pure-function Nostr data layer. Profiles, notes, threads, follows, follower list
 
 | Import path | What's in it | Depends on |
 |---|---|---|
-| `@nostr-wot/data` | Pure fetchers, parsers, outbox helper, `getPool()`, `sharedCoalescer` | `nostr-tools` (peer) |
-| `@nostr-wot/data/cache` | SWR cache wrapping the fetchers; observable primitive; `localStorage` persistence | + the above |
-| `@nostr-wot/data/react` | `useProfile`, `useNote`, `useThread`, `<NostrDataProvider>`, plus the shared session context (`<NostrSessionProvider>`, `useSession`, `useKEKSigner`, …) | + `react` (peer) |
+| `nostr-wot-sdk/data` | Pure fetchers, parsers, outbox helper, `getPool()`, `sharedCoalescer` | `nostr-tools` (peer) |
+| `nostr-wot-sdk/data/cache` | SWR cache wrapping the fetchers; observable primitive; `localStorage` persistence | + the above |
+| `nostr-wot-sdk/data/react` | `useProfile`, `useNote`, `useThread`, `<NostrDataProvider>`, plus the shared session context (`<NostrSessionProvider>`, `useSession`, `useKEKSigner`, …) | + `react` (peer) |
 
 Use only what you need.
 
 ## Install
 
 ```bash
-npm i @nostr-wot/data nostr-tools
+npm i nostr-wot-sdk nostr-tools
 ```
 
 ---
@@ -34,7 +36,7 @@ import {
   relaysForAuthor,
   setDefaultRelays,
   setProfileAggregators,
-} from "@nostr-wot/data";
+} from "nostr-wot-sdk/data";
 
 setDefaultRelays(["wss://relay.damus.io", "wss://nos.lol"]);
 setProfileAggregators(["wss://purplepag.es"]);
@@ -63,7 +65,7 @@ const relayList = await fetchRelayList("hex-pubkey");
 `streamProfile` yields entry updates as relay events arrive (instead of resolving on EOSE).
 
 ```ts
-import { streamProfile } from "@nostr-wot/data";
+import { streamProfile } from "nostr-wot-sdk/data";
 
 for await (const entry of streamProfile("hex-pubkey")) {
   // each yield is an updated ProfileEntry — useful for showing partial results
@@ -75,7 +77,7 @@ for await (const entry of streamProfile("hex-pubkey")) {
 `sharedCoalescer` merges concurrent reads from across your app — DM cache, profile cache, follower lists, etc. — into a single REQ per relay-set within a 50ms window. When the last consumer unsubscribes, the underlying subscription tears down.
 
 ```ts
-import { sharedCoalescer } from "@nostr-wot/data";
+import { sharedCoalescer } from "nostr-wot-sdk/data";
 
 // Live subscription
 const stop = sharedCoalescer.enqueue({
@@ -106,7 +108,7 @@ import {
   fetchEngagementBatch,
   configurePersistence,
   createKeyedObservable,
-} from "@nostr-wot/data/cache";
+} from "nostr-wot-sdk/data/cache";
 
 configurePersistence({ namespace: "myapp", ttlMs: 24 * 3600_000 });
 
@@ -141,7 +143,7 @@ import {
   useEngagement,
   useFollows,
   useRelayList,
-} from "@nostr-wot/data/react";
+} from "nostr-wot-sdk/data/react";
 
 <NostrDataProvider
   relays={["wss://relay.damus.io", "wss://nos.lol"]}
@@ -164,7 +166,7 @@ function ProfileCard({ pubkey }: { pubkey: string }) {
 
 ## Session context
 
-`@nostr-wot/data/react` also hosts the shared session context — the single mount point for the active `NostrSigner` and the user's pubkey. It lives here (not in `@nostr-wot/ui`) so non-UI packages — DM hooks, blossom uploads, wallet/zap hooks — can read the signer from context without depending on the React UI package.
+`nostr-wot-sdk/data/react` also hosts the shared session context — the single mount point for the active `NostrSigner` and the user's pubkey. It lives here (not in `@nostr-wot/ui`) so non-UI packages — DM hooks, blossom uploads, wallet/zap hooks — can read the signer from context without depending on the React UI package.
 
 ```tsx
 import {
@@ -175,7 +177,7 @@ import {
   useLogin,
   useLogout,
   useKEKSigner,
-} from "@nostr-wot/data/react";
+} from "nostr-wot-sdk/data/react";
 
 <NostrSessionProvider
   initialSigner={someSigner /* optional — e.g. constructed at boot */}
@@ -203,7 +205,7 @@ if (!kek) return <p>Your signer doesn't support NIP-44 — encrypted-at-rest cac
 const cacheKey = await getOrCreateCacheKey(kek.pubkey, kek);
 ```
 
-`@nostr-wot/ui` mounts and consumes this same context for its login flows, and re-exports the hooks for convenience. If you're only using `@nostr-wot/data` (no UI), construct a signer yourself (from `@nostr-wot/signers`) and call `useLogin()(signer)` to attach it.
+`@nostr-wot/ui` mounts and consumes this same context for its login flows, and re-exports the hooks for convenience. If you're only using `nostr-wot-sdk/data` (no UI), construct a signer yourself (from `nostr-wot-sdk/signers`) and call `useLogin()(signer)` to attach it.
 
 ---
 
@@ -228,10 +230,10 @@ await fetchProfile(pubkey, ["wss://my-private-relay"]);
 
 ## Pool sharing
 
-`@nostr-wot/data` owns a single `SimplePool` instance, accessible via `getPool()`. If you have your own pool (e.g. for binary-frame coercion or NDK interop), wire it once at startup:
+`nostr-wot-sdk/data` owns a single `SimplePool` instance, accessible via `getPool()`. If you have your own pool (e.g. for binary-frame coercion or NDK interop), wire it once at startup:
 
 ```ts
-import { setPool } from "@nostr-wot/data";
+import { setPool } from "nostr-wot-sdk/data";
 
 const pool = new SimplePool({ websocketImplementation: MyWebSocket });
 setPool(pool);
@@ -248,7 +250,7 @@ GNU General Public License version 3 only (`GPL-3.0-only`) — see [LICENSE](LIC
 ## Event collections
 
 ```ts
-import { dedupeEventsNewestFirst, topHashtags } from "@nostr-wot/data";
+import { dedupeEventsNewestFirst, topHashtags } from "nostr-wot-sdk/data";
 
 const notes = dedupeEventsNewestFirst(relayResults);
 const tags = topHashtags(notes, 8);

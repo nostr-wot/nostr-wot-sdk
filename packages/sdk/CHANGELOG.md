@@ -1,5 +1,13 @@
 # nostr-wot-sdk
 
+## 3.0.0
+
+### Major changes
+
+- Own the relay, data, signer-client, Blossom and storage implementations under `nostr-wot-sdk/relay`, `/data`, `/signers`, `/blossom` and `/storage`, including their supported nested entry points. The former scoped packages become compatibility re-exports.
+- Keep the historical WoT root API and React/graph convenience imports. Keep WoT as a direct dependency, but make DM, wallet, auth and UI convenience exports depend on explicitly installed optional peer packages instead of installing every capability automatically.
+- Use `isNip07Available` for extension detection and the exported NIP-07, NIP-46 and private-key signer implementations. Documentation now reflects the actual public APIs and separates application signing from signer hosting.
+
 ## 2.0.0
 
 ### Major Changes

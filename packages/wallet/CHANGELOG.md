@@ -1,5 +1,12 @@
 # @nostr-wot/wallet
 
+## 2.0.0
+
+### Major changes
+
+- Use `nostr-wot-sdk` relay, data and signer modules instead of the retired scoped foundation packages. Keep the wallet, NWC and React entry points and existing payment/zap APIs.
+- Document explicit wallet installation for applications using the SDK's optional wallet compatibility imports.
+
 ## 1.0.0
 
 ### Major Changes
