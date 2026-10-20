@@ -83,7 +83,7 @@ jobs:
       - name: Float the crypto dependencies to the newest version each range admits
         run: |
           set -euo pipefail
-          for pkg in accounts vault; do
+          for pkg in identity; do
             name=$(node -p "require('./packages/$pkg/package.json').name")
             specs=$(node -p "
               const d = require('./packages/$pkg/package.json').dependencies || {};
@@ -109,10 +109,10 @@ jobs:
       # Workspace imports resolve published declaration entrypoints in dist/.
       # Build those before typechecking consumers on a clean runner.
       - name: Typecheck
-        run: npm run typecheck -w @nostr-wot/accounts -w @nostr-wot/vault
+        run: npm run typecheck -w @nostr-wot/identity
 
-      # accounts owns NIP-49 and vault owns the password stretching. These are the two suites a
+      # identity owns NIP-49 and password stretching. These are the crypto suites a
       # library changing its own accounting under a caret range strands a user in.
       - name: Run the crypto suites
-        run: npm run test:run -w @nostr-wot/accounts -w @nostr-wot/vault
+        run: npm run test:run -w @nostr-wot/identity
         timeout-minutes: 15
