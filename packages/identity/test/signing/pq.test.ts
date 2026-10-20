@@ -595,8 +595,8 @@ describe('nip44Encrypt seals post-quantum only when the caller asks, as the exte
 describe('signPqAttestation is a signing request like any other', () => {
   test('a derived account signs a kind:10203 that verifies, with origin derived and a 256-bit seed', async () => {
     const acct = seededAccount('acct_seed', M24);
-    const { core, vault, activity, approval } = await fixture(true, { accounts: [acct] });
-    vi.spyOn(vault, 'now').mockReturnValue(Date.now());
+    const now = Date.now();
+    const { core, vault, activity, approval } = await fixture(true, { accounts: [acct], now: () => now });
     const event = (await core.handle(req('signPqAttestation'))) as Event;
 
     expect(event.kind).toBe(PQC_KIND);
