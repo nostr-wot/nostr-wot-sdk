@@ -79,6 +79,9 @@ jobs:
             echo "$name: the check bites on a tampered dist and on a partial one"
           done
 
+      - name: Verify package layout and installed compatibility
+        run: npm run test:layout && npm run test:packed
+
       - name: Every packed tarball carries the dist that was just verified
         # What `npm publish` uploads is whatever `dist/` holds when it runs, so the tarball has
         # to match the build check:dist passed a moment ago.

@@ -9,7 +9,7 @@ import {
   type EventTemplate,
   type UnsignedEvent,
 } from "nostr-tools";
-import type { NostrSigner } from "@nostr-wot/signers";
+import type { NostrSigner } from "nostr-wot-sdk/signers";
 
 /**
  * Direct Messages — three kinds, in increasing order of privacy:

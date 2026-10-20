@@ -5,7 +5,8 @@ import { defineConfig } from 'tsup';
 export default defineConfig({
   entry: ['src/index.ts', 'src/nwc/index.ts', 'src/react/index.ts'],
   format: ['cjs', 'esm'],
-  dts: true,
+  dts: { compilerOptions: { rootDir: '../..' } },
+    tsconfig: 'tsconfig.build.json',
   clean: true,
   sourcemap: true,
   target: 'es2018',

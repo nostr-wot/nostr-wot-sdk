@@ -1,5 +1,5 @@
 import type { Event as NostrEvent } from "nostr-tools";
-import { getPool } from "@nostr-wot/data";
+import { getPool } from "nostr-wot-sdk/data";
 import {
   buildChatMessage,
   encryptNip04,

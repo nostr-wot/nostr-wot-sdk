@@ -3,7 +3,8 @@ import { defineConfig } from "tsup";
 export default defineConfig({
   entry: ["src/index.ts"],
   format: ["cjs", "esm"],
-  dts: true,
+  dts: { compilerOptions: { rootDir: '../..' } },
+    tsconfig: 'tsconfig.build.json',
   clean: true,
   sourcemap: true,
   target: "es2018",
@@ -14,8 +15,8 @@ export default defineConfig({
     "react",
     "react-dom",
     "nostr-tools",
-    "@nostr-wot/data",
-    "@nostr-wot/signers",
+    "nostr-wot-sdk/data",
+    "nostr-wot-sdk/signers",
   ],
   esbuildOptions(o) {
     o.jsx = "automatic";

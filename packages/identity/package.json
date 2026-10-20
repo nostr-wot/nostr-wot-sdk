@@ -1,0 +1,101 @@
+{
+  "name": "@nostr-wot/identity",
+  "version": "1.0.0",
+  "description": "Accounts, encrypted vaults, passkeys, signing policies and remote signer hosting for Nostr.",
+  "author": "Leon Acosta <leon@nostr-wot.com>",
+  "license": "GPL-3.0-only",
+  "keywords": [
+    "nostr",
+    "vault",
+    "pbkdf2",
+    "aes-gcm",
+    "platform-neutral"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nostr-wot/nostr-wot-sdk.git",
+    "directory": "packages/identity"
+  },
+  "homepage": "https://github.com/nostr-wot/nostr-wot-sdk/tree/main/packages/identity",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    "./accounts": {
+      "import": {
+        "types": "./dist/accounts/index.d.ts",
+        "default": "./dist/accounts/index.js"
+      }
+    },
+    "./vault": {
+      "import": {
+        "types": "./dist/vault/index.d.ts",
+        "default": "./dist/vault/index.js"
+      }
+    },
+    "./permissions": {
+      "import": {
+        "types": "./dist/permissions/index.d.ts",
+        "default": "./dist/permissions/index.js"
+      }
+    },
+    "./signing": {
+      "import": {
+        "types": "./dist/signing/index.d.ts",
+        "default": "./dist/signing/index.js"
+      }
+    },
+    "./bunker": {
+      "import": {
+        "types": "./dist/bunker/index.d.ts",
+        "default": "./dist/bunker/index.js"
+      }
+    },
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "scripts": {
+    "build": "tsup && node ../../scripts/dist-stamp.mjs stamp",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:run": "vitest run",
+    "check:dist": "node ../../scripts/dist-stamp.mjs check"
+  },
+  "dependencies": {
+    "@noble/ciphers": "^2.1.1",
+    "@noble/curves": "^2.0.1",
+    "@noble/hashes": "^2.4.0",
+    "@scure/base": "^2.0.0",
+    "@scure/bip32": "^2.0.1",
+    "@scure/bip39": "^2.0.1",
+    "nostr-wot-sdk": "^3.0.0",
+    "@nostr-wot/pq": "^1.0.0",
+    "nostr-tools": "^2.24.1"
+  },
+  "devDependencies": {
+    "tsup": "^8.0.1",
+    "typescript": "^5.3.0",
+    "vitest": "^4.0.18",
+    "nostr-tools": "^2.24.1",
+    "@types/ws": "^8.18.1",
+    "ws": "^8.18.3"
+  },
+  "sideEffects": false,
+  "peerDependencies": {}
+}

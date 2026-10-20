@@ -5,7 +5,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Event as NostrEvent, Filter } from 'nostr-tools';
-import { FakeRelayFactory, type FakeRelay } from '@nostr-wot/relay/hub';
+import { FakeRelayFactory, type FakeRelay } from 'nostr-wot-sdk/relay/hub';
 import { NWC_KINDS, NwcClient, NwcError, mayHavePaid, parseNwcUri, type NwcTransport } from '../src/nwc/index';
 import { FakeNwcWallet, type FakeWalletOptions } from './support/fake-nwc-wallet';
 

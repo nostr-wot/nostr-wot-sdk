@@ -15,7 +15,7 @@
  * encrypted-at-rest DM caching with one wrapper call.
  */
 
-import type { NostrSigner } from "@nostr-wot/signers";
+import type { NostrSigner } from "nostr-wot-sdk/signers";
 import type { DMMessage, DMStorage } from "./types";
 
 const KEY_PREFIX = "@nostr-wot/dm:cache-key:";

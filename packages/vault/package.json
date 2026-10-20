@@ -1,7 +1,7 @@
 {
   "name": "@nostr-wot/vault",
-  "version": "1.1.0",
-  "description": "Platform-neutral vault cryptography for the @nostr-wot packages: PBKDF2-HMAC-SHA-256 key derivation and AES-256-GCM, byte compatible with the WebCrypto vault format, with no WebCrypto required.",
+  "version": "1.1.1",
+  "description": "Deprecated compatibility wrapper for @nostr-wot/identity/vault.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "GPL-3.0-only",
   "keywords": [
@@ -41,23 +41,12 @@
   ],
   "scripts": {
     "build": "tsup && node ../../scripts/dist-stamp.mjs stamp",
-    "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "test:run": "vitest run",
     "check:dist": "node ../../scripts/dist-stamp.mjs check"
   },
   "dependencies": {
-    "@noble/ciphers": "^2.1.1",
-    "@noble/hashes": "^2.4.0",
-    "@nostr-wot/accounts": "^1.0.0",
-    "@nostr-wot/storage": "^1.0.0",
-    "@scure/base": "^2.0.0"
+    "@nostr-wot/identity": "^1.0.0"
   },
-  "devDependencies": {
-    "tsup": "^8.0.1",
-    "typescript": "^5.3.0",
-    "vitest": "^4.0.18"
-  },
-  "sideEffects": false
+  "sideEffects": false,
+  "deprecated": "Use @nostr-wot/identity/vault instead. The implementation moved to @nostr-wot/identity; this package only forwards the existing API. See https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md"
 }

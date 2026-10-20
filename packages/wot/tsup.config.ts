@@ -1,34 +1,28 @@
 import { defineConfig } from 'tsup';
-
-const JSX_AUTO = {
-  esbuildOptions(o: { jsx?: string }) {
-    o.jsx = 'automatic';
+export default defineConfig({
+  esbuildOptions(options) { options.jsx = "automatic"; },
+  "entry": {
+    "index": "src/index.ts",
+    "react/index": "src/react/index.ts",
+    "graph/index": "src/graph/index.ts",
+    "graph/react/index": "src/graph/react/index.ts"
   },
-};
-
-export default defineConfig([
-  {
-    ...JSX_AUTO,
-    entry: ['src/index.ts'],
-    format: ['cjs', 'esm'],
-    dts: true,
-    clean: true,
-    sourcemap: true,
-    target: 'es2018',
-    outDir: 'dist',
-    treeshake: true,
-    splitting: false,
-  },
-  {
-    ...JSX_AUTO,
-    entry: ['src/react/index.ts'],
-    format: ['cjs', 'esm'],
-    dts: true,
-    sourcemap: true,
-    target: 'es2018',
-    outDir: 'dist/react',
-    treeshake: true,
-    splitting: false,
-    external: ['react'],
-  },
-]);
+  "format": [
+    "esm",
+    "cjs"
+  ],
+  "dts": {"compilerOptions": {"rootDir": "../.."}},
+  "tsconfig": "tsconfig.build.json",
+  "clean": true,
+  "sourcemap": true,
+  "target": "es2018",
+  "outDir": "dist",
+  "treeshake": true,
+  "splitting": true,
+  "external": [
+    "nostr-wot-sdk",
+    "nostr-tools",
+    "react-dom",
+    "react"
+  ]
+});

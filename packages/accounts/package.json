@@ -1,7 +1,7 @@
 {
   "name": "@nostr-wot/accounts",
-  "version": "1.0.0",
-  "description": "Platform-neutral Nostr account primitives for the @nostr-wot packages: NIP-06 key derivation, import parsing and NIP-49 (ncryptsec) encoding, with no browser or React Native globals.",
+  "version": "1.0.1",
+  "description": "Deprecated compatibility wrapper for @nostr-wot/identity/accounts.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "GPL-3.0-only",
   "keywords": [
@@ -42,25 +42,12 @@
   ],
   "scripts": {
     "build": "tsup && node ../../scripts/dist-stamp.mjs stamp",
-    "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "test:run": "vitest run",
     "check:dist": "node ../../scripts/dist-stamp.mjs check"
   },
   "dependencies": {
-    "@noble/ciphers": "^2.1.1",
-    "@noble/curves": "^2.0.1",
-    "@noble/hashes": "^2.4.0",
-    "@scure/base": "^2.0.0",
-    "@scure/bip32": "^2.0.1",
-    "@scure/bip39": "^2.0.1"
+    "@nostr-wot/identity": "^1.0.0"
   },
-  "devDependencies": {
-    "nostr-tools": "^2.24.1",
-    "tsup": "^8.0.1",
-    "typescript": "^5.3.0",
-    "vitest": "^4.0.18"
-  },
-  "sideEffects": false
+  "sideEffects": false,
+  "deprecated": "Use @nostr-wot/identity/accounts instead. The implementation moved to @nostr-wot/identity; this package only forwards the existing API. See https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md"
 }

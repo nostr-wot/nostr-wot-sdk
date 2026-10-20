@@ -1,7 +1,7 @@
 {
   "name": "@nostr-wot/blossom",
-  "version": "1.0.0",
-  "description": "Blossom file upload / mirror / delete helpers for Nostr. Content-addressed (sha256), kind-24242 BUD-11 auth, configurable server failover.",
+  "version": "1.0.1",
+  "description": "Deprecated compatibility wrapper for nostr-wot-sdk/blossom.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "GPL-3.0-only",
   "keywords": [
@@ -46,17 +46,12 @@
   ],
   "scripts": {
     "build": "tsup && node ../../scripts/dist-stamp.mjs stamp",
-    "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
-    "test:run": "vitest run",
     "check:dist": "node ../../scripts/dist-stamp.mjs check"
   },
   "dependencies": {
-    "@noble/hashes": "^1.5.0",
-    "@nostr-wot/signers": "2.0.0"
+    "nostr-wot-sdk": "^3.0.0"
   },
   "sideEffects": false,
-  "peerDependencies": {
-    "nostr-tools": ">=2.0.0"
-  }
+  "deprecated": "Use nostr-wot-sdk/blossom instead. The implementation moved to nostr-wot-sdk; this package only forwards the existing API. See https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md"
 }

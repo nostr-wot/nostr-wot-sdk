@@ -29,10 +29,11 @@
     "packages/auth",
     "packages/sdk",
     "packages/pq",
-    "packages/signer-core"
+    "packages/signer-core",
+    "packages/identity"
   ],
   "scripts": {
-    "build": "npm run build -w @nostr-wot/storage && npm run build -w @nostr-wot/permissions && npm run build -w @nostr-wot/accounts && npm run build -w @nostr-wot/vault && npm run build -w @nostr-wot/pq && npm run build -w @nostr-wot/relay && npm run build -w @nostr-wot/data && npm run build -w @nostr-wot/signers && npm run build -w @nostr-wot/bunker && npm run build -w @nostr-wot/blossom && npm run build -w @nostr-wot/dm && npm run build -w @nostr-wot/wallet && npm run build -w @nostr-wot/wot && npm run build -w @nostr-wot/graph && npm run build -w @nostr-wot/ui && npm run build -w @nostr-wot/auth && npm run build -w nostr-wot-sdk && npm run build -w @nostr-wot/signer-core",
+    "build": "node scripts/build-packages.mjs",
     "dev": "npm run dev -ws --if-present",
     "test": "npm run test -ws --if-present",
     "test:run": "npm run test:run -ws --if-present",
@@ -42,7 +43,10 @@
     "clean": "rm -rf packages/*/dist",
     "changeset": "changeset",
     "version-packages": "changeset version && npm install --package-lock-only",
-    "release": "node scripts/release-preflight.mjs && changeset publish"
+    "release": "node scripts/release-preflight.mjs && changeset publish",
+    "test:layout": "node --test tests/package-layout.test.mjs",
+    "test:packed": "node scripts/test-packed-packages.mjs",
+    "deprecate:compat": "node scripts/deprecate-compat.mjs"
   },
   "devDependencies": {
     "@changesets/changelog-github": "0.6.0",

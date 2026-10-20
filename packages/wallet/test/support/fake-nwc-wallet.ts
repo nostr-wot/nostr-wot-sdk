@@ -21,8 +21,8 @@ import * as nip04 from 'nostr-tools/nip04';
 import { v2 as nip44 } from 'nostr-tools/nip44';
 import { normalizeURL } from 'nostr-tools/utils';
 import type { Filter } from 'nostr-tools';
-import { FakeRelay, FakeRelayFactory } from '@nostr-wot/relay/hub';
-import type { Identity } from '@nostr-wot/relay/hub';
+import { FakeRelay, FakeRelayFactory } from 'nostr-wot-sdk/relay/hub';
+import type { Identity } from 'nostr-wot-sdk/relay/hub';
 import { NWC_KINDS } from '../../src/nwc/info';
 const { info: KIND_NWC_INFO, request: KIND_NWC_REQUEST, response: KIND_NWC_RESPONSE } = NWC_KINDS;
 

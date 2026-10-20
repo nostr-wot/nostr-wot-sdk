@@ -9,7 +9,7 @@
 // extension) can zap immediately. The flow is pure NIP-57 plumbing with no
 // app-specific state, so reusing it across nostr-wot apps is trivial.
 
-import type { NostrSigner } from "@nostr-wot/signers";
+import type { NostrSigner } from "nostr-wot-sdk/signers";
 import { buildZapRequest, fetchLnurlPayMetadata } from "./zap-request";
 
 interface WebLNProvider {

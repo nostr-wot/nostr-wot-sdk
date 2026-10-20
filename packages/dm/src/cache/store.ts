@@ -1,4 +1,4 @@
-import { createKeyedObservable, type KeyedObservable } from "@nostr-wot/data/cache";
+import { createKeyedObservable, type KeyedObservable } from "nostr-wot-sdk/data/cache";
 import type { DMConversation, DMMessage } from "./types";
 
 /**

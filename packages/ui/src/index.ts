@@ -7,7 +7,7 @@ export {
   useLogout,
   type SessionSigner,
   type SessionState,
-} from "@nostr-wot/data/react";
+} from "nostr-wot-sdk/data/react";
 
 // UI shell with auto-restore + theming attributes
 export {

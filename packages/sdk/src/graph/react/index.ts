@@ -1,1 +1,1 @@
-export * from '@nostr-wot/graph/react';
+export * from '@nostr-wot/wot/graph/react';

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { nip19 } from "nostr-tools";
-import { PrivateKeySigner, type NostrSigner } from "@nostr-wot/signers";
+import { PrivateKeySigner, type NostrSigner } from "nostr-wot-sdk/signers";
 import { SIGNER_STORAGE_KEY_NSEC } from "../../signer-storage";
 import { useSignerStorage } from "../../signer-storage-context";
 

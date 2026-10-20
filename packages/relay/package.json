@@ -1,7 +1,7 @@
 {
   "name": "@nostr-wot/relay",
-  "version": "1.0.0",
-  "description": "Standalone Nostr relay utilities: pool management, query batching, stats, low-level helpers.",
+  "version": "1.0.1",
+  "description": "Deprecated compatibility wrapper for nostr-wot-sdk/relay.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "GPL-3.0-only",
   "repository": {
@@ -58,20 +58,8 @@
   ],
   "scripts": {
     "build": "tsup && node ../../scripts/dist-stamp.mjs stamp",
-    "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
-    "test": "vitest",
-    "test:run": "vitest run",
     "check:dist": "node ../../scripts/dist-stamp.mjs check"
-  },
-  "peerDependencies": {
-    "nostr-tools": ">=2.0.0",
-    "react": ">=16.8.0"
-  },
-  "peerDependenciesMeta": {
-    "react": {
-      "optional": true
-    }
   },
   "sideEffects": false,
   "keywords": [
@@ -83,7 +71,8 @@
     "nostr-tools",
     "low-level"
   ],
-  "devDependencies": {
-    "vitest": "^4.0.18"
+  "deprecated": "Use nostr-wot-sdk/relay instead. The implementation moved to nostr-wot-sdk; this package only forwards the existing API. See https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md",
+  "dependencies": {
+    "nostr-wot-sdk": "^3.0.0"
   }
 }

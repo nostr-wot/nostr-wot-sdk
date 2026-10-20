@@ -29,7 +29,7 @@
 // `dist/` is gitignored, so the value of this is not that CI's fresh build is fresh. What it
 // buys: `npm pack` and `npm publish` no longer rebuild (no `prepack`), so the bytes that go to
 // npm are the bytes the gate verified, and `check:dist` is what says so. The negative side is
-// proven in `packages/vault/test/dist-freshness.test.ts` (a fixture package, re-broken every
+// proven in `packages/identity/test/vault/dist-freshness.test.ts` (a fixture package, re-broken every
 // way that matters) and in CI, which re-breaks the real `dist/` of every package in the list
 // `packages` prints.
 //
@@ -62,7 +62,7 @@ const ROOT = resolve(fileURLToPath(import.meta.url), '..', '..');
  * that and fixed it, and a fix applied in one package and not its neighbour is how this
  * class survives.
  */
-export const BUILD_INPUTS = ['src', 'tsup.config.ts', 'tsconfig.json', 'package.json'];
+export const BUILD_INPUTS = ['src', 'tsup.config.ts', 'tsconfig.json', 'tsconfig.build.json', 'package.json'];
 
 /** The tools whose version changes the output of a build from identical inputs. */
 const TOOLS = ['tsup', 'esbuild', 'typescript'];
@@ -77,7 +77,7 @@ export const STAMP = '.src-hash';
  */
 export function resolvedTsConfig(pkg) {
   try {
-    return execFileSync(process.execPath, [require.resolve('typescript/lib/tsc.js'), '--showConfig', '-p', pkg], {
+    return execFileSync(process.execPath, [require.resolve('typescript/lib/tsc.js'), '--showConfig', '-p', existsSync(join(pkg, 'tsconfig.build.json')) ? join(pkg, 'tsconfig.build.json') : pkg], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     });

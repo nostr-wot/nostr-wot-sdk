@@ -5,7 +5,7 @@ import {
   NostrDataProvider,
   NostrSessionProvider,
   type NostrSessionProviderProps,
-} from '@nostr-wot/data/react';
+} from '../data/react';
 import { WoTProvider, type WoTProviderProps } from '@nostr-wot/wot/react';
 
 export interface NostrSdkProviderProps {

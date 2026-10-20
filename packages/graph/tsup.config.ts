@@ -1,27 +1,25 @@
 import { defineConfig } from 'tsup';
-
-export default defineConfig([
-  {
-    entry: ['src/index.ts'],
-    format: ['cjs', 'esm'],
-    dts: true,
-    clean: true,
-    sourcemap: true,
-    target: 'es2018',
-    outDir: 'dist',
-    treeshake: true,
-    splitting: false,
-    external: ['@nostr-wot/relay', 'nostr-tools', 'react'],
+export default defineConfig({
+  "entry": {
+    "index": "src/index.ts",
+    "react/index": "src/react/index.ts"
   },
-  {
-    entry: ['src/react/index.ts'],
-    format: ['cjs', 'esm'],
-    dts: true,
-    sourcemap: true,
-    target: 'es2018',
-    outDir: 'dist/react',
-    treeshake: true,
-    splitting: false,
-    external: ['@nostr-wot/relay', 'nostr-tools', 'react'],
-  },
-]);
+  "format": [
+    "esm",
+    "cjs"
+  ],
+  "dts": {"compilerOptions": {"rootDir": "../.."}},
+  "tsconfig": "tsconfig.build.json",
+  "clean": true,
+  "sourcemap": true,
+  "target": "es2018",
+  "outDir": "dist",
+  "treeshake": true,
+  "splitting": true,
+  "external": [
+    "nostr-tools",
+    "react-dom",
+    "@nostr-wot/wot",
+    "react"
+  ]
+});

@@ -7,8 +7,8 @@ import {
   getPublicKey,
   nip19,
 } from "nostr-tools";
-import { PrivateKeySigner, type NostrSigner } from "@nostr-wot/signers";
-import { getPool } from "@nostr-wot/data";
+import { PrivateKeySigner, type NostrSigner } from "nostr-wot-sdk/signers";
+import { getPool } from "nostr-wot-sdk/data";
 import {
   localStorageSignerStorage,
   SIGNER_STORAGE_KEY_NSEC,

@@ -2,18 +2,24 @@
  * ESLint, flat config.
  *
  * The only thing enforced here today is the platform boundary of the shared packages: the
- * ones a browser extension and a React Native app both consume, which therefore cannot
- * import a UI framework or reach for a browser global. `packages/vault/test/boundaries.test.ts`
- * scans the same packages for the same tokens and checks that `SHARED_PACKAGES` matches its
- * own list, so a package added to one guard and not the other fails the suite.
+ * portable modules a browser extension and a React Native app both consume, which therefore cannot
+ * import a UI framework or reach for a browser global. `packages/identity/test/vault/boundaries.test.ts`
+ * scans the same source paths for the same tokens and checks that `SHARED_SOURCE_PATHS` matches its
+ * own list, so a module added to one guard and not the other fails the suite.
  *
  * Only `src/` is covered. Tests and generator scripts are free to use Node and its WebCrypto;
  * the vault's compatibility suite depends on exactly that.
  */
 import tsParser from '@typescript-eslint/parser';
 
-/** Keep in step with `SHARED` in `packages/vault/test/boundaries.test.ts`. */
-export const SHARED_PACKAGES = ['storage', 'vault', 'accounts', 'permissions', 'signer-core'];
+/** Keep in step with `SHARED` in `packages/identity/test/vault/boundaries.test.ts`. */
+export const SHARED_SOURCE_PATHS = [
+  'packages/sdk/src/storage',
+  'packages/identity/src/accounts',
+  'packages/identity/src/vault',
+  'packages/identity/src/permissions',
+  'packages/identity/src/signing',
+];
 
 const FRAMEWORKS = ['react', 'react-native'];
 const PLATFORM_GLOBALS = ['browser', 'chrome', 'window', 'localStorage'];
@@ -39,7 +45,7 @@ export default [
     ignores: ['**/dist/**', '**/node_modules/**', '**/coverage/**', '.interop-extension/**'],
   },
   {
-    files: [`packages/{${SHARED_PACKAGES.join(',')}}/src/**/*.ts`],
+    files: SHARED_SOURCE_PATHS.map((path) => `${path}/**/*.ts`),
     languageOptions: {
       parser: tsParser,
       ecmaVersion: 2022,
