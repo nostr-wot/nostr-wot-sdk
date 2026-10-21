@@ -106,4 +106,11 @@ export {
   encryptRecoveryPayload, decryptRecoveryPayload, buildRecoveryEvent,
   validateRecoveryEvent, recoveryContextFromEvent, saveRecovery, restoreRecovery,
 } from './recovery.js';
-export type { RecoveryScope, RecoveryContext, RecoveryEvent, RecoveryEventTemplate, RecoveryVerifier, RecoveryProvider, RecoveryTransport } from './recovery.js';
+export type { RecoveryScope, RecoveryContext, RecoveryEvent, RecoveryEventTemplate, RecoveryVerifier, RecoveryProvider, RecoveryTransport, RecoveryFilter, PasskeyAssertionRequest, PasskeyAssertionResult } from './recovery.js';
+
+export { DEFAULT_DERIVED_PARAMETER_SET, derivedPrfInput, deriveNostrKey, encodeDerivedHandle, encodeStoredHandle, classifyPasskeyHandle } from './passkey-modes.js';
+export type { DerivedParameterSet, PasskeyHandleClass } from './passkey-modes.js';
+export { storedPrfInput, encryptStoredRecord, openStoredRecord, storedPayloadKeys, storedSeedKey, saveStoredRecord } from './passkey-store.js';
+export type { StoredRecordContext, StoredPayload, StoredSeed, StoredVault, StoredVaultAccount, StoredKey } from './passkey-store.js';
+export { resolvePasskeyIdentity, derivePasskeyIdentity } from './passkey-identity.js';
+export type { PasskeyIdentity, PasskeyIdentityError, ResolvePasskeyIdentityOptions } from './passkey-identity.js';
