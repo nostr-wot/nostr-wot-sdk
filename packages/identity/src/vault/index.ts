@@ -110,7 +110,7 @@ export type { RecoveryScope, RecoveryContext, RecoveryEvent, RecoveryEventTempla
 
 export { DEFAULT_DERIVED_PARAMETER_SET, derivedPrfInput, deriveNostrKey, encodeDerivedHandle, encodeStoredHandle, classifyPasskeyHandle } from './passkey-modes.js';
 export type { DerivedParameterSet, PasskeyHandleClass } from './passkey-modes.js';
-export { storedPrfInput, encryptStoredRecord, openStoredRecord, storedPayloadKeys, storedSeedKey, saveStoredRecord } from './passkey-store.js';
+export { STORED_RECOVERY_EVENT_KIND, storedPrfInput, encryptStoredRecord, openStoredRecord, storedPayloadKeys, storedSeedKey, saveStoredRecord } from './passkey-store.js';
 export type { StoredRecordContext, StoredPayload, StoredSeed, StoredVault, StoredVaultAccount, StoredKey } from './passkey-store.js';
 export { resolvePasskeyIdentity, derivePasskeyIdentity } from './passkey-identity.js';
 export type { PasskeyIdentity, PasskeyIdentityError, ResolvePasskeyIdentityOptions } from './passkey-identity.js';

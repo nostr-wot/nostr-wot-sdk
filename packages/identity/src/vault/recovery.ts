@@ -204,7 +204,7 @@ export async function publishAll(options: RecoveryPorts, event: RecoveryEvent): 
  * Query every relay with every filter and keep each author's newest event that `check` accepts,
  * newest first. Invalid public events cannot choose a credential or override a valid record.
  */
-export async function queryNewest<T>(ports: Pick<RecoveryPorts, 'transport' | 'relays' | 'timeoutMs'>, filters: RecoveryFilter[], check: (event: RecoveryEvent) => Promise<T>): Promise<{ event: RecoveryEvent; value: T }[]> {
+export async function queryNewest<T>(ports: Pick<RecoveryPorts, 'transport' | 'relays' | 'timeoutMs'>, filters: RecoveryFilter[], check: (event: RecoveryEvent) => Promise<T>, keepAll = false): Promise<{ event: RecoveryEvent; value: T }[]> {
   const results = await Promise.all(relayList(ports.relays).flatMap(relay => filters.map(async filter => {
     try { return await bounded(signal => ports.transport.query(relay, filter, { signal }), ports.timeoutMs); }
     catch { return []; }
@@ -215,8 +215,9 @@ export async function queryNewest<T>(ports: Pick<RecoveryPorts, 'transport' | 'r
     for (const event of result) {
       try {
         const value = await check(event);
-        const current = newest.get(event.pubkey)?.event;
-        if (!current || event.created_at > current.created_at || event.created_at === current.created_at && event.id < current.id) newest.set(event.pubkey, { event, value });
+        const coordinate = keepAll ? event.id : event.pubkey;
+        const current = newest.get(coordinate)?.event;
+        if (!current || event.created_at > current.created_at || event.created_at === current.created_at && event.id < current.id) newest.set(coordinate, { event, value });
       } catch { /* Skipped. */ }
     }
   }

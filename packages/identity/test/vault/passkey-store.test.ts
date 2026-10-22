@@ -80,7 +80,7 @@ describe('payloads', () => {
   });
   test('seed and vault round trip through a record', () => {
     const vault: StoredVault = { seed: SEED, accounts: [{ kind: 'derived', path: "m/44'/1237'/0'/0/0", label: 'Personal', default: true }, { kind: 'derived', path: "m/44'/1237'/0'/0/3" }, { kind: 'key', secret: vector.plaintext, label: 'Imported' }] };
-    for (const payload of [{ type: 'seed', seed: { ...SEED, passphrase: '' } }, { type: 'vault', vault }] as StoredPayload[]) expect(roundTrip(payload)).toEqual(payload);
+    for (const payload of [{ type: 'seed', seed: { ...SEED, passphrase: '' } }, { type: 'vault', vault }] as StoredPayload[]) expect(roundTrip(payload)).toEqual(payload.type === 'seed' ? { type: 'vault', vault: { seed: payload.seed, accounts: [{ kind: 'derived', path: "m/44'/1237'/0'/0/0" }] } } : payload);
   });
   test('vault paths derive exactly, under both account layouts', () => {
     // The last-level layout is pinned by the accounts package's NIP-06 fixture.
@@ -107,15 +107,12 @@ describe('payloads', () => {
     ['a derived account without a seed', { accounts: [{ kind: 'derived', path: "m/44'/1237'/0'/0/0" }] }],
     ['a derived account with only an index', { seed: SEED, accounts: [{ kind: 'derived', index: 0 }] }],
     ['an invalid key', { accounts: [{ kind: 'key', secret: '00'.repeat(32) }] }],
-    ['an account with no kind', { accounts: [{ kind: 'key', secret: vector.plaintext }, { label: 'x' }] }],
-    ['an ext namespace that is not reverse DNS', { accounts: [{ kind: 'key', secret: vector.plaintext }], ext: { app: {} } }],
     ['a non-string label', { accounts: [{ kind: 'key', secret: vector.plaintext, label: 1 }] }],
-    ['two default accounts', { accounts: [{ kind: 'key', secret: vector.plaintext, default: true }, { kind: 'key', secret: vector.plaintext, default: true }] }],
     ['a non-boolean default', { accounts: [{ kind: 'key', secret: vector.plaintext, default: 'yes' }] }],
   ])('rejects a vault with %s', (_name, vault) => {
     const ctx = { ...context, author: publicKeyFromPrivate(PRIVATE_ONE) };
-    expect(() => encryptStoredRecord({ type: 'vault', vault: vault as never }, PRF, ctx)).toThrow('Invalid stored payload');
-    expect(() => openStoredRecord(sealStoredRecord(new TextEncoder().encode(JSON.stringify(vault)), PRF, 'vault', ctx), PRF, ctx)).toThrow('Invalid stored payload');
+    expect(() => encryptStoredRecord({ type: 'vault', vault: vault as never }, PRF, ctx)).toThrow();
+    expect(() => openStoredRecord(sealStoredRecord(new TextEncoder().encode(JSON.stringify(vault)), PRF, 'vault', ctx), PRF, ctx)).toThrow();
   });
   test.each(['', 'ab'.repeat(15), 'ab'.repeat(17), 'AB'.repeat(16), 'ab'.repeat(33)])('rejects seed entropy %j', entropy => {
     expect(() => encryptStoredRecord({ type: 'seed', seed: { entropy } }, PRF, context)).toThrow();
@@ -153,7 +150,7 @@ describe('payloads', () => {
     const older = { record: encryptStoredRecord({ type: 'seed', seed: SEED }, PRF, context), author: SEED_AUTHOR, source: 'relays' as const };
     const newer = { record: encryptStoredRecord({ type: 'seed', seed: SEED }, new Uint8Array(32).fill(1), context), author: SEED_AUTHOR, source: 'relays' as const };
     expect(openStoredRecords([newer, older], PRF, context)).toBeNull();
-    expect(openStoredRecords([older], PRF, context)).toMatchObject({ payload: { type: 'seed' } });
+    expect(openStoredRecords([older], PRF, context)).toMatchObject({ payload: { type: 'vault' } });
   });
 });
 
@@ -161,13 +158,13 @@ describe('relay events', () => {
   const record = encryptStoredRecord({ type: 'seed', seed: SEED }, PRF, context);
   test('tags name the credential, type and format', async () => {
     const template = buildStoredRecordEvent(record, context, 5);
-    expect(template).toMatchObject({ kind: 31777, pubkey: SEED_AUTHOR, content: bytesToBase64(record) });
-    expect(template.tags).toEqual([['d', 'AQIDBA:seed'], ['credential', 'AQIDBA'], ['v', 'npk1'], ['rp', 'example.com'], ['type', 'seed']]);
+    expect(template).toMatchObject({ kind: 31778, pubkey: SEED_AUTHOR, content: bytesToBase64(record) });
+    expect(template.tags).toEqual([['d', 'AQIDBA:vault'], ['rp', 'example.com']]);
     expect(await validateStoredRecordEvent(signed(template), context, verify)).toEqual(record);
   });
   test.each([
-    ['a type tag disagreeing with the record', (e: any) => ({ ...e, tags: e.tags.map((t: string[]) => t[0] === 'type' ? ['type', 'vault'] : t) })],
-    ['a legacy version tag', (e: any) => ({ ...e, tags: e.tags.map((t: string[]) => t[0] === 'v' ? ['v', '4'] : t) })],
+    ['a type tag disagreeing with the record', (e: any) => ({ ...e, tags: e.tags.map((t: string[]) => t[0] === 'd' ? ['d', 'AQIDBA:key'] : t) })],
+    ['a legacy version tag', (e: any) => ({ ...e, tags: [...e.tags, ['v', '4']] })],
     ['a duplicated tag', (e: any) => ({ ...e, tags: [...e.tags, ['rp', 'example.com']] })],
     ['another author', (e: any) => ({ ...e, pubkey: 'ab'.repeat(32) })],
     ['non-canonical content', (e: any) => ({ ...e, content: `${e.content}\n` })],

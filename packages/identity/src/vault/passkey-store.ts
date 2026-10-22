@@ -11,9 +11,10 @@ import { sha256 } from '@noble/hashes/sha2.js';
 import { gcm } from '@noble/ciphers/aes.js';
 import { randomBytes } from '@noble/ciphers/utils.js';
 import { base64urlnopad } from '@scure/base';
+import { HDKey } from '@scure/bip32';
 import { entropyToMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
-import { derivePath, isValidPrivateKey, mnemonicToSeed, normalizeDerivationPath, publicKeyFromPrivate, NIP06_PATH } from '../accounts/derivation.js';
+import { isValidPrivateKey, mnemonicToSeed, normalizeDerivationPath, publicKeyFromPrivate, NIP06_PATH } from '../accounts/derivation.js';
 import { base64ToBytes, bytesToBase64, hexToBytes } from './serialization.js';
 import { validPasskeyRpId } from './passkey.js';
 import {
@@ -23,6 +24,8 @@ import {
 
 const LABEL = 'nostr-passkey:store:v1';
 const VERSION_TAG = 'npk1';
+/** Provisional new kind; 31777 remains readable for existing credentials. */
+export const STORED_RECOVERY_EVENT_KIND = 31778;
 export const STORED_MAX_PLAINTEXT_BYTES = 65536;
 const TYPES = { key: 0x01, seed: 0x02, vault: 0x03 } as const;
 type StoredPayloadType = keyof typeof TYPES;
@@ -45,7 +48,7 @@ function credential(context: StoredRecordContext): Uint8Array {
 }
 /** Does this byte string start like a record of this format? Says nothing about validity. */
 export function isStoredRecord(bytes: Uint8Array): boolean {
-  return bytes instanceof Uint8Array && bytes.length > HEADER.length && HEADER.every((byte, i) => bytes[i] === byte);
+  return bytes instanceof Uint8Array && bytes.length >= HEADER.length && HEADER.every((byte, i) => bytes[i] === byte);
 }
 export function storedRecordAad(type: StoredPayloadType, context: StoredRecordContext): Uint8Array {
   const id = credential(context);
@@ -91,6 +94,8 @@ export type StoredVaultAccount =
   /** A kind this package does not know: skipped on import, kept unchanged on rewrite. */
   | { kind: string; label?: string; default?: boolean; [field: string]: unknown };
 export interface StoredVault {
+  /** Authenticated content timestamp; missing means zero. */
+  updated_at?: number;
   seed?: StoredSeed;
   accounts: StoredVaultAccount[];
   /** Application data by reverse-DNS namespace. Keep namespaces you do not know unchanged. */
@@ -103,10 +108,9 @@ export type StoredPayload =
   | { type: 'vault'; vault: StoredVault };
 
 const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
-const REVERSE_DNS = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/;
 const validHexKey = (hex: unknown) => typeof hex === 'string' && /^[a-f0-9]{64}$/.test(hex) && (() => { const key = hexToBytes(hex); try { return isValidPrivateKey(key); } finally { key.fill(0); } })();
 function validSeedPath(path: unknown): path is string {
-  return typeof path === 'string' && normalizeDerivationPath(path) === path && path.startsWith(SEED_PATH_PREFIX) && path.length > SEED_PATH_PREFIX.length;
+  return typeof path === 'string' && normalizeDerivationPath(path) === path && path.startsWith(SEED_PATH_PREFIX) && path.length > SEED_PATH_PREFIX.length && path.split('/').length <= 256;
 }
 function validSeed(seed: unknown): seed is StoredSeed {
   // BIP-39 entropy is 16 to 32 bytes in steps of 4.
@@ -114,11 +118,55 @@ function validSeed(seed: unknown): seed is StoredSeed {
 }
 function validVault(vault: unknown): vault is StoredVault {
   if (!isObject(vault) || (vault.seed !== undefined && !validSeed(vault.seed)) || !Array.isArray(vault.accounts) || !vault.accounts.length) return false;
-  if (vault.ext !== undefined && (!isObject(vault.ext) || Object.keys(vault.ext).some(namespace => !REVERSE_DNS.test(namespace)))) return false;
-  if (vault.accounts.filter(account => isObject(account) && account.default === true).length > 1) return false;
-  return vault.accounts.every(account => isObject(account) && typeof account.kind === 'string'
-    && (account.label === undefined || typeof account.label === 'string') && (account.default === undefined || typeof account.default === 'boolean')
-    && (account.kind === 'derived' ? vault.seed !== undefined && validSeedPath(account.path) : account.kind !== 'key' || validHexKey(account.secret)));
+  if (vault.ext !== undefined && !isObject(vault.ext)) return false;
+  return vault.updated_at === undefined || typeof vault.updated_at === 'number' && Number.isSafeInteger(vault.updated_at) && vault.updated_at >= 0;
+}
+function usableAccount(account: unknown, vault: StoredVault): account is StoredVaultAccount {
+  return isObject(account) && (account.label === undefined || typeof account.label === 'string')
+    && (account.default === undefined || typeof account.default === 'boolean')
+    && (account.kind === 'key' ? validHexKey(account.secret) : account.kind === 'derived' && vault.seed !== undefined && validSeedPath(account.path));
+}
+/** Parse JSON without losing duplicate names or the lexical form of updated_at. */
+function strictJson(text: string): unknown {
+  // JSON.parse validates the grammar; the walk retains the source tokens it normally discards.
+  const result: unknown = JSON.parse(text);
+  const tokens = text.match(/"(?:[^"\\]|\\.)*"|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null|[{}\[\]:,]/gs)!;
+  let at = 0;
+  const string = (token: string): string => {
+    const value: string = JSON.parse(token);
+    for (let i = 0; i < value.length; i++) {
+      const unit = value.charCodeAt(i);
+      if (unit >= 0xd800 && unit <= 0xdbff) { const next = value.charCodeAt(++i); if (!(next >= 0xdc00 && next <= 0xdfff)) throw new Error('Unpaired surrogate'); }
+      else if (unit >= 0xdc00 && unit <= 0xdfff) throw new Error('Unpaired surrogate');
+    }
+    return value;
+  };
+  const walk = (root = false): void => {
+    const token = tokens[at++];
+    if (token === '{') {
+      const names = new Set<string>();
+      while (tokens[at] !== '}') {
+        const name = string(tokens[at++]);
+        if (names.has(name)) throw new Error('Duplicate member');
+        names.add(name); at++;
+        if (root && name === 'updated_at' && !/^(?:0|[1-9]\d*)$/.test(tokens[at])) throw new Error('Invalid updated_at');
+        walk();
+        if (tokens[at] !== ',') break;
+        at++;
+      }
+      at++;
+    } else if (token === '[') {
+      while (tokens[at] !== ']') { walk(); if (tokens[at] !== ',') break; at++; }
+      at++;
+    } else if (token.startsWith('"')) string(token);
+  };
+  walk(true);
+  return result;
+}
+
+/** Legacy seed callers now write the companion vault representation. */
+function writablePayload(payload: StoredPayload): StoredPayload {
+  return payload.type === 'seed' ? { type: 'vault', vault: { seed: payload.seed, accounts: [{ kind: 'derived', path: NIP06_PATH }] } } : payload;
 }
 function encodePayload(payload: StoredPayload): Uint8Array {
   let bytes: Uint8Array;
@@ -126,6 +174,7 @@ function encodePayload(payload: StoredPayload): Uint8Array {
   else if (payload?.type === 'seed' && validSeed(payload.seed)) bytes = new TextEncoder().encode(JSON.stringify(payload.seed));
   else if (payload?.type === 'vault' && validVault(payload.vault)) bytes = new TextEncoder().encode(JSON.stringify(payload.vault));
   else throw new Error('Invalid stored payload');
+  if (payload.type !== 'key') strictJson(new TextDecoder().decode(bytes));
   if (bytes.length > STORED_MAX_PLAINTEXT_BYTES) { bytes.fill(0); throw new Error('Stored payload exceeds size limit'); }
   return bytes;
 }
@@ -135,7 +184,7 @@ function decodePayload(type: StoredPayloadType, plaintext: Uint8Array): StoredPa
     return { type, key: Uint8Array.from(plaintext) };
   }
   let value: unknown;
-  try { value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(plaintext)); } catch { throw new Error('Invalid stored payload'); }
+  try { value = strictJson(new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(plaintext)); } catch { throw new Error('Invalid stored payload'); }
   if (type === 'seed' && validSeed(value)) return { type, seed: value };
   if (type === 'vault' && validVault(value)) return { type, vault: value };
   throw new Error('Invalid stored payload');
@@ -148,7 +197,18 @@ export function storedSeedKey(seed: StoredSeed, path: string = NIP06_PATH): Uint
   const entropy = hexToBytes(seed.entropy);
   try {
     const bip39 = mnemonicToSeed(entropyToMnemonic(entropy, wordlist), seed.passphrase ?? '');
-    try { return derivePath(bip39, path); } finally { bip39.fill(0); }
+    let node: HDKey | undefined;
+    try {
+      node = HDKey.fromMasterSeed(bip39);
+      for (const level of path.split('/').slice(1)) {
+        const index = Number(level.replace("'", '')) + (level.endsWith("'") ? 0x80000000 : 0);
+        const child: HDKey = node!.deriveChild(index);
+        node!.wipePrivateData(); node = child;
+        if (child.index !== index) throw new Error('Invalid BIP-32 child at requested index');
+      }
+      if (!node!.privateKey) throw new Error('Invalid BIP-32 private key');
+      return Uint8Array.from(node!.privateKey!);
+    } finally { node?.wipePrivateData(); bip39.fill(0); }
   } finally { entropy.fill(0); }
 }
 
@@ -167,9 +227,14 @@ export function storedPayloadKeys(payload: StoredPayload): StoredKey[] {
   const keys: StoredKey[] = [];
   try {
     for (const account of payload.vault.accounts) {
+      if (!usableAccount(account, payload.vault)) continue;
+      try {
       if (account.kind === 'key') keys.push(entry(hexToBytes(account.secret as string), account));
       else if (account.kind === 'derived') keys.push(entry(storedSeedKey(payload.vault.seed!, account.path as string), account));
+      } catch { /* An invalid BIP-32 result skips this account without advancing its index. */ }
     }
+    const selected = keys.findIndex(key => key.default);
+    keys.forEach((key, index) => { key.default = index === (selected < 0 ? 0 : selected); });
     return keys;
   } catch (error) { for (const key of keys) key.secret.fill(0); throw error; }
 }
@@ -184,6 +249,7 @@ function hasAuthor(payload: StoredPayload, author: string): boolean {
  */
 export function encryptStoredRecord(payload: StoredPayload, prf: Uint8Array, context: StoredRecordContext): Uint8Array {
   credential(context);
+  payload = writablePayload(payload);
   const plaintext = encodePayload(payload);
   try {
     if (!hasAuthor(payload, context.author)) throw new Error('Author is not one of the stored keys');
@@ -210,25 +276,37 @@ export function openStoredRecord(record: Uint8Array, prf: Uint8Array, context: S
   } finally { plaintext.fill(0); }
 }
 
-function tags(type: StoredPayloadType, context: StoredRecordContext): string[][] {
+function tags(type: StoredPayloadType, context: StoredRecordContext, legacy = false): string[][] {
   const id = base64urlnopad.encode(credential(context));
-  return [['d', `${id}:${type}`], ['credential', id], ['v', VERSION_TAG], ['rp', context.rpId], ['type', type]];
+  return legacy ? [['d', `${id}:${type}`], ['credential', id], ['v', VERSION_TAG], ['rp', context.rpId], ['type', type]] : [['d', `${id}:${type}`], ['rp', context.rpId]];
 }
 export function buildStoredRecordEvent(record: Uint8Array, context: StoredRecordContext, createdAt: number): RecoveryEventTemplate {
   const type = recordType(record);
   if (!Number.isSafeInteger(createdAt) || createdAt < 0) throw new Error('Invalid stored record timestamp');
-  return { kind: RECOVERY_EVENT_KIND, pubkey: context.author, created_at: createdAt, content: bytesToBase64(record), tags: tags(type, context) };
+  if (type === 'seed') throw new Error('New seed records must use a vault');
+  return { kind: STORED_RECOVERY_EVENT_KIND, pubkey: context.author, created_at: createdAt, content: bytesToBase64(record), tags: tags(type, context) };
 }
 /** Validate an event for this credential and author and return its record bytes. */
 export async function validateStoredRecordEvent(event: RecoveryEvent, context: StoredRecordContext, verify: RecoveryVerifier): Promise<Uint8Array> {
   credential(context);
-  if (!validEventShape(event, context.author) || typeof event.content !== 'string' || event.content.length > 4 * Math.ceil(MAX_RECORD_BYTES / 3)) throw new Error('Invalid stored record event');
+  const legacy = event.kind === RECOVERY_EVENT_KIND;
+  const type = event.tags?.find(tag => tag[0] === 'd')?.[1]?.split(':')[1] as StoredPayloadType;
+  await eligibleEvent(event, context, type, verify);
+  if (typeof event.content !== 'string' || event.content.length > 4 * Math.ceil(MAX_RECORD_BYTES / 3)) throw new Error('Invalid stored record event');
   const record = base64ToBytes(event.content);
-  if (bytesToBase64(record) !== event.content) throw new Error('Invalid stored record event');
-  const tag = mismatchedTag(event, tags(recordType(record), context));
+  if (bytesToBase64(record) !== event.content || recordType(record) !== type || !legacy && type === 'seed') throw new Error('Invalid stored record event');
+  return record;
+}
+
+/** Public eligibility precedes record decoding so a broken latest vault cannot expose an older one. */
+async function eligibleEvent(event: RecoveryEvent, context: StoredRecordContext, type: StoredPayloadType, verify: RecoveryVerifier): Promise<void> {
+  if (!validEventShape({ ...event, kind: RECOVERY_EVENT_KIND }, context.author) || ![RECOVERY_EVENT_KIND, STORED_RECOVERY_EVENT_KIND].includes(event.kind) || !['key', 'seed', 'vault'].includes(type)) throw new Error('Invalid stored record event');
+  const legacy = event.kind === RECOVERY_EVENT_KIND;
+  if (!legacy && (type === 'seed' || event.tags.some(tag => tag[0] === 'v'))) throw new Error('Invalid stored record version');
+  const expected = legacy ? tags(type, context, true) : tags(type, context).filter(tag => tag[0] === 'd' || event.tags.some(actual => actual[0] === 'rp'));
+  const tag = mismatchedTag(event, expected);
   if (tag) throw new Error(`Invalid stored record ${tag}`);
   if (!await verifiedPlain(event, verify)) throw new Error('Invalid stored record signature');
-  return record;
 }
 
 /**
@@ -240,14 +318,15 @@ export async function saveStoredRecord(options: RecoveryPorts & { payload: Store
   credential(options.context);
   if (!options.largeBlobSupported && !options.allowRelay) throw new Error('Relay storage requires explicit consent');
   if (!options.largeBlobSupported) relayList(options.relays);
-  const plaintext = encodePayload(options.payload);
+  const payload = writablePayload(options.payload);
+  const plaintext = encodePayload(payload);
   let material: Uint8Array | undefined;
   try {
     // Checked before the prompt, so a wrong author never asks the user for anything.
     if (!hasAuthor(options.payload, options.context.author)) throw new Error('Author is not one of the stored keys');
     material = options.prf ?? await options.provider.authenticate({ credentialId: options.context.credentialId, rpId: options.context.rpId, prfInput: storedPrfInput() });
     options.assertSession?.();
-    const record = sealStoredRecord(plaintext, material, options.payload.type, options.context);
+    const record = sealStoredRecord(plaintext, material, payload.type, options.context);
     if (options.largeBlobSupported) {
       if (!await options.provider.writeBlob(options.context.credentialId, record, options.context.rpId)) throw new Error('Passkey storage was not confirmed');
       options.assertSession?.();
@@ -267,39 +346,64 @@ export async function saveStoredRecord(options: RecoveryPorts & { payload: Store
 
 export interface StoredRecordCandidate { record: Uint8Array; author: string; source: 'passkey' | 'relays'; event?: RecoveryEvent; }
 /**
- * Candidates for a credential: a raw record in the blob first, then relay events, by author when the
- * handle names one and by `#credential` otherwise, each author's newest valid event. A blob record has
- * no author of its own, so it is only usable when the handle supplies one.
+ * Provider and relay candidates are both collected. Each type uses credential-specific d filters;
+ * vaults keep only each author's newest eligible event before decoding. A provider record needs
+ * the author supplied by the handle. Key records may fall back across eligible immutable copies.
  */
 export async function findStoredRecords(ports: Pick<RecoveryPorts, 'transport' | 'relays' | 'timeoutMs'>, lookup: { credentialId: string; rpId: string; author?: string; blob?: Uint8Array; verify: RecoveryVerifier }): Promise<StoredRecordCandidate[]> {
   const id = base64urlnopad.encode(canonicalCredential(lookup.credentialId));
+  const candidates: StoredRecordCandidate[] = [];
   if (lookup.author && lookup.blob && isStoredRecord(lookup.blob)) {
-    try { recordType(lookup.blob); return [{ record: lookup.blob, author: lookup.author, source: 'passkey' }]; }
-    catch { /* An unusable blob does not hide a relay record. */ }
+    candidates.push({ record: lookup.blob, author: lookup.author, source: 'passkey' });
   }
-  if (!ports.relays?.length) return [];
-  const filter = lookup.author ? { kinds: [RECOVERY_EVENT_KIND], authors: [lookup.author], limit: 32 } : { kinds: [RECOVERY_EVENT_KIND], '#credential': [id], limit: 32 };
-  const found = await queryNewest(ports, [filter], async event => {
-    if (event?.tags?.find(tag => tag[0] === 'v')?.[1] !== VERSION_TAG) throw new Error('Not an npk1 record');
-    return validateStoredRecordEvent(event, { credentialId: lookup.credentialId, rpId: lookup.rpId, author: lookup.author ?? event.pubkey }, lookup.verify);
-  });
-  return found.map(({ event, value }) => ({ record: value, author: event.pubkey, source: 'relays', event }));
+  if (!ports.relays?.length) return candidates;
+  const groups = await Promise.all((['vault', 'key', 'seed'] as const).map(async type => {
+    const filters = [RECOVERY_EVENT_KIND, ...(type === 'seed' ? [] : [STORED_RECOVERY_EVENT_KIND])].map(kind => ({ kinds: [kind], ...(lookup.author ? { authors: [lookup.author] } : {}), '#d': [`${id}:${type}`], limit: 32 }));
+    const found = await queryNewest(ports, filters, async event => {
+      const context = { credentialId: lookup.credentialId, rpId: lookup.rpId, author: lookup.author ?? event.pubkey };
+      await eligibleEvent(event, context, type, lookup.verify);
+      return context;
+    }, type === 'key');
+    return Promise.all(found.map(async ({ event, value }) => {
+      let record: Uint8Array;
+      try { record = await validateStoredRecordEvent(event, value, () => true); }
+      catch { record = new Uint8Array(); }
+      return { record, author: event.pubkey, source: 'relays' as const, event };
+    }));
+  }));
+  candidates.push(...groups.flat());
+  return candidates;
 }
 
 /**
- * Open the newest candidate. With a known author only the newest is tried, so a newer authenticated
- * record that fails is never rolled back to an older one; without one, each author's newest is tried,
- * so a stranger's record cannot shadow the real one. Returns null when nothing decrypts; throws
- * `Author is not one of the stored keys` on a mismatch.
+ * Open provider and eligible relay candidates, preferring vaults and their authenticated updated_at.
+ * Only the newest relay vault for an author is tried. A failed source is reported through onFailure;
+ * a usable independent source may still recover. Keys are immutable and may use any opening copy.
+ * Callers passing candidates directly must order relay candidates newest first (lowest ID on ties).
  */
-export function openStoredRecords(candidates: StoredRecordCandidate[], prf: Uint8Array, lookup: { credentialId: string; rpId: string; author?: string }): { payload: StoredPayload; author: string; source: 'passkey' | 'relays'; event?: RecoveryEvent } | null {
-  for (const candidate of lookup.author ? candidates.slice(0, 1) : candidates) {
+export function openStoredRecords(candidates: StoredRecordCandidate[], prf: Uint8Array, lookup: { credentialId: string; rpId: string; author?: string; onFailure?: (failure: { source: 'passkey' | 'relays'; author: string; error: unknown }) => void }): { payload: StoredPayload; author: string; source: 'passkey' | 'relays'; event?: RecoveryEvent } | null {
+  let best: ReturnType<typeof openStoredRecords> = null;
+  let authorError: unknown;
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    if (lookup.author && candidate.author !== lookup.author) continue;
     try {
+      const type = candidate.event?.tags.find(tag => tag[0] === 'd')?.[1]?.split(':')[1] ?? recordType(candidate.record);
+      const coordinate = `${candidate.author}:${type}`;
+      if (candidate.source === 'relays' && type !== 'key' && seen.has(coordinate)) continue;
+      if (candidate.source === 'relays') seen.add(coordinate);
+      if (recordType(candidate.record) !== type) throw new Error('Invalid stored record type');
       const payload = openStoredRecord(candidate.record, prf, { credentialId: lookup.credentialId, rpId: lookup.rpId, author: candidate.author });
-      return { payload, author: candidate.author, source: candidate.source, event: candidate.event };
+      const replace = !best || payload.type === 'vault' && (best.payload.type !== 'vault' || Number(payload.vault.updated_at ?? 0) > Number(best.payload.vault.updated_at ?? 0));
+      if (replace) {
+        if (best?.payload.type === 'key') best.payload.key.fill(0);
+        best = { payload, author: candidate.author, source: candidate.source, event: candidate.event };
+      } else if (payload.type === 'key') payload.key.fill(0);
     } catch (error) {
-      if (error instanceof Error && error.message === 'Author is not one of the stored keys') throw error;
+      lookup.onFailure?.({ source: candidate.source, author: candidate.author, error });
+      if (error instanceof Error && error.message === 'Author is not one of the stored keys') authorError = error;
     }
   }
-  return null;
+  if (!best && authorError) throw authorError;
+  return best;
 }

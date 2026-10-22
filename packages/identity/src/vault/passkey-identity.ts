@@ -1,13 +1,11 @@
 /**
- * Which identity a discoverable passkey holds, without ever inventing one. A tagged handle states
- * its mode and is never second-guessed; a 32-byte handle is confirmed with a legacy record; an
- * unknown handle goes through discovery (provider blob, relay record, the parameter set the host
- * configured for this RP) and ends as `ambiguous` when nothing proves the mode, so the host asks the
- * user before a derived npub is used. A stored passkey never yields a derived key.
+ * Resolve a passkey without inventing an identity. Tagged modes are never second-guessed and a
+ * 32-byte handle requires legacy recovery. Unknown handles need explicit exclusive deployment
+ * knowledge, a remembered derived account, or user confirmation; relay data cannot establish them.
  */
 import { validPasskeyRpId, type PasskeyVaultRecord } from './passkey.js';
 import { DEFAULT_DERIVED_PARAMETER_SET, classifyPasskeyHandle, derivedPrfInput, deriveNostrKey, type DerivedParameterSet } from './passkey-modes.js';
-import { findStoredRecords, isStoredRecord, openStoredRecords, storedPrfInput, type StoredPayload, type StoredRecordCandidate } from './passkey-store.js';
+import { findStoredRecords, openStoredRecords, storedPrfInput, type StoredPayload, type StoredRecordCandidate } from './passkey-store.js';
 import {
   assertionHandle, findStoredRecovery, openStoredRecovery, RECOVERY_PRF_INPUT,
   type PasskeyAssertionResult, type RecoveryContext, type RecoveryEvent, type RecoveryPorts, type RecoveryScope, type RecoveryVerifier, type StoredLookup,
@@ -50,12 +48,16 @@ export interface ResolvePasskeyIdentityOptions extends Omit<RecoveryPorts, 'rela
   /**
    * Host configuration: the derived parameter set `rpId` is known to use, from the registry or the
    * host's own deployment. It is evaluated as `prf.eval.second`, a tagged handle naming it is
-   * implemented, and an unknown handle with no record resolves as derived with it. Without it,
-   * `second` uses `0x01` and an unknown handle with no record is ambiguous.
+   * implemented. This alone does not authorize deriving an unknown credential. Without it,
+   * `second` uses `0x01`; unknown handles require separate identity evidence or confirmation.
    */
   parameterSet?: DerivedParameterSet;
+  /** True only when this deployment created every untagged credential as derived and RP association files list only its apps. */
+  exclusiveDerivedDeployment?: boolean;
   /** The app's own record linking this credential to a derived public key (discovery step 3). */
   isKnownDerived?: (candidate: { credentialId: string; pubkey: string; parameterSet: DerivedParameterSet }) => boolean | Promise<boolean>;
+  /** Reports a candidate that failed to open, including a relay record that may have been tampered with. */
+  onRecoveryFailure?: (failure: { source: 'passkey' | 'relays'; author: string; error: unknown }) => void;
   /** Legacy records only: restrict the v4 scope or schema. */
   scope?: RecoveryScope;
   schema?: string;
@@ -121,7 +123,7 @@ export async function resolvePasskeyIdentity(options: ResolvePasskeyIdentityOpti
       if (!prf.stored) return err(credentialId, 'prf-unavailable', 'This passkey did not return a PRF result');
       options.assertSession?.();
       let opened: ReturnType<typeof openStoredRecords>;
-      try { opened = openStoredRecords(candidates, prf.stored, { credentialId, rpId, author }); }
+      try { opened = openStoredRecords(candidates, prf.stored, { credentialId, rpId, author, onFailure: options.onRecoveryFailure }); }
       catch { return err(credentialId, 'author-mismatch', 'The stored record does not hold the key of its author'); }
       return opened && { mode: 'stored', format: 'npk1', source: opened.source, credentialId, author: opened.author, payload: opened.payload, ...(opened.event ? { event: opened.event } : {}) };
     };
@@ -158,39 +160,26 @@ export async function resolvePasskeyIdentity(options: ResolvePasskeyIdentityOpti
     const unknownLookup: StoredLookup = { credentialId, rpId, strict: false, scope: options.scope, schema: options.schema, verify: options.verify };
     if (kind.mode === 'stored') {
       // 32 bytes: probably a legacy stored handle. Confirm it with a legacy record for that author;
-      // with none, the handle is unknown and discovery runs below.
+      // with none, report missing recovery data without deriving.
       if (dropped && provider.assert) await followUp(['legacy'], true);
       const lookup = { ...unknownLookup, author: kind.author };
       const found = await findStoredRecovery(ports, { ...lookup, blob });
       if (found.kind === 'passkey-vault') return { mode: 'stored', format: 'legacy', source: 'passkey-vault', credentialId, record: found.record };
       if (found.kind === 'events') return await openLegacy(found.events, found.source, lookup) ?? err(credentialId, 'undecryptable-record', 'The stored key for this passkey could not be decrypted');
+      return err(credentialId, 'missing-record', "This passkey's key could not be found");
     }
 
     // Unknown handle: discovery, in order.
     if (dropped || !prf.stored || !prf.derived) await followUp(['stored', evaluated], true);
-    // 1. A blob in the tagged format proves stored mode, but the AAD needs the author, which only a
-    // tagged handle names: report it unreadable and never derive instead.
-    if (blob?.length && isStoredRecord(blob)) return err(credentialId, 'unreadable-record', 'This passkey holds a stored key that cannot be read without its author');
-    // 1 and 2. Legacy blob envelopes and relay records by `#d` / `#credential`; tagged records by `#credential`.
-    const [legacy, records] = await Promise.all([
-      findStoredRecovery(ports, { ...unknownLookup, blob }),
-      findStoredRecords(ports, { credentialId, rpId, verify: options.verify }),
-    ]);
-    if (legacy.kind === 'passkey-vault') return { mode: 'stored', format: 'legacy', source: 'passkey-vault', credentialId, record: legacy.record };
-    if (records.length) {
-      const opened = await openTagged(records);
-      if (opened && (opened.mode !== 'error' || opened.reason === 'author-mismatch')) return opened;
-    }
-    if (legacy.kind === 'events') {
-      const opened = await openLegacy(legacy.events, legacy.source, unknownLookup);
-      if (opened?.mode === 'stored') return opened;
-    }
+    // Unknown credentials have no trusted author: relay events cannot establish their identity.
+    // Legacy recovery remains available through the explicit restoreRecovery API.
+    if (blob?.length && !options.exclusiveDerivedDeployment) return err(credentialId, 'unreadable-record', 'This passkey holds data that cannot be opened');
     // 3 and 4.
     if (!prf.derived) return err(credentialId, 'prf-unavailable', 'This passkey did not return a PRF result');
     const candidate = deriveNostrKey(prf.derived, evaluated);
     let adopt = false;
     try {
-      adopt = known !== undefined || !!await options.isKnownDerived?.({ credentialId, pubkey: candidate.pubkey, parameterSet: evaluated });
+      adopt = options.exclusiveDerivedDeployment === true || !!await options.isKnownDerived?.({ credentialId, pubkey: candidate.pubkey, parameterSet: evaluated });
     } finally { if (!adopt) candidate.secret.fill(0); }
     if (adopt) return { mode: 'derived', credentialId, parameterSet: evaluated, pubkey: candidate.pubkey, secret: candidate.secret };
     return { mode: 'ambiguous', credentialId, parameterSet: evaluated, pubkey: candidate.pubkey };

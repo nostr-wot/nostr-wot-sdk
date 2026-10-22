@@ -1,6 +1,6 @@
 # Passkey recovery for applications
 
-The `@nostr-wot/identity/vault` passkey APIs follow the [passkey key modes proposal](https://github.com/nostr-wot/nostr-wot-extension/blob/main/nips/passkey/01-passkey-key-modes.md). A passkey holds a Nostr identity in one of two modes:
+The `@nostr-wot/identity/vault` passkey APIs implement the provisional split passkey-held keys and vault proposals. The new event kind is not yet reserved upstream. A passkey holds a Nostr identity in one of two modes:
 
 - **Derived**: the passkey is the key. The private key is computed from the PRF output on every login and kept nowhere.
 - **Stored**: the passkey is the lock on the key. The secret (a private key, a seed, or a seed with accounts) is encrypted under the PRF output and kept in the passkey's largeBlob, on relays or in a file.
@@ -56,7 +56,7 @@ The user handle (`user.id`) declares the mode, because it is visible before any 
 
 - `derived`, with the parameter set byte. A set the host does not implement is refused.
 - `stored`, with the author, for a tagged stored handle.
-- `stored` with `legacy: 'raw-pubkey'` and `confirmRecord: true`, for any 32-byte handle, even one starting with `NPK`. It only counts as stored once a legacy record for that author is found; otherwise it is unknown.
+- `stored` with `legacy: 'raw-pubkey'` and `confirmRecord: true`, for any 32-byte handle, even one starting with `NPK`. A missing legacy record is an error; this handle never falls through to derivation.
 - `stored` with `legacy: 'key-in-handle'`, for a 33-byte handle starting `0x03`. Refused.
 - `unsupported`, for any other handle starting with `NPK`. Refused, with no derivation and no discovery.
 - `unknown`, for anything else, including no handle.
@@ -77,12 +77,12 @@ A `DerivedParameterSet` is `{ id, saltLabel, infoLabel }`. The package ships onl
 | Type | Byte | Contents | Author |
 |---|---|---|---|
 | `key` | `0x01` | Exactly 32 bytes, the private key | Its public key |
-| `seed` | `0x02` | JSON `{ "entropy": "<hex>", "passphrase": "<optional>" }` | The seed's key at `m/44'/1237'/0'/0/0` |
+| `seed` (legacy read only) | `0x02` | JSON entropy and optional passphrase | The seed's main account |
 | `vault` | `0x03` | JSON with an optional `seed`, a non-empty `accounts` list and optional `ext` | Any account in the vault |
 
-Seed entropy is 16, 20, 24, 28 or 32 bytes of lowercase hex. Keys come from the English BIP-39 mnemonic of that entropy with the passphrase (`storedSeedKey(seed, path)`). A `seed` record promises only its main account; use `vault` to restore exact accounts.
+Seed entropy is 16, 20, 24, 28 or 32 bytes of lowercase hex. Keys come from the English BIP-39 mnemonic of that entropy with the passphrase (`storedSeedKey(seed, path)`). Legacy seed records remain readable. `encryptStoredRecord` and `saveStoredRecord` normalize a `seed` input to a vault containing that seed and one derived account at `m/44'/1237'/0'/0/0`; opening the result returns `type: 'vault'`.
 
-A vault account is `{ "kind": "derived", "path": "m/44'/1237'/0'/0/3" }`, which needs the vault's seed, or `{ "kind": "key", "secret": "<hex>" }`. Either may carry a `label` and `default: true` (at most one account). A derived path is the full canonical BIP-32 path under `m/44'/1237'/`, derived exactly, never inferred from position. Accounts of an unknown `kind`, unknown fields and unknown `ext` namespaces are kept unchanged when a vault is written again. Plaintext is limited to 65,536 bytes.
+A vault account is `{ "kind": "derived", "path": "m/44'/1237'/0'/0/3" }`, which needs the vault's seed, or `{ "kind": "key", "secret": "<hex>" }`. Either may carry a string `label` and boolean `default`. The first usable account marked default is selected, otherwise the first usable account. Malformed and unknown accounts are skipped on import and preserved on rewrite. A derived path is the full canonical BIP-32 path under `m/44'/1237'/`, derived exactly, never inferred from position. Accounts of an unknown `kind`, unknown fields and unknown `ext` namespaces are kept unchanged when a vault is written again. Plaintext is limited to 65,536 bytes. JSON rejects duplicate member names, a BOM and unpaired surrogates. Optional `updated_at` is nonnegative plain decimal Unix seconds through 2^53 - 1, missing means zero; applications set it on content changes and keep it when copying. `ext` may be any JSON object.
 
 `storedPayloadKeys(payload)` lists the importable identities: the key, the seed's main account, or each vault account of a known kind, with `pubkey`, `secret`, `label` and `default`. Use a single one directly; for several, let the user choose with the `default` one preselected. Zero every `secret`.
 
@@ -90,7 +90,7 @@ The record is `NPK | 0x01 | type | IV(12) | salt(32) | AES-256-GCM ciphertext an
 
 - `encryptStoredRecord(payload, prf, context)` checks that the author is one of the payload's keys and returns the record bytes, also usable as a file backup.
 - `openStoredRecord(record, prf, context)` decrypts, validates and checks the author before returning the payload.
-- `saveStoredRecord` encrypts and stores. With largeBlob support the blob holds the raw record. A refused, failed or unconfirmed write rejects and never falls through to relays. Relay storage needs `allowRelay: true` and at least one acknowledgement; the event is kind 31777 by the author, tagged `d` = `<credential>:<type>`, `credential`, `v` = `npk1`, `rp` and `type`.
+- `saveStoredRecord` encrypts and stores. With largeBlob support the blob holds the raw record. A refused, failed or unconfirmed write rejects and never falls through to relays. Relay storage needs `allowRelay: true` and at least one acknowledgement; the event uses provisional kind `31778` (`STORED_RECOVERY_EVENT_KIND`) by the author, with `d` = `<credential>:<type>` and `rp`, without a `v` tag. This number is not an upstream reservation. Earlier kind-31777 npk1 records remain readable.
 
 ## Logging in
 
@@ -102,9 +102,9 @@ The record is `NPK | 0x01 | type | IV(12) | salt(32) | AES-256-GCM ciphertext an
 - `ambiguous`: `{ pubkey, parameterSet }` and no secret. Show the public key and ask the user; only after a yes call `derivePasskeyIdentity`, which reproduces exactly that candidate.
 - `error`: `missing-record`, `undecryptable-record`, `author-mismatch`, `unreadable-record`, `unsupported-handle`, `prf-unavailable` or `invalid-assertion`. Cancellation and provider failures reject.
 
-Options: `parameterSet` is the set this RP is known to use. It is evaluated as `second`, a tagged handle naming it is implemented, and an unknown handle with no record resolves as derived with it. `isKnownDerived` lets the host recognise its own record linking a credential to a derived public key. Without either, an unknown handle with no record is `ambiguous`, because an unreachable relay looks the same as a passkey with no record.
+Options: `parameterSet` is the set this RP is known to use. It is evaluated as `second`, a tagged handle naming it is implemented, and it selects the candidate shown for an unknown handle. It does not establish that the credential is derived. `isKnownDerived` lets the host recognise its own record linking a credential to a derived public key. Set `exclusiveDerivedDeployment: true` only when this deployment created every untagged credential as derived and the RP association files list only its apps. Otherwise an unknown handle without a matching remembered account is `ambiguous`. Relay records cannot establish the identity of an unknown handle and are not queried; legacy imports use the explicit `restoreRecovery` API.
 
-Stored records are read from the blob first, then relays by author (tagged handles) or by `#credential` and `#d` (unknown handles). Each author's newest valid event wins, a stranger's record cannot shadow the real one, and a newer authenticated record that does not decrypt is an error, never a rollback. A tagged-format blob on an untagged passkey is `unreadable-record`: it cannot be opened without the author, and it is never derived instead.
+Provider records and relays are checked together, using credential-specific `#d` coordinates and separate queries for the new and legacy kinds. A vault takes precedence over a key. For each author only the newest eligible relay vault is considered (timestamp, then lowest event ID), before record decoding; failure never rolls back to an older relay vault. If provider and relay vaults both open, the higher authenticated `updated_at` wins. Either usable source can recover when the other fails; pass `onRecoveryFailure` to report each failure, including possible relay tampering. Immutable keys can use any opening eligible copy. An unknown handle with nonempty provider data is `unreadable-record` unless `exclusiveDerivedDeployment` explicitly applies.
 
 ### Provider contract
 
@@ -122,7 +122,7 @@ To move a derived identity to stored mode, register a new passkey with `encodeSt
 | `seed` | Typed v4 proposal | Application-serialized seed | `<credential>:seed:<schema>` |
 | `vault` | Typed v4 proposal | Application-serialized vault or encrypted snapshot | `<credential>:vault:<schema>` |
 
-All events use kind 31777, and the PRF input is UTF-8 `keytr-v1`, used as is. Both codecs use HKDF-SHA256, a fresh 32-byte salt, AES-256-GCM and a fresh 12-byte IV; the layout is `version(1) | IV(12) | salt(32) | ciphertext(N+16)` in canonical base64. The v1 context is `keytr nsec encryption v1` with AAD `UTF8("keytr") | 0x01 | rawCredentialId`; v4 uses `keytr payload encryption v4` with AAD the compact JSON `['keytr',4,type,schema,rpId,authorHex,credentialBase64url]`. The default schemas are `com.nostrwot.seed.v1` and `com.nostrwot.vault.v1`; a host may select another explicit versioned schema and must only import a schema it knows. Required tags are `d`, `rp`, `algo=aes-256-gcm`, `kdf=hkdf-sha256` and `v`, plus `credential`, `type` and `schema` for v4.
+These compatibility APIs retain kind 31777 for existing legacy enrollment flows; new tagged enrollment must use `saveStoredRecord`. Their events use kind 31777, and the PRF input is UTF-8 `keytr-v1`, used as is. Both codecs use HKDF-SHA256, a fresh 32-byte salt, AES-256-GCM and a fresh 12-byte IV; the layout is `version(1) | IV(12) | salt(32) | ciphertext(N+16)` in canonical base64. The v1 context is `keytr nsec encryption v1` with AAD `UTF8("keytr") | 0x01 | rawCredentialId`; v4 uses `keytr payload encryption v4` with AAD the compact JSON `['keytr',4,type,schema,rpId,authorHex,credentialBase64url]`. The default schemas are `com.nostrwot.seed.v1` and `com.nostrwot.vault.v1`; a host may select another explicit versioned schema and must only import a schema it knows. Required tags are `d`, `rp`, `algo=aes-256-gcm`, `kdf=hkdf-sha256` and `v`, plus `credential`, `type` and `schema` for v4.
 
 `restoreRecovery` classifies the handle first. It refuses derived, tagged stored, unsupported and key-in-handle passkeys, and looks an untagged credential (or a 32-byte handle with no record by that author) up by credential ID.
 

@@ -153,16 +153,16 @@ describe('resolvePasskeyIdentity: tagged handles', () => {
     const transport = relay([taggedRecord()]);
     const result = await resolvePasskeyIdentity({ rpId: RP, provider: key.provider, transport, relays: RELAYS, verify, parameterSet: REGISTRY });
     expect(result).toMatchObject({ mode: 'stored', format: 'npk1', source: 'relays', author: AUTHOR, payload: { type: 'key', key: PRIVATE_ONE } });
-    expect(transport.query.mock.calls[0][1]).toEqual({ kinds: [31777], authors: [AUTHOR], limit: 32 });
+    expect(transport.query.mock.calls.map(call => call[1])).toContainEqual({ kinds: [31778], authors: [AUTHOR], '#d': ['AQIDBA:key'], limit: 32 });
     expect(key.provider.assert).not.toHaveBeenCalled();
     expect(key.zeroed()).toBe(true);
   });
-  test('a tagged stored handle restores a raw record from largeBlob without relays', async () => {
+  test('a tagged stored handle restores a provider record after checking relay updates', async () => {
     const key = passkey({ handle: encodeStoredHandle(AUTHOR), blob: taggedBytes() });
     const transport = relay([]);
     const result = await resolvePasskeyIdentity({ rpId: RP, provider: key.provider, transport, relays: RELAYS, verify });
     expect(result).toMatchObject({ mode: 'stored', format: 'npk1', source: 'passkey' });
-    expect(transport.query).not.toHaveBeenCalled();
+    expect(transport.query).toHaveBeenCalled();
   });
   test('a tagged stored handle with no record is an error, never a derived identity', async () => {
     const key = passkey({ handle: encodeStoredHandle(AUTHOR), blob: envelope(legacyRecord('vault')) });
@@ -173,10 +173,10 @@ describe('resolvePasskeyIdentity: tagged handles', () => {
     }
     expect(key.zeroed()).toBe(true);
   });
-  test('a newer tagged record that does not decrypt is an error, never a rollback', async () => {
+  test('a failing newer immutable key permits an older opening copy', async () => {
     const key = passkey({ handle: encodeStoredHandle(AUTHOR) });
     const transport = relay([taggedRecord({ createdAt: 1 }), taggedRecord({ prf: new Uint8Array(32).fill(1), createdAt: 2 })]);
-    expect(await resolvePasskeyIdentity({ rpId: RP, provider: key.provider, transport, relays: RELAYS, verify, parameterSet: REGISTRY })).toMatchObject({ mode: 'error', reason: 'undecryptable-record' });
+    expect(await resolvePasskeyIdentity({ rpId: RP, provider: key.provider, transport, relays: RELAYS, verify, parameterSet: REGISTRY })).toMatchObject({ mode: 'stored', format: 'npk1' });
   });
   test('when discoverable login drops the extensions, a tagged stored handle asks only for the stored input and blob', async () => {
     const key = passkey({ handle: encodeStoredHandle(AUTHOR), blob: taggedBytes(), dropExtensions: true });
@@ -247,21 +247,16 @@ describe('resolvePasskeyIdentity: 32-byte handles', () => {
     const result = await resolvePasskeyIdentity({ rpId: RP, provider: key.provider, transport: relay([legacyRecord('vault', { prf: new Uint8Array(32) })]), relays: RELAYS, verify, parameterSet: REGISTRY });
     expect(result).toMatchObject({ mode: 'error', reason: 'undecryptable-record' });
   });
-  test('a 32-byte handle with no record continues as unknown', async () => {
-    const random = sha256(new Uint8Array([1]));
-    const key = passkey({ handle: random });
-    expect(await resolvePasskeyIdentity({ rpId: 'app.example.com', provider: key.provider, transport: relay([]), relays: RELAYS, verify }))
-      .toEqual({ mode: 'ambiguous', credentialId: CREDENTIAL, parameterSet: DEFAULT, pubkey: DEFAULT_SET.public_key });
-    expect(await resolvePasskeyIdentity({ rpId: RP, provider: key.provider, transport: relay([]), relays: RELAYS, verify, parameterSet: REGISTRY }))
-      .toMatchObject({ mode: 'derived', parameterSet: REGISTRY, pubkey: REGISTRY_SET.public_key });
-    expect(key.provider.assert).not.toHaveBeenCalled();
+  test('a 32-byte handle without a record never derives', async () => {
+    const key = passkey({ handle: sha256(new Uint8Array([1])) });
+    expect(await resolvePasskeyIdentity({ rpId: RP, provider: key.provider, transport: relay([]), relays: RELAYS, verify, parameterSet: REGISTRY })).toMatchObject({ mode: 'error', reason: 'missing-record' });
   });
 });
 
 describe('resolvePasskeyIdentity: unknown handles', () => {
   test('an untagged UUID handle on an RP configured for set 0x02 derives with it and zeroes every PRF output', async () => {
     const key = passkey({ handle: UUID_HANDLE });
-    const result = await resolvePasskeyIdentity({ rpId: RP, provider: key.provider, transport: relay([]), verify, parameterSet: REGISTRY });
+    const result = await resolvePasskeyIdentity({ rpId: RP, provider: key.provider, transport: relay([]), verify, parameterSet: REGISTRY, exclusiveDerivedDeployment: true });
     expect(result).toMatchObject({ mode: 'derived', parameterSet: REGISTRY, pubkey: REGISTRY_SET.public_key, credentialId: CREDENTIAL });
     expect(bytesToHex((result as { secret: Uint8Array }).secret)).toBe(REGISTRY_SET.secret_key);
     expect(bytesToHex(key.provider.discover.mock.calls[0][0].prf!.second!)).toBe(REGISTRY_SET.prf_input);
@@ -274,11 +269,7 @@ describe('resolvePasskeyIdentity: unknown handles', () => {
     const transport = relay([]);
     const result = await resolvePasskeyIdentity({ rpId: 'app.example.com', provider: key.provider, transport, relays: RELAYS, verify });
     expect(result).toEqual({ mode: 'ambiguous', credentialId: CREDENTIAL, parameterSet: DEFAULT, pubkey: DEFAULT_SET.public_key });
-    expect(transport.query.mock.calls.map(call => call[1])).toEqual(expect.arrayContaining([
-      { kinds: [31777], '#d': [CREDENTIAL], limit: 32 },
-      { kinds: [31777], '#credential': [CREDENTIAL], limit: 32 },
-      { kinds: [31777], '#credential': [CREDENTIAL_TAG], limit: 32 },
-    ]));
+    expect(transport.query).not.toHaveBeenCalled();
     expect(key.zeroed()).toBe(true);
     // Only after the user confirms: a targeted assertion reproducing that exact candidate.
     const confirmed = await derivePasskeyIdentity({ provider: key.provider, rpId: 'app.example.com', credentialId: CREDENTIAL, parameterSet: DEFAULT, expectedPubkey: DEFAULT_SET.public_key });
@@ -293,16 +284,16 @@ describe('resolvePasskeyIdentity: unknown handles', () => {
     expect(result).toMatchObject({ mode: 'derived', pubkey: DEFAULT_SET.public_key, parameterSet: DEFAULT });
     expect(isKnownDerived).toHaveBeenCalledWith({ credentialId: CREDENTIAL, pubkey: DEFAULT_SET.public_key, parameterSet: DEFAULT });
   });
-  test.each(['private-key', 'vault'] as const)('an untagged handle with a legacy %s relay record is stored', async scope => {
+  test.each(['private-key', 'vault'] as const)('an untagged handle ignores a legacy %s relay record', async scope => {
     const key = passkey({ handle: UUID_HANDLE });
     const result = await resolvePasskeyIdentity({ rpId: RP, provider: key.provider, transport: relay([legacyRecord(scope)]), relays: RELAYS, verify, parameterSet: REGISTRY });
-    expect(result).toMatchObject({ mode: 'stored', format: 'legacy', source: 'relays', context: { scope, pubkey: AUTHOR } });
+    expect(result).toMatchObject({ mode: 'ambiguous', pubkey: REGISTRY_SET.public_key });
     expect(key.zeroed()).toBe(true);
   });
-  test('an untagged handle with a tagged-format relay record is stored, found by #credential', async () => {
+  test('an untagged handle ignores a tagged-format relay record', async () => {
     const key = passkey({ handle: UUID_HANDLE });
     const result = await resolvePasskeyIdentity({ rpId: RP, provider: key.provider, transport: relay([taggedRecord()]), relays: RELAYS, verify, parameterSet: REGISTRY });
-    expect(result).toMatchObject({ mode: 'stored', format: 'npk1', source: 'relays', author: AUTHOR });
+    expect(result).toMatchObject({ mode: 'ambiguous', pubkey: REGISTRY_SET.public_key });
     expect(key.provider.assert).not.toHaveBeenCalled();
   });
   test('an untagged handle with a tagged-format blob is reported unreadable, never derived', async () => {
@@ -312,24 +303,24 @@ describe('resolvePasskeyIdentity: unknown handles', () => {
   test("a stranger's record for the credential cannot shadow the derived identity", async () => {
     const key = passkey({ handle: UUID_HANDLE });
     const forged = legacyRecord('private-key', { prf: new Uint8Array(32).fill(1), author: 'ab'.repeat(32), createdAt: 99 });
-    const result = await resolvePasskeyIdentity({ rpId: RP, provider: key.provider, transport: relay([forged]), relays: RELAYS, verify, parameterSet: REGISTRY });
+    const result = await resolvePasskeyIdentity({ rpId: RP, provider: key.provider, transport: relay([forged]), relays: RELAYS, verify, parameterSet: REGISTRY, exclusiveDerivedDeployment: true });
     expect(result).toMatchObject({ mode: 'derived', pubkey: REGISTRY_SET.public_key });
   });
-  test('an untagged handle with a legacy recovery envelope is stored without relays', async () => {
+  test('an unknown handle with a legacy envelope requires explicit legacy recovery', async () => {
     const key = passkey({ handle: UUID_HANDLE, blob: envelope(legacyRecord('seed')) });
     const transport = relay([]);
     const result = await resolvePasskeyIdentity({ rpId: RP, provider: key.provider, transport, relays: RELAYS, verify, parameterSet: REGISTRY });
-    expect(result).toMatchObject({ mode: 'stored', format: 'legacy', source: 'passkey', context: { scope: 'seed' } });
+    expect(result).toMatchObject({ mode: 'error', reason: 'unreadable-record' });
   });
-  test('an untagged handle with the older vault blob is stored, handed back as a record', async () => {
+  test('an unknown handle with an older vault blob refuses automatic recovery', async () => {
     const vault = createPasskeyRecord({ accounts: [], activeAccountId: null }, { credentialId: CREDENTIAL, prfSalt: PASSKEY_RECOVERY_PRF_SALT, prf: bytesToBase64(LEGACY_OUTPUT), rpId: RP });
     const key = passkey({ handle: UUID_HANDLE, blob: new TextEncoder().encode(serializePasskeyBackup(vault)) });
     const result = await resolvePasskeyIdentity({ rpId: RP, provider: key.provider, transport: relay([]), verify, parameterSet: REGISTRY });
-    expect(result).toMatchObject({ mode: 'stored', format: 'legacy', source: 'passkey-vault', record: { protection: 'passkey' } });
+    expect(result).toMatchObject({ mode: 'error', reason: 'unreadable-record' });
   });
   test('without a combined assertion, follow-ups use authenticate one input at a time', async () => {
     const key = passkey({ handle: UUID_HANDLE, dropExtensions: true, noAssert: true });
-    const result = await resolvePasskeyIdentity({ rpId: RP, provider: key.provider, transport: relay([]), verify, parameterSet: REGISTRY });
+    const result = await resolvePasskeyIdentity({ rpId: RP, provider: key.provider, transport: relay([]), verify, parameterSet: REGISTRY, exclusiveDerivedDeployment: true });
     expect(result).toMatchObject({ mode: 'derived', pubkey: REGISTRY_SET.public_key });
     expect(key.provider.authenticate.mock.calls.map(call => bytesToHex(call[0].prfInput))).toEqual([vectors.stored.prf_input, REGISTRY_SET.prf_input]);
     expect(key.zeroed()).toBe(true);
@@ -369,4 +360,18 @@ describe('restoreRecovery classifies the handle', () => {
       expect(key.zeroed()).toBe(true);
     }
   });
+});
+
+test('unknown nonempty provider data prevents guessing a derived identity', async () => {
+ const key = passkey({ handle: UUID_HANDLE, blob: new Uint8Array([1, 2, 3]) });
+ expect(await resolvePasskeyIdentity({ rpId: RP, provider: key.provider, transport: relay([]), verify, parameterSet: REGISTRY })).toMatchObject({ mode: 'error', reason: 'unreadable-record' });
+});
+
+test('a configured parameter set alone leaves an unknown passkey ambiguous', async () => {
+ const key = passkey({ handle: UUID_HANDLE });
+ expect(await resolvePasskeyIdentity({ rpId: RP, provider: key.provider, transport: relay([]), verify, parameterSet: REGISTRY })).toMatchObject({ mode: 'ambiguous', pubkey: REGISTRY_SET.public_key });
+});
+test('an explicitly exclusive derived deployment can ignore unknown provider data', async () => {
+ const key = passkey({ handle: UUID_HANDLE, blob: new Uint8Array([1,2,3]) });
+ expect(await resolvePasskeyIdentity({ rpId: RP, provider: key.provider, transport: relay([]), verify, parameterSet: REGISTRY, exclusiveDerivedDeployment: true })).toMatchObject({ mode: 'derived', pubkey: REGISTRY_SET.public_key });
 });
