@@ -7,3 +7,4 @@ export {
   type NostrConnectOptions,
   type NostrConnectHandle,
 } from "./nip46";
+export { NosskeyIframeSigner } from './nosskey';
