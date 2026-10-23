@@ -55,8 +55,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "chore: release [skip ci]"
-          git push origin HEAD:main
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: release [skip ci]"
+            git push origin HEAD:main
+          fi
         env:
           # @changesets/changelog-github calls the GitHub API to attribute each
           # entry, and errors out without a token.
@@ -119,6 +121,8 @@ jobs:
           NPM_CONFIG_PROVENANCE: "true"
 
       - name: Apply compatibility-package migration notices
+        # Prereleases must not rewrite stable-package migration notices.
+        if: hashFiles('.changeset/pre.json') == ''
         run: npm run deprecate:compat -- --apply
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
