@@ -43,7 +43,7 @@ export function storedPrfInput(): Uint8Array {
 /** `credentialId` is canonical standard base64, as elsewhere in this package. */
 export interface StoredRecordContext { credentialId: string; rpId: string; author: string; }
 function credential(context: StoredRecordContext): Uint8Array {
-  if (!context || !validPasskeyRpId(context.rpId) || typeof context.author !== 'string' || !/^[a-f0-9]{64}$/.test(context.author)) throw new Error('Invalid stored record context');
+  if (!context || !(context.rpId === 'localhost' || validPasskeyRpId(context.rpId)) || typeof context.author !== 'string' || !/^[a-f0-9]{64}$/.test(context.author)) throw new Error('Invalid stored record context');
   return canonicalCredential(context.credentialId);
 }
 /** Does this byte string start like a record of this format? Says nothing about validity. */
