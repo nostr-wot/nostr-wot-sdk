@@ -1,5 +1,12 @@
 # @nostr-wot/accounts
 
+## 1.0.2
+
+### Patch Changes
+
+- Updated dependencies [[`482daeb`](https://github.com/nostr-wot/nostr-wot-sdk/commit/482daeb4eca189d64d89cc04d335b29114c12ea5), [`6ba2fc0`](https://github.com/nostr-wot/nostr-wot-sdk/commit/6ba2fc0a07a10d092f53ae5cb01592fdcf23932f), [`5ed0b56`](https://github.com/nostr-wot/nostr-wot-sdk/commit/5ed0b569c1a685a6f096bebd42362039ae2a6096), [`5ed0b56`](https://github.com/nostr-wot/nostr-wot-sdk/commit/5ed0b569c1a685a6f096bebd42362039ae2a6096), [`5ed0b56`](https://github.com/nostr-wot/nostr-wot-sdk/commit/5ed0b569c1a685a6f096bebd42362039ae2a6096)]:
+  - @nostr-wot/identity@1.1.0
+
 ## 1.0.2-next.0
 
 ### Patch Changes

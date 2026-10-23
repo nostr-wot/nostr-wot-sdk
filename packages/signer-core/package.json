@@ -1,6 +1,6 @@
 {
   "name": "@nostr-wot/signer-core",
-  "version": "1.0.2-next.0",
+  "version": "1.0.2",
   "description": "Deprecated compatibility wrapper for @nostr-wot/identity/signing.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "GPL-3.0-only",
@@ -47,7 +47,7 @@
     "check:dist": "node ../../scripts/dist-stamp.mjs check"
   },
   "dependencies": {
-    "@nostr-wot/identity": "^1.1.0-next.0"
+    "@nostr-wot/identity": "^1.1.0"
   },
   "sideEffects": false,
   "deprecated": "Use @nostr-wot/identity/signing instead. The implementation moved to @nostr-wot/identity; this package only forwards the existing API. See https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md"
