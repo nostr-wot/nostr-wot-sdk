@@ -34,11 +34,12 @@ export class NosskeyIframeSigner implements NostrSigner {
     this.iframe.addEventListener('load',()=>{if(this.#loaded)this.close();this.#loaded=true;});
     this.#readyTimer = setTimeout(()=>this.#shutdown(new Error('Signer connection timed out')),this.#timeout);
     this.iframe.src=url.href;
-    (options.container ?? document.body).appendChild(this.iframe);
+    try { (options.container ?? document.body).appendChild(this.iframe); }
+    catch (error) { this.#shutdown(new Error('Signer frame could not be mounted')); throw error; }
   }
   ready(): Promise<void> { return this.#closed ? Promise.reject(new Error('Signer connection closed')) : this.#ready; }
   #receive = (event: MessageEvent) => {
-    if (this.#closed || event.origin !== this.#origin || event.source !== this.iframe.contentWindow) return;
+    if (this.#closed || !this.iframe.contentWindow || event.origin !== this.#origin || event.source !== this.iframe.contentWindow) return;
     const d=event.data;
     if (!d || typeof d !== 'object' || Array.isArray(d)) return;
     if(d.type==='nosskey:ready'){clearTimeout(this.#readyTimer);this.#readyResolve();return;}
