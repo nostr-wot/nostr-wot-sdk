@@ -160,3 +160,9 @@ The package also contains vault helpers whose new credentials default to `passke
 - Records are snapshots. Refresh them after account changes and show stale status if an update fails. A vault may hold many identities; tell the user what a record contains before saving it.
 - Relay records reveal author, credential ID, RP, type, size and timing, and old ciphertext cannot be erased. Never log PRF output, keys or plaintext. JavaScript cannot guarantee erasure of every copy.
 - Real provider synchronization and native adapters need device integration tests; protocol fixtures alone do not certify them.
+
+## Existing Nosskey accounts
+
+`parseNosskeyAccount`, `nosskeyPrfInput` and `recoverNosskeyAccount` in `@nostr-wot/identity/vault` read a single Nosskey `backupKeyInfo()` record. The host supplies the original RP, requests the exact credential ID from the backup, verifies the returned credential ID, then passes the PRF output to the reader. Direct mode uses the original raw `nostr-pwk` input and output; wrapped mode uses `nostr-pwk-wrap` and the existing NIP-44 implementation. Neither uses the tagged-record HKDF derivation. The reader validates the recovered public key against the backup and never falls back between modes.
+
+Require user confirmation of the account before importing. Clear PRF and returned secret buffers after use. A backup contains public identity metadata and, for wrapped accounts, an encrypted private-key payload; it does not authorize an origin to use the passkey. Missing backups do not prove direct mode. Provider signing through Nosskey's iframe package is a separate option when a client needs signatures without importing a private key. These helpers do not add a tagged parameter-set assignment or change existing accounts.
