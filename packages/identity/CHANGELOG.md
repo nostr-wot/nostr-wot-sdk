@@ -1,5 +1,17 @@
 # @nostr-wot/identity
 
+## 1.1.0-next.0
+
+### Minor Changes
+
+- [#19](https://github.com/nostr-wot/nostr-wot-sdk/pull/19) [`5ed0b56`](https://github.com/nostr-wot/nostr-wot-sdk/commit/5ed0b569c1a685a6f096bebd42362039ae2a6096) Thanks [@leonacostaok](https://github.com/leonacostaok)! - Support derived and stored passkeys as defined by the passkey key modes proposal: derived keys from host-configured parameter sets (`deriveNostrKey`), tagged user handles (`classifyPasskeyHandle`), stored `key`, `seed` and `vault` records (`encryptStoredRecord`, `openStoredRecord`, `saveStoredRecord`, `storedPayloadKeys`), and `resolvePasskeyIdentity`, which never derives a key from a stored passkey and returns `ambiguous` when nothing proves the mode. `restoreRecovery` now classifies the user handle instead of reading it as a public key, and finds untagged credentials by credential ID. Provider and transport additions are optional.
+
+### Patch Changes
+
+- [#19](https://github.com/nostr-wot/nostr-wot-sdk/pull/19) [`5ed0b56`](https://github.com/nostr-wot/nostr-wot-sdk/commit/5ed0b569c1a685a6f096bebd42362039ae2a6096) Thanks [@leonacostaok](https://github.com/leonacostaok)! - Keep signed new-format vaults eligible regardless of unrelated tag sizes so malformed newest records cannot silently fall back to older vaults. Require a provider storage read and explicit overwrite confirmation for nonempty passkey blobs. Release the passkey changes on the `next` prerelease channel while cross-client and real-device acceptance remain pending.
+
+- [#19](https://github.com/nostr-wot/nostr-wot-sdk/pull/19) [`5ed0b56`](https://github.com/nostr-wot/nostr-wot-sdk/commit/5ed0b569c1a685a6f096bebd42362039ae2a6096) Thanks [@leonacostaok](https://github.com/leonacostaok)! - Align tagged passkey recovery with the split key/vault proposal: use provisional kind 31778 without a version tag for new records, normalize seed writes to vaults, and preserve legacy reads. Validate strict vault JSON, skip unusable accounts, select the first usable default, compare provider and newest relay vault timestamps, and report source failures through an optional recovery callback. Credential-specific relay queries and conservative handle recovery prevent unrelated records or missing recovery data from selecting a different identity.
+
 ## 1.0.0
 
 ### Added

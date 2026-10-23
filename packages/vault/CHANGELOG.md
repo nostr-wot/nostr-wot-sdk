@@ -1,5 +1,16 @@
 # @nostr-wot/vault
 
+## 1.2.0-next.0
+
+### Minor Changes
+
+- [#19](https://github.com/nostr-wot/nostr-wot-sdk/pull/19) [`5ed0b56`](https://github.com/nostr-wot/nostr-wot-sdk/commit/5ed0b569c1a685a6f096bebd42362039ae2a6096) Thanks [@leonacostaok](https://github.com/leonacostaok)! - Support derived and stored passkeys as defined by the passkey key modes proposal: derived keys from host-configured parameter sets (`deriveNostrKey`), tagged user handles (`classifyPasskeyHandle`), stored `key`, `seed` and `vault` records (`encryptStoredRecord`, `openStoredRecord`, `saveStoredRecord`, `storedPayloadKeys`), and `resolvePasskeyIdentity`, which never derives a key from a stored passkey and returns `ambiguous` when nothing proves the mode. `restoreRecovery` now classifies the user handle instead of reading it as a public key, and finds untagged credentials by credential ID. Provider and transport additions are optional.
+
+### Patch Changes
+
+- Updated dependencies [[`5ed0b56`](https://github.com/nostr-wot/nostr-wot-sdk/commit/5ed0b569c1a685a6f096bebd42362039ae2a6096), [`5ed0b56`](https://github.com/nostr-wot/nostr-wot-sdk/commit/5ed0b569c1a685a6f096bebd42362039ae2a6096), [`5ed0b56`](https://github.com/nostr-wot/nostr-wot-sdk/commit/5ed0b569c1a685a6f096bebd42362039ae2a6096)]:
+  - @nostr-wot/identity@1.1.0-next.0
+
 ## 1.1.1
 
 ### Patch changes

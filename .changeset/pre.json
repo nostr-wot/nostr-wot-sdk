@@ -22,5 +22,9 @@
     "@nostr-wot/wallet": "2.0.0",
     "@nostr-wot/wot": "3.0.0"
   },
-  "changesets": []
+  "changesets": [
+    "passkey-guarded-writes",
+    "passkey-key-modes",
+    "passkey-vault-recovery-conformance"
+  ]
 }

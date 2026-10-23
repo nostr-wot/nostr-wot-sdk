@@ -1,5 +1,12 @@
 # @nostr-wot/signer-core
 
+## 1.0.2-next.0
+
+### Patch Changes
+
+- Updated dependencies [[`5ed0b56`](https://github.com/nostr-wot/nostr-wot-sdk/commit/5ed0b569c1a685a6f096bebd42362039ae2a6096), [`5ed0b56`](https://github.com/nostr-wot/nostr-wot-sdk/commit/5ed0b569c1a685a6f096bebd42362039ae2a6096), [`5ed0b56`](https://github.com/nostr-wot/nostr-wot-sdk/commit/5ed0b569c1a685a6f096bebd42362039ae2a6096)]:
+  - @nostr-wot/identity@1.1.0-next.0
+
 ## 1.0.1
 
 ### Patch changes
