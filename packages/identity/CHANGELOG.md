@@ -1,5 +1,11 @@
 # @nostr-wot/identity
 
+## 1.1.0-next.1
+
+### Patch Changes
+
+- [#21](https://github.com/nostr-wot/nostr-wot-sdk/pull/21) [`482daeb`](https://github.com/nostr-wot/nostr-wot-sdk/commit/482daeb4eca189d64d89cc04d335b29114c12ea5) Thanks [@leonacostaok](https://github.com/leonacostaok)! - Allow stored passkey records bound to localhost for WebAuthn development, while retaining exact RP binding and rejecting origins or port-bearing values.
+
 ## 1.1.0-next.0
 
 ### Minor Changes

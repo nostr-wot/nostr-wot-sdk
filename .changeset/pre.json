@@ -23,6 +23,7 @@
     "@nostr-wot/wot": "3.0.0"
   },
   "changesets": [
+    "local-passkey-development",
     "passkey-guarded-writes",
     "passkey-key-modes",
     "passkey-vault-recovery-conformance"
