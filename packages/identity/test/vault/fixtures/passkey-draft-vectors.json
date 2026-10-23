@@ -1,0 +1,679 @@
+{
+  "handles": [
+    {
+      "description": "tagged derived, parameter set 0x01",
+      "handle": "4e504b01010100112233445566778899aabbccddeeff",
+      "expect": {
+        "mode": "derived",
+        "parameter_set": 1
+      }
+    },
+    {
+      "description": "tagged derived, parameter set 0x02",
+      "handle": "4e504b010102ffeeddccbbaa99887766554433221100",
+      "expect": {
+        "mode": "derived",
+        "parameter_set": 2
+      }
+    },
+    {
+      "description": "tagged stored",
+      "handle": "4e504b010279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+      "expect": {
+        "mode": "stored",
+        "author": "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+      }
+    },
+    {
+      "description": "legacy stored handle (raw public key)",
+      "handle": "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+      "expect": {
+        "mode": "stored",
+        "author": "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        "legacy": "raw-pubkey",
+        "confirm_record": true
+      }
+    },
+    {
+      "description": "legacy key-in-handle (read-only)",
+      "handle": "03abababababababababababababababababababababababababababababababab",
+      "expect": {
+        "mode": "stored",
+        "legacy": "key-in-handle"
+      }
+    },
+    {
+      "description": "untagged UUID text handle",
+      "handle": "33663262386331652d396434612d346537622d623563322d316136663065386437633934",
+      "expect": {
+        "mode": "unknown"
+      }
+    },
+    {
+      "description": "tagged, unknown version",
+      "handle": "4e504b02010000000000000000000000000000000000",
+      "expect": {
+        "mode": "unsupported"
+      }
+    },
+    {
+      "description": "tagged derived, wrong length",
+      "handle": "4e504b010101000000000000000000000000000000",
+      "expect": {
+        "mode": "unsupported"
+      }
+    },
+    {
+      "description": "tagged stored, wrong length",
+      "handle": "4e504b010279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f817",
+      "expect": {
+        "mode": "unsupported"
+      }
+    },
+    {
+      "description": "tagged derived, unassigned parameter set",
+      "handle": "4e504b01010500000000000000000000000000000000",
+      "expect": {
+        "mode": "derived",
+        "parameter_set": 5
+      }
+    },
+    {
+      "description": "no handle returned",
+      "handle": null,
+      "expect": {
+        "mode": "unknown"
+      }
+    },
+    {
+      "description": "NPK prefix with other version byte",
+      "handle": "4e504b02000000000000000000000000000000000000",
+      "expect": {
+        "mode": "unsupported"
+      }
+    },
+    {
+      "description": "32-byte public key that starts with the NPK prefix",
+      "handle": "4e504b1111111111111111111111111111111111111111111111111111111111",
+      "expect": {
+        "mode": "stored",
+        "author": "4e504b1111111111111111111111111111111111111111111111111111111111",
+        "legacy": "raw-pubkey",
+        "confirm_record": true
+      }
+    },
+    {
+      "description": "tagged, mode 0x02 at the derived length",
+      "handle": "4e504b01020000000000000000000000000000000000",
+      "expect": {
+        "mode": "unsupported"
+      }
+    },
+    {
+      "description": "tagged, mode 0x01 at the stored length",
+      "handle": "4e504b01010000000000000000000000000000000000000000000000000000000000000000",
+      "expect": {
+        "mode": "unsupported"
+      }
+    },
+    {
+      "description": "32-byte handle that starts like a tagged derived handle",
+      "handle": "4e504b0101010101010101010101010101010101010101010101010101010101",
+      "expect": {
+        "mode": "stored",
+        "author": "4e504b0101010101010101010101010101010101010101010101010101010101",
+        "legacy": "raw-pubkey",
+        "confirm_record": true
+      }
+    },
+    {
+      "description": "bare NPK prefix",
+      "handle": "4e504b",
+      "expect": {
+        "mode": "unsupported"
+      }
+    },
+    {
+      "description": "32-byte handle that is not a valid x-coordinate",
+      "handle": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "expect": {
+        "mode": "stored",
+        "author": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "legacy": "raw-pubkey",
+        "confirm_record": true
+      }
+    }
+  ],
+  "derived_parameter_sets": [
+    {
+      "parameter_set": 1,
+      "salt_label": "nostr-passkey:derive:v1",
+      "info_label": "nostr-passkey:nsec:v1",
+      "prf_output": "0707070707070707070707070707070707070707070707070707070707070707",
+      "prf_input": "6cae07a92d7fcc20f7eed6ed78f6ab8848a7c921dd31679f6019551c0cc9fbbc",
+      "secret_key": "bf6b11c40255021de2a25e38fe24b6ccb1e3b07a96175b25538b5453605c36d9",
+      "public_key": "1e36ce5101376f65a8ad05538100265305046cca1541cffb78ee31cfecbdff1f"
+    },
+    {
+      "parameter_set": 2,
+      "salt_label": "lawallet-nsec-prf-v1",
+      "info_label": "lawallet-nsec-v1",
+      "prf_output": "0707070707070707070707070707070707070707070707070707070707070707",
+      "prf_input": "8ee22949c1045c627e14236f1d06cf730b46b4cf309cbf4ede25a446cf33ad8d",
+      "secret_key": "a1e1ac8dd866cabdf743a4cdedbf53c680444094a25c0ffc4e558ec5a78831c1",
+      "public_key": "5146ad1f0bec6b37a9f1937c5c80d452a2d952ac1a8f4bee690dd34dbd4ef3c8"
+    }
+  ],
+  "stored": {
+    "prf_label": "nostr-passkey:store:v1",
+    "prf_input": "8b309d7051d41bda75ece773d6d35c49fb2ed7901f1e0261a476ac2646036e8e",
+    "payload_types": {
+      "key": 1,
+      "vault": 3
+    },
+    "records": [
+      {
+        "description": "type key",
+        "prf_input": "8b309d7051d41bda75ece773d6d35c49fb2ed7901f1e0261a476ac2646036e8e",
+        "prf_output": "0707070707070707070707070707070707070707070707070707070707070707",
+        "hkdf_salt": "1111111111111111111111111111111111111111111111111111111111111111",
+        "iv": "222222222222222222222222",
+        "aes_key": "5259bdcd6d732f534cbd6a5dde47aed5fbf7798a31926076b616e4fccb97414f",
+        "rp_id": "example.com",
+        "credential_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "author": "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        "payload_type": 1,
+        "plaintext": "0000000000000000000000000000000000000000000000000000000000000001",
+        "aad": "4e504b01010b6578616d706c652e636f6d79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f817980010aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "record": "4e504b01012222222222222222222222221111111111111111111111111111111111111111111111111111111111111111f2866d2730536dd59e0324da5649256a4d259463cc54540b26985e88c770edea81c8b1bca68522ae526bf85653c7f3e7",
+        "record_base64": "TlBLAQEiIiIiIiIiIiIiIiIREREREREREREREREREREREREREREREREREREREREREfKGbScwU23VngMk2lZJJWpNJZRjzFRUCyaYXojHcO3qgcixvKaFIq5Sa/hWU8fz5w==",
+        "record_length": 97
+      },
+      {
+        "description": "type vault: seed with passphrase, derived account as author, unknown kind marked default, key account with an uppercase secret (unusable), key account as default, ext data",
+        "prf_output": "0707070707070707070707070707070707070707070707070707070707070707",
+        "hkdf_salt": "4444444444444444444444444444444444444444444444444444444444444444",
+        "iv": "555555555555555555555555",
+        "aes_key": "3f49e7e228a42eb0aeb8c68d7fcce704cb335bb774a90219d01d2a0f9e8ad1d7",
+        "rp_id": "example.com",
+        "credential_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "author": "7dc8709438f902787f1eb9e021e21740e3c965e0616d9b6fc37555bf1edb37a1",
+        "payload_type": 3,
+        "payload": {
+          "updated_at": 1767225600,
+          "seed": {
+            "entropy": "7e91e681dd067802c50aa8216d564a89",
+            "passphrase": "pässkey"
+          },
+          "accounts": [
+            {
+              "kind": "derived",
+              "path": "m/44'/1237'/0'/0/3",
+              "label": "Work"
+            },
+            {
+              "kind": "multisig",
+              "label": "Shared",
+              "threshold": 2,
+              "default": true
+            },
+            {
+              "kind": "key",
+              "secret": "ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB",
+              "label": "Uppercase"
+            },
+            {
+              "kind": "key",
+              "secret": "3333333333333333333333333333333333333333333333333333333333333333",
+              "label": "Imported",
+              "default": true
+            }
+          ],
+          "ext": {
+            "com.example.notes": {
+              "theme": "dark"
+            },
+            "Other App_2": [
+              1,
+              2
+            ]
+          }
+        },
+        "plaintext": "7b22757064617465645f6174223a313736373232353630302c2273656564223a7b22656e74726f7079223a223765393165363831646430363738303263353061613832313664353634613839222c2270617373706872617365223a2270c3a473736b6579227d2c226163636f756e7473223a5b7b226b696e64223a2264657269766564222c2270617468223a226d2f3434272f31323337272f30272f302f33222c226c6162656c223a22576f726b227d2c7b226b696e64223a226d756c7469736967222c226c6162656c223a22536861726564222c227468726573686f6c64223a322c2264656661756c74223a747275657d2c7b226b696e64223a226b6579222c22736563726574223a2241424142414241424142414241424142414241424142414241424142414241424142414241424142414241424142414241424142414241424142414241424142222c226c6162656c223a22557070657263617365227d2c7b226b696e64223a226b6579222c22736563726574223a2233333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333222c226c6162656c223a22496d706f72746564222c2264656661756c74223a747275657d5d2c22657874223a7b22636f6d2e6578616d706c652e6e6f746573223a7b227468656d65223a226461726b227d2c224f74686572204170705f32223a5b312c325d7d7d",
+        "aad": "4e504b01030b6578616d706c652e636f6d7dc8709438f902787f1eb9e021e21740e3c965e0616d9b6fc37555bf1edb37a10014bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "record": "4e504b010355555555555555555555555544444444444444444444444444444444444444444444444444444444444444442c61b0bda5174e4529a144b8e317c7914036889ef554b2a486fa334cc632ff4d33f94a410af323f67ba7ec4d2fa3d94d2661fc31ac6c5054328bdf7ecf67994b1f02276800fb08be994caf286d075a749381ad4deee03dd9db5774e29eff56d9577907ed420a6daa243207a86ae8c3b88a7a12772f84903ccfa2d78eb28da12d54960f2f7415674bdafe5f217c8426e4baa20546b148f8d9b87f5775368d71be5dd7bec3ebf6e7caa245a59bb6c4d4fdd6402f7a3a91cd44042903485a2c8d573cf08d0f04e7fc79987a8379b8112b8826e6502b512aa7e7060344b4c87001ebafc90f4ef95bf34c36a760587f6f0c7ac2d3b160f8541f4e4db79ac1abd111cac523c98ef6568143cb22ba3d274200dc8497de31387a7f49348c1b006085264e63dc3d93429517a8c4f872f9adbccc5c02e74780b6c4f43b8d1de0d7268cb8d0df46bd6de122a0648dfcfca637d7847d071548f4c631048f54057e9d70b9f250e51fe6b88bf58e210bafb3179c8e2e32dc160b7be9dd15350152bfebb3208e54d3bd427c1aefa031706207117f79ade33ad4a174dcea5e80065f0ad8be17e4a6e2d29d202d28552c0040f75833671d6c435880cefb4a2b8078f52b1d4d8216a78860364f55711e0649fff741d96b5f0cb2fd098e20caa60c99991edf278ab868a0b5de9f1f0697709bfb36efbc18f90702d6519d2c071dfd30146240180db656a0063f3076c80a903e98cf4bfdf7faac7450d8a982593c7b3caba91f792b0ee66790a476acdc3360f4ffa9f19fbdcfe0b1",
+        "record_length": 610,
+        "expect": {
+          "mnemonic": "leader monkey parrot ring guide accident before fence cannon height naive bean",
+          "accounts": [
+            {
+              "index": 0,
+              "path": "m/44'/1237'/0'/0/3",
+              "secret_key": "2685dd5be51ac5e2dfe2169eaf2181abe6f79c5e48a6fd98b0983c156760b277",
+              "public_key": "7dc8709438f902787f1eb9e021e21740e3c965e0616d9b6fc37555bf1edb37a1"
+            },
+            {
+              "index": 3,
+              "public_key": "3c72addb4fdf09af94f0c94d7fe92a386a7e70cf8a1d85916386bb2535c7b1b1",
+              "default": true
+            }
+          ],
+          "skipped": [
+            1,
+            2
+          ],
+          "default_index": 3
+        }
+      }
+    ],
+    "invalid": [
+      {
+        "description": "type byte flipped from 0x01 to 0x03",
+        "base": 0,
+        "record": "4e504b01032222222222222222222222221111111111111111111111111111111111111111111111111111111111111111f2866d2730536dd59e0324da5649256a4d259463cc54540b26985e88c770edea81c8b1bca68522ae526bf85653c7f3e7",
+        "expect": "fail"
+      },
+      {
+        "description": "rp_id changed",
+        "base": 0,
+        "rp_id": "example.org",
+        "expect": "fail"
+      },
+      {
+        "description": "author changed",
+        "base": 0,
+        "author": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+        "expect": "fail"
+      },
+      {
+        "description": "credential_id changed",
+        "base": 0,
+        "credential_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab",
+        "expect": "fail"
+      },
+      {
+        "description": "record truncated to 64 bytes, below the 65-byte minimum",
+        "base": 0,
+        "record": "4e504b01012222222222222222222222221111111111111111111111111111111111111111111111111111111111111111f2866d2730536dd59e0324da564925",
+        "expect": "fail"
+      },
+      {
+        "description": "reserved type 0x02, sealed with 0x02 in its AAD",
+        "base": 0,
+        "record": "4e504b01022222222222222222222222221111111111111111111111111111111111111111111111111111111111111111f2866d2730536dd59e0324da5649256a4d259463cc54540b26985e88c770edeada32a084b8621d8d58e25f55e7725ab6",
+        "expect": "fail"
+      }
+    ],
+    "author_not_in_vault": {
+      "description": "author not in vault: decrypts, then fails the author check",
+      "prf_output": "0707070707070707070707070707070707070707070707070707070707070707",
+      "hkdf_salt": "6666666666666666666666666666666666666666666666666666666666666666",
+      "iv": "777777777777777777777777",
+      "rp_id": "example.com",
+      "credential_id": "cccccccccccccccccccccccccccccccc",
+      "author": "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+      "payload_type": 3,
+      "plaintext": "7b22757064617465645f6174223a313736373232353630302c226163636f756e7473223a5b7b226b696e64223a226b6579222c22736563726574223a2234343434343434343434343434343434343434343434343434343434343434343434343434343434343434343434343434343434343434343434343434343434227d5d7d",
+      "record": "4e504b0103777777777777777777777777666666666666666666666666666666666666666666666666666666666666666668abc889246ac3ee7d39db7dfb3f12213306e35c6c18f87053524c2d3c0dbf56ab401dd0a52c145f6e751131480d70bb4a976e7b748710b85f5b50e3c488727e6fecbcfbcf489ee68465091b6c86b2346e74e1a25dee5966b063021648337d85e48713843559d8e813d05a238e0d4a3e9fdecfe5dcc7c888fbd33cecadbd26aefbdcec9ea7943b819026ee49f437aa7615",
+      "expect": "fail"
+    },
+    "vault_plaintexts": [
+      {
+        "description": "minimal: one key account, no updated_at, seed or ext",
+        "text": "{\"accounts\":[{\"kind\":\"key\",\"secret\":\"0101010101010101010101010101010101010101010101010101010101010101\"}]}",
+        "expect": {
+          "usable": [
+            0
+          ],
+          "skipped": [],
+          "default_index": 0
+        }
+      },
+      {
+        "description": "pretty-printed, members reordered, a string escape: same meaning as compact JSON",
+        "text": "{\n  \"accounts\": [\n    { \"secret\": \"0101010101010101010101010101010101010101010101010101010101010101\", \"kind\": \"k\\u0065y\" }\n  ],\n  \"updated_at\": 5\n}\n",
+        "expect": {
+          "usable": [
+            0
+          ],
+          "skipped": [],
+          "default_index": 0
+        }
+      },
+      {
+        "description": "no usable account marked default: the first usable account is the default",
+        "text": "{\"accounts\":[{\"kind\":\"multisig\",\"default\":true},{\"kind\":\"key\",\"secret\":\"0101010101010101010101010101010101010101010101010101010101010101\"},{\"kind\":\"key\",\"secret\":\"0202020202020202020202020202020202020202020202020202020202020202\",\"default\":false}]}",
+        "expect": {
+          "usable": [
+            1,
+            2
+          ],
+          "skipped": [
+            0
+          ],
+          "default_index": 1
+        }
+      },
+      {
+        "description": "skipped: not an object, kind not a string, label not a string, default not a boolean",
+        "text": "{\"accounts\":[\"key\",null,[],{\"kind\":1,\"secret\":\"0101010101010101010101010101010101010101010101010101010101010101\"},{\"kind\":\"key\",\"secret\":\"0101010101010101010101010101010101010101010101010101010101010101\",\"label\":7},{\"kind\":\"key\",\"secret\":\"0101010101010101010101010101010101010101010101010101010101010101\",\"default\":\"true\"},{\"kind\":\"key\",\"secret\":\"0202020202020202020202020202020202020202020202020202020202020202\"}]}",
+        "expect": {
+          "usable": [
+            6
+          ],
+          "skipped": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "default_index": 6
+        }
+      },
+      {
+        "description": "key secrets: zero, the curve order n, n - 1, 31 bytes",
+        "text": "{\"accounts\":[{\"kind\":\"key\",\"secret\":\"0000000000000000000000000000000000000000000000000000000000000000\"},{\"kind\":\"key\",\"secret\":\"fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141\"},{\"kind\":\"key\",\"secret\":\"fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140\"},{\"kind\":\"key\",\"secret\":\"01010101010101010101010101010101010101010101010101010101010101\"}]}",
+        "expect": {
+          "usable": [
+            2
+          ],
+          "skipped": [
+            0,
+            1,
+            3
+          ],
+          "default_index": 2
+        }
+      },
+      {
+        "description": "derived paths: valid, h marker, leading zero, index 2^31, index 2^31 - 1 hardened, unhardened 44, nothing after 1237', empty level, capital M, doubled marker",
+        "text": "{\"seed\":{\"entropy\":\"7e91e681dd067802c50aa8216d564a89\"},\"accounts\":[{\"kind\":\"derived\",\"path\":\"m/44'/1237'/0'/0/0\"},{\"kind\":\"derived\",\"path\":\"m/44'/1237'/0h/0/0\"},{\"kind\":\"derived\",\"path\":\"m/44'/1237'/0'/0/03\"},{\"kind\":\"derived\",\"path\":\"m/44'/1237'/2147483648\"},{\"kind\":\"derived\",\"path\":\"m/44'/1237'/2147483647'\"},{\"kind\":\"derived\",\"path\":\"m/44/1237'/0'/0/0\"},{\"kind\":\"derived\",\"path\":\"m/44'/1237'\"},{\"kind\":\"derived\",\"path\":\"m/44'/1237'/0'/\"},{\"kind\":\"derived\",\"path\":\"M/44'/1237'/0'/0/0\"},{\"kind\":\"derived\",\"path\":\"m/44'/1237'/0''\"}]}",
+        "expect": {
+          "usable": [
+            0,
+            4
+          ],
+          "skipped": [
+            1,
+            2,
+            3,
+            5,
+            6,
+            7,
+            8,
+            9
+          ],
+          "default_index": 0
+        }
+      },
+      {
+        "description": "derived path depth: 255 levels usable, 256 skipped",
+        "text": "{\"seed\":{\"entropy\":\"7e91e681dd067802c50aa8216d564a89\"},\"accounts\":[{\"kind\":\"derived\",\"path\":\"m/44'/1237'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'\"},{\"kind\":\"derived\",\"path\":\"m/44'/1237'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'/0'\"}]}",
+        "expect": {
+          "usable": [
+            0
+          ],
+          "skipped": [
+            1
+          ],
+          "default_index": 0
+        }
+      },
+      {
+        "description": "derived account in a vault without seed, marked default",
+        "text": "{\"accounts\":[{\"kind\":\"derived\",\"path\":\"m/44'/1237'/0'/0/0\",\"default\":true},{\"kind\":\"key\",\"secret\":\"0101010101010101010101010101010101010101010101010101010101010101\"}]}",
+        "expect": {
+          "usable": [
+            1
+          ],
+          "skipped": [
+            0
+          ],
+          "default_index": 1
+        }
+      },
+      {
+        "description": "unknown fields at every level, ext entries of any type",
+        "text": "{\"updated_at\":0,\"accounts\":[{\"kind\":\"key\",\"secret\":\"0101010101010101010101010101010101010101010101010101010101010101\",\"color\":\"red\"}],\"ext\":{\"a\":null},\"future\":{\"x\":1}}",
+        "expect": {
+          "usable": [
+            0
+          ],
+          "skipped": [],
+          "default_index": 0
+        }
+      },
+      {
+        "description": "updated_at at 2^53 - 1",
+        "text": "{\"updated_at\":9007199254740991,\"accounts\":[{\"kind\":\"key\",\"secret\":\"0101010101010101010101010101010101010101010101010101010101010101\"}]}",
+        "expect": {
+          "usable": [
+            0
+          ],
+          "skipped": [],
+          "default_index": 0
+        }
+      },
+      {
+        "description": "byte order mark before the JSON",
+        "text": "﻿{\"accounts\":[{\"kind\":\"key\",\"secret\":\"0101010101010101010101010101010101010101010101010101010101010101\"}]}",
+        "expect": "invalid"
+      },
+      {
+        "description": "invalid UTF-8 in a label",
+        "hex": "7b226163636f756e7473223a5b7b226b696e64223a226b6579222c22736563726574223a2230313031303130313031303130313031303130313031303130313031303130313031303130313031303130313031303130313031303130313031303130313031222c226c6162656c223a22ff227d5d7d",
+        "expect": "invalid"
+      },
+      {
+        "description": "member name repeated at the top level",
+        "text": "{\"accounts\":[{\"kind\":\"key\",\"secret\":\"0101010101010101010101010101010101010101010101010101010101010101\"}],\"accounts\":[{\"kind\":\"key\",\"secret\":\"0202020202020202020202020202020202020202020202020202020202020202\"}]}",
+        "expect": "invalid"
+      },
+      {
+        "description": "member name repeated inside an account",
+        "text": "{\"accounts\":[{\"kind\":\"key\",\"secret\":\"0101010101010101010101010101010101010101010101010101010101010101\",\"secret\":\"0101010101010101010101010101010101010101010101010101010101010101\"}]}",
+        "expect": "invalid"
+      },
+      {
+        "description": "member name repeated inside ext",
+        "text": "{\"accounts\":[{\"kind\":\"key\",\"secret\":\"0101010101010101010101010101010101010101010101010101010101010101\"}],\"ext\":{\"a\":1,\"a\":2}}",
+        "expect": "invalid"
+      },
+      {
+        "description": "top level is an array",
+        "text": "[{\"accounts\":[{\"kind\":\"key\",\"secret\":\"0101010101010101010101010101010101010101010101010101010101010101\"}]}]",
+        "expect": "invalid"
+      },
+      {
+        "description": "accounts missing",
+        "text": "{\"updated_at\":1}",
+        "expect": "invalid"
+      },
+      {
+        "description": "accounts is an object",
+        "text": "{\"accounts\":{\"0\":{\"kind\":\"key\",\"secret\":\"0101010101010101010101010101010101010101010101010101010101010101\"}}}",
+        "expect": "invalid"
+      },
+      {
+        "description": "accounts is empty",
+        "text": "{\"accounts\":[]}",
+        "expect": "invalid"
+      },
+      {
+        "description": "updated_at with a fraction",
+        "text": "{\"updated_at\":1767225600.0,\"accounts\":[{\"kind\":\"key\",\"secret\":\"0101010101010101010101010101010101010101010101010101010101010101\"}]}",
+        "expect": "invalid"
+      },
+      {
+        "description": "updated_at with an exponent",
+        "text": "{\"updated_at\":1e9,\"accounts\":[{\"kind\":\"key\",\"secret\":\"0101010101010101010101010101010101010101010101010101010101010101\"}]}",
+        "expect": "invalid"
+      },
+      {
+        "description": "updated_at negative",
+        "text": "{\"updated_at\":-1,\"accounts\":[{\"kind\":\"key\",\"secret\":\"0101010101010101010101010101010101010101010101010101010101010101\"}]}",
+        "expect": "invalid"
+      },
+      {
+        "description": "updated_at 2^53",
+        "text": "{\"updated_at\":9007199254740992,\"accounts\":[{\"kind\":\"key\",\"secret\":\"0101010101010101010101010101010101010101010101010101010101010101\"}]}",
+        "expect": "invalid"
+      },
+      {
+        "description": "updated_at a string",
+        "text": "{\"updated_at\":\"1767225600\",\"accounts\":[{\"kind\":\"key\",\"secret\":\"0101010101010101010101010101010101010101010101010101010101010101\"}]}",
+        "expect": "invalid"
+      },
+      {
+        "description": "seed is null",
+        "text": "{\"seed\":null,\"accounts\":[{\"kind\":\"key\",\"secret\":\"0101010101010101010101010101010101010101010101010101010101010101\"}]}",
+        "expect": "invalid"
+      },
+      {
+        "description": "seed without entropy",
+        "text": "{\"seed\":{\"passphrase\":\"x\"},\"accounts\":[{\"kind\":\"key\",\"secret\":\"0101010101010101010101010101010101010101010101010101010101010101\"}]}",
+        "expect": "invalid"
+      },
+      {
+        "description": "seed entropy in uppercase",
+        "text": "{\"seed\":{\"entropy\":\"7E91E681DD067802C50AA8216D564A89\"},\"accounts\":[{\"kind\":\"key\",\"secret\":\"0101010101010101010101010101010101010101010101010101010101010101\"}]}",
+        "expect": "invalid"
+      },
+      {
+        "description": "seed entropy of 15 bytes",
+        "text": "{\"seed\":{\"entropy\":\"7e91e681dd067802c50aa8216d564a\"},\"accounts\":[{\"kind\":\"key\",\"secret\":\"0101010101010101010101010101010101010101010101010101010101010101\"}]}",
+        "expect": "invalid"
+      },
+      {
+        "description": "seed passphrase not a string",
+        "text": "{\"seed\":{\"entropy\":\"7e91e681dd067802c50aa8216d564a89\",\"passphrase\":1},\"accounts\":[{\"kind\":\"key\",\"secret\":\"0101010101010101010101010101010101010101010101010101010101010101\"}]}",
+        "expect": "invalid"
+      },
+      {
+        "description": "ext is an array",
+        "text": "{\"accounts\":[{\"kind\":\"key\",\"secret\":\"0101010101010101010101010101010101010101010101010101010101010101\"}],\"ext\":[]}",
+        "expect": "invalid"
+      },
+      {
+        "description": "member name repeated once its escapes are decoded",
+        "text": "{\"accounts\":[{\"kind\":\"key\",\"secret\":\"0101010101010101010101010101010101010101010101010101010101010101\"}],\"\\u0061ccounts\":[{\"kind\":\"key\",\"secret\":\"0202020202020202020202020202020202020202020202020202020202020202\"}]}",
+        "expect": "invalid"
+      },
+      {
+        "description": "fields of the other kind are unknown fields: path on a key account, secret on a derived account",
+        "text": "{\"seed\":{\"entropy\":\"7e91e681dd067802c50aa8216d564a89\"},\"accounts\":[{\"kind\":\"key\",\"secret\":\"0101010101010101010101010101010101010101010101010101010101010101\",\"path\":\"m/44'/1237'/0'/0/0\"},{\"kind\":\"derived\",\"path\":\"m/44'/1237'/0'/0/1\",\"secret\":\"0202020202020202020202020202020202020202020202020202020202020202\"}]}",
+        "expect": {
+          "usable": [
+            0,
+            1
+          ],
+          "skipped": [],
+          "default_index": 0
+        }
+      },
+      {
+        "description": "skipped: kind missing, key without secret, derived without path, label null, default null",
+        "text": "{\"seed\":{\"entropy\":\"7e91e681dd067802c50aa8216d564a89\"},\"accounts\":[{\"secret\":\"0101010101010101010101010101010101010101010101010101010101010101\"},{\"kind\":\"key\"},{\"kind\":\"derived\"},{\"kind\":\"key\",\"secret\":\"0101010101010101010101010101010101010101010101010101010101010101\",\"label\":null},{\"kind\":\"key\",\"secret\":\"0101010101010101010101010101010101010101010101010101010101010101\",\"default\":null},{\"kind\":\"key\",\"secret\":\"0202020202020202020202020202020202020202020202020202020202020202\"}]}",
+        "expect": {
+          "usable": [
+            5
+          ],
+          "skipped": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "default_index": 5
+        }
+      },
+      {
+        "description": "seed passphrase is null",
+        "text": "{\"seed\":{\"entropy\":\"7e91e681dd067802c50aa8216d564a89\",\"passphrase\":null},\"accounts\":[{\"kind\":\"key\",\"secret\":\"0101010101010101010101010101010101010101010101010101010101010101\"}]}",
+        "expect": "invalid"
+      }
+    ]
+  },
+  "relay": {
+    "event": {
+      "kind": 31778,
+      "pubkey": "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+      "created_at": 1767225600,
+      "tags": [
+        [
+          "d",
+          "qqqqqqqqqqqqqqqqqqqqqg:key"
+        ],
+        [
+          "rp",
+          "example.com"
+        ]
+      ],
+      "content": "TlBLAQEiIiIiIiIiIiIiIiIREREREREREREREREREREREREREREREREREREREREREfKGbScwU23VngMk2lZJJWpNJZRjzFRUCyaYXojHcO3qgcixvKaFIq5Sa/hWU8fz5w=="
+    },
+    "filter": {
+      "kinds": [
+        31778
+      ],
+      "authors": [
+        "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+      ],
+      "#d": [
+        "qqqqqqqqqqqqqqqqqqqqqg:key",
+        "qqqqqqqqqqqqqqqqqqqqqg:vault"
+      ]
+    },
+    "signed_event": {
+      "description": "relay.event signed by the plaintext of stored.records[0], BIP-340 with aux_rand of 32 zero bytes",
+      "secret_key": "0000000000000000000000000000000000000000000000000000000000000001",
+      "aux_rand": "0000000000000000000000000000000000000000000000000000000000000000",
+      "event": {
+        "id": "c553af62a87c883d2b0999b9c0ee9c4ebc87deffa43a74ff77f874a8197d03d5",
+        "pubkey": "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        "created_at": 1767225600,
+        "kind": 31778,
+        "tags": [
+          [
+            "d",
+            "qqqqqqqqqqqqqqqqqqqqqg:key"
+          ],
+          [
+            "rp",
+            "example.com"
+          ]
+        ],
+        "content": "TlBLAQEiIiIiIiIiIiIiIiIREREREREREREREREREREREREREREREREREREREREREfKGbScwU23VngMk2lZJJWpNJZRjzFRUCyaYXojHcO3qgcixvKaFIq5Sa/hWU8fz5w==",
+        "sig": "92d8c4d9cf5a240e3a2bf42ed55c56df8f23bbdb8088e0e2fe10c3b8a38933c183e4ab3e3874c37ae9974df538acdc764b7d965a5069c5d0b94180cc1ac0dd66"
+      }
+    }
+  },
+  "legacy_stored": {
+    "prf_input_utf8": "keytr-v1",
+    "prf_input": "6b657974722d7631"
+  },
+  "legacy_record": {
+    "description": "keytr NIP-K1 v=1 record for the legacy stored handle that is its author",
+    "prf_input": "6b657974722d7631",
+    "prf_output": "0707070707070707070707070707070707070707070707070707070707070707",
+    "hkdf_salt": "9999999999999999999999999999999999999999999999999999999999999999",
+    "hkdf_info": "keytr nsec encryption v1",
+    "aes_key": "2b656a5712d63cfe6f9a0bc8d0ac1a1fd159404e032238367b8db47c9555c30c",
+    "iv": "888888888888888888888888",
+    "credential_id": "dddddddddddddddddddddddddddddddd",
+    "aad": "6b6579747201dddddddddddddddddddddddddddddddd",
+    "secret_key": "0000000000000000000000000000000000000000000000000000000000000001",
+    "author": "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+    "blob": "018888888888888888888888889999999999999999999999999999999999999999999999999999999999999999827828850c9e80144f3f11a5904ba4fd15ab19796ea626f9a08ef89572ae46639344de3e95b37c4e93032d685d722192",
+    "blob_length": 93,
+    "d": "3d3d3d3d3d3d3d3d3d3d3Q==",
+    "content": "AYiIiIiIiIiIiIiIiJmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZgngohQyegBRPPxGlkEuk/RWrGXlupib5oI74lXKuRmOTRN4+lbN8TpMDLWhdciGS"
+  },
+  "ctap2_salt": {
+    "description": "salt a client calling CTAP2 hmac-secret passes for the stored prf_input",
+    "prf_input": "8b309d7051d41bda75ece773d6d35c49fb2ed7901f1e0261a476ac2646036e8e",
+    "salt": "263a89f61bea5d94cfca141c06154665a12f0325fdfeb79e0db9bc7355b43d56"
+  }
+}

@@ -71,7 +71,7 @@ Login state is not automatically encrypted: the UI's default signer storage uses
 
 - [Package and runtime guide](docs/package-guide.md): which module to use, installation, defaults and teardown.
 - [Migration guide](docs/package-migration.md): every retired name and its replacement.
-- [Passkey recovery](docs/passkey-recovery.md): provider storage, recovery records and explicit relay fallback.
+- [Passkey recovery](docs/passkey-recovery.md): provider storage, recovery records, explicit relay fallback, and telling derived from stored passkeys.
 - [Extension integration](docs/extension-shared-core.md): portable core versus browser-owned responsibilities.
 
 ## Development and release
