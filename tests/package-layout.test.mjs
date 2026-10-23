@@ -20,7 +20,7 @@ test('maintained packages never depend on retired packages and hard dependencies
  for(const m of manifests) visit(m.name);
 });
 test('legacy graph installs its relay runtime rather than relying on an optional peer', () => {
- assert.equal(pkg('graph').dependencies['nostr-wot-sdk'],'^3.0.0');
+ assert.equal(pkg('graph').dependencies['nostr-wot-sdk'], `^${pkg('sdk').version}`);
 });
 test('workspace source aliases point to real public entrypoints', () => {
  const config=JSON.parse(fs.readFileSync('tsconfig.workspace.json','utf8'));
