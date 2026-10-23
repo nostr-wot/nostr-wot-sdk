@@ -1,4 +1,4 @@
-import { verifyEvent } from 'nostr-tools';
+import { finalizeEvent, verifyEvent } from 'nostr-tools';
 import { HDKey } from '@scure/bip32';
 import { expect, test, vi } from 'vitest';
 import vectors from './fixtures/passkey-draft-vectors.json' with { type: 'json' };
@@ -102,4 +102,16 @@ test('earlier npk1 seed events remain readable but cannot be published on the ne
  expect(await validateStoredRecordEvent(event, ctx, () => true)).toEqual(record);
  expect(openStoredRecord(record, prf, ctx)).toEqual({ type: 'seed', seed });
  expect(() => buildStoredRecordEvent(record, ctx, 1)).toThrow('vault');
+});
+
+test.each([
+  [['x', 'a'.repeat(2049)]],
+  Array.from({ length: 33 }, () => ['x', 'extra']),
+  [['x', ...Array(9).fill('extra')]],
+])('ignored tags cannot hide a signed newer malformed vault', async (...extra) => {
+  const record = encryptStoredRecord(vault(1), prf, context);
+  const older = finalizeEvent(buildStoredRecordEvent(record, context, 1), hexToBytes(secret));
+  const newer = finalizeEvent({ ...buildStoredRecordEvent(record, context, 2), tags: [...older.tags, ...extra], content: 'invalid' }, hexToBytes(secret));
+  const candidates = await findStoredRecords({ relays: ['wss://relay.example'], transport: { query: async () => [older, newer], publish: async () => true } }, { ...context, verify: event => verifyEvent(event as never) });
+  expect(openStoredRecords(candidates, prf, context)).toBeNull();
 });

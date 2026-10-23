@@ -300,7 +300,8 @@ export async function validateStoredRecordEvent(event: RecoveryEvent, context: S
 
 /** Public eligibility precedes record decoding so a broken latest vault cannot expose an older one. */
 async function eligibleEvent(event: RecoveryEvent, context: StoredRecordContext, type: StoredPayloadType, verify: RecoveryVerifier): Promise<void> {
-  if (!validEventShape({ ...event, kind: RECOVERY_EVENT_KIND }, context.author) || ![RECOVERY_EVENT_KIND, STORED_RECOVERY_EVENT_KIND].includes(event.kind) || !['key', 'seed', 'vault'].includes(type)) throw new Error('Invalid stored record event');
+  const shapeValid = event.kind === RECOVERY_EVENT_KIND ? validEventShape(event, context.author) : !!event && event.pubkey === context.author && Number.isSafeInteger(event.created_at) && event.created_at >= 0 && Array.isArray(event.tags) && event.tags.every(tag => Array.isArray(tag) && tag.every(value => typeof value === 'string')) && /^[a-f0-9]{64}$/.test(event.id) && /^[a-f0-9]{128}$/.test(event.sig);
+  if (!shapeValid || ![RECOVERY_EVENT_KIND, STORED_RECOVERY_EVENT_KIND].includes(event.kind) || !['key', 'seed', 'vault'].includes(type)) throw new Error('Invalid stored record event');
   const legacy = event.kind === RECOVERY_EVENT_KIND;
   if (!legacy && (type === 'seed' || event.tags.some(tag => tag[0] === 'v'))) throw new Error('Invalid stored record version');
   const expected = legacy ? tags(type, context, true) : tags(type, context).filter(tag => tag[0] === 'd' || event.tags.some(actual => actual[0] === 'rp'));
@@ -314,7 +315,7 @@ async function eligibleEvent(event: RecoveryEvent, context: StoredRecordContext,
  * and never falls through to relays; relays need explicit consent and at least one acknowledgement.
  * Pass `prf` from registration to skip a prompt; it stays caller-owned.
  */
-export async function saveStoredRecord(options: RecoveryPorts & { payload: StoredPayload; context: StoredRecordContext; largeBlobSupported: boolean; allowRelay?: boolean; prf?: Uint8Array; sign: (event: RecoveryEventTemplate) => Promise<RecoveryEvent>; verify: RecoveryVerifier }): Promise<{ destination: 'passkey' | 'relays'; record: Uint8Array; event?: RecoveryEvent; acceptedRelays: string[] }> {
+export async function saveStoredRecord(options: RecoveryPorts & { payload: StoredPayload; context: StoredRecordContext; largeBlobSupported: boolean; allowRelay?: boolean; prf?: Uint8Array; confirmOverwrite?: (existing: StoredPayload | null) => Promise<boolean>; sign: (event: RecoveryEventTemplate) => Promise<RecoveryEvent>; verify: RecoveryVerifier }): Promise<{ destination: 'passkey' | 'relays'; record: Uint8Array; event?: RecoveryEvent; acceptedRelays: string[] }> {
   credential(options.context);
   if (!options.largeBlobSupported && !options.allowRelay) throw new Error('Relay storage requires explicit consent');
   if (!options.largeBlobSupported) relayList(options.relays);
@@ -328,6 +329,20 @@ export async function saveStoredRecord(options: RecoveryPorts & { payload: Store
     options.assertSession?.();
     const record = sealStoredRecord(plaintext, material, payload.type, options.context);
     if (options.largeBlobSupported) {
+      // A provider must positively report the existing bytes, including an empty blob.
+      // Missing read support is not proof that storage is empty.
+      if (!options.provider.assert) throw new Error('Cannot inspect existing passkey storage');
+      const inspected = await options.provider.assert({ credentialId: options.context.credentialId, rpId: options.context.rpId, largeBlob: true });
+      options.assertSession?.();
+      if (inspected.credentialId !== options.context.credentialId || !(inspected.blob instanceof Uint8Array)) throw new Error('Cannot inspect existing passkey storage');
+      if (inspected.blob.length) {
+        let existing: StoredPayload | null = null;
+        try { existing = openStoredRecord(inspected.blob, material, options.context); } catch { /* Unknown data requires explicit consent too. */ }
+        try {
+          if (!options.confirmOverwrite || !await options.confirmOverwrite(existing)) throw new Error('Passkey overwrite requires explicit consent');
+          options.assertSession?.();
+        } finally { if (existing?.type === 'key') existing.key.fill(0); }
+      }
       if (!await options.provider.writeBlob(options.context.credentialId, record, options.context.rpId)) throw new Error('Passkey storage was not confirmed');
       options.assertSession?.();
       return { destination: 'passkey', record, acceptedRelays: [] };

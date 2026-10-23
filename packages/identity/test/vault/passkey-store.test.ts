@@ -178,7 +178,13 @@ describe('relay events', () => {
 });
 
 describe('saveStoredRecord', () => {
-  const provider = (writeBlob: () => Promise<boolean>) => ({ authenticate: vi.fn(async () => PRF.slice()), discover: vi.fn(), writeBlob: vi.fn(writeBlob) });
+  test('refuses a blind blob overwrite when the provider cannot inspect storage', async () => {
+    const authenticator = { ...provider(async () => true), assert: undefined };
+    await expect(saveStoredRecord({ ...base, provider: authenticator, transport: transport(), largeBlobSupported: true, prf: PRF })).rejects.toThrow('inspect');
+    expect(authenticator.writeBlob).not.toHaveBeenCalled();
+  });
+
+  const provider = (writeBlob: () => Promise<boolean>) => ({ authenticate: vi.fn(async () => PRF.slice()), discover: vi.fn(), assert: vi.fn(async () => ({ credentialId: context.credentialId, blob: new Uint8Array() })), writeBlob: vi.fn(writeBlob) });
   const transport = () => ({ publish: vi.fn(async () => true), query: vi.fn(async () => []) });
   const base = { payload: { type: 'seed', seed: SEED } as StoredPayload, context, relays: ['wss://relay.example.com'], sign: async (event: object) => signed(event), verify };
   test('a confirmed blob write stores the raw record and never contacts relays', async () => {
@@ -196,6 +202,19 @@ describe('saveStoredRecord', () => {
       await expect(saveStoredRecord({ ...base, provider: provider(write), transport: relays, largeBlobSupported: true, allowRelay: true })).rejects.toThrow();
     }
     expect(relays.publish).not.toHaveBeenCalled();
+  });
+  test('nonempty blobs require explicit consent even when they open', async () => {
+    for (const blob of [new Uint8Array([1, 2, 3]), encryptStoredRecord(base.payload, PRF, context)]) {
+      const authenticator = { ...provider(async () => true), assert: vi.fn(async () => ({ credentialId: context.credentialId, blob })) };
+      const options = { ...base, provider: authenticator, transport: transport(), largeBlobSupported: true, prf: PRF };
+      await expect(saveStoredRecord(options)).rejects.toThrow('consent');
+      await expect(saveStoredRecord({ ...options, confirmOverwrite: async () => false })).rejects.toThrow('consent');
+      expect(authenticator.writeBlob).not.toHaveBeenCalled();
+      const confirm = vi.fn(async () => true);
+      await saveStoredRecord({ ...options, confirmOverwrite: confirm });
+      expect(confirm).toHaveBeenCalledWith(blob.length === 3 ? null : expect.objectContaining({ type: 'vault' }));
+      expect(authenticator.writeBlob).toHaveBeenCalledTimes(1);
+    }
   });
   test('relays need consent, and the published event validates', async () => {
     const relays = transport();
