@@ -26,3 +26,13 @@ test('workspace source aliases point to real public entrypoints', () => {
  const config=JSON.parse(fs.readFileSync('tsconfig.workspace.json','utf8'));
  for(const [name, paths] of Object.entries(config.compilerOptions.paths)) assert.ok(fs.existsSync(paths[0]),name);
 });
+
+ test('deprecation updates only versions missing the current migration notice', async () => {
+  const {pendingDeprecations} = await import('../scripts/pending-deprecations.mjs');
+  const notice = 'Use the maintained package';
+  const metadata = {versions: {'1.0.0': {deprecated: notice}, '1.1.0-next.0': {deprecated: notice}, '1.1.0': {}, '0.9.0': {deprecated: 'Old notice'}}};
+  assert.deepEqual(pendingDeprecations(metadata, notice), ['1.1.0', '0.9.0']);
+  for (const manifest of Object.values(metadata.versions)) manifest.deprecated = notice;
+  assert.deepEqual(pendingDeprecations(metadata, notice), []);
+  assert.throws(() => pendingDeprecations({}, notice), /no versions/);
+});
