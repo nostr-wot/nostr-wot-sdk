@@ -114,3 +114,5 @@ export { STORED_RECOVERY_EVENT_KIND, storedPrfInput, encryptStoredRecord, openSt
 export type { StoredRecordContext, StoredPayload, StoredSeed, StoredVault, StoredVaultAccount, StoredKey } from './passkey-store.js';
 export { resolvePasskeyIdentity, derivePasskeyIdentity } from './passkey-identity.js';
 export type { PasskeyIdentity, PasskeyIdentityError, ResolvePasskeyIdentityOptions } from './passkey-identity.js';
+export { parseNosskeyAccount, nosskeyPrfInput, recoverNosskeyAccount } from './nosskey.js';
+export type { NosskeyAccount } from './nosskey.js';
