@@ -1,5 +1,7 @@
 # @nostr-wot/auth
 
+## 5.0.1
+
 ## 5.0.1-next.0
 
 ### Patch Changes
