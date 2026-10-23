@@ -1,7 +1,7 @@
 {
   "name": "@nostr-wot/ui",
-  "version": "2.0.0",
-  "description": "Headless React UI for Nostr \u2014 login modal/widget, session provider, themable via CSS variables.",
+  "version": "2.0.1-next.0",
+  "description": "Headless React UI for Nostr — login modal/widget, session provider, themable via CSS variables.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "GPL-3.0-only",
   "keywords": [
@@ -57,7 +57,7 @@
     "check:dist": "node ../../scripts/dist-stamp.mjs check"
   },
   "dependencies": {
-    "nostr-wot-sdk": "^3.0.0",
+    "nostr-wot-sdk": "^3.0.1-next.0",
     "qrcode": "^1.5.4"
   },
   "devDependencies": {

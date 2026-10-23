@@ -1,7 +1,7 @@
 {
   "name": "@nostr-wot/auth",
-  "version": "5.0.0",
-  "description": "Nostr authentication for HTTP servers \u2014 challenge / signed-event verify (NIP-98) / JWT. Framework-agnostic Web-standard handlers + Next.js App Router shim + client helper.",
+  "version": "5.0.1-next.0",
+  "description": "Nostr authentication for HTTP servers — challenge / signed-event verify (NIP-98) / JWT. Framework-agnostic Web-standard handlers + Next.js App Router shim + client helper.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "GPL-3.0-only",
   "keywords": [
@@ -77,7 +77,7 @@
   },
   "peerDependencies": {
     "nostr-tools": ">=2.0.0",
-    "nostr-wot-sdk": "^3.0.0"
+    "nostr-wot-sdk": "^3.0.1-next.0"
   },
   "peerDependenciesMeta": {
     "nostr-wot-sdk": {

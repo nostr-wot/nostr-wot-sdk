@@ -1,5 +1,16 @@
 # @nostr-wot/identity
 
+## 1.1.0-next.2
+
+### Patch Changes
+
+- [#22](https://github.com/nostr-wot/nostr-wot-sdk/pull/22) [`6ba2fc0`](https://github.com/nostr-wot/nostr-wot-sdk/commit/6ba2fc0a07a10d092f53ae5cb01592fdcf23932f) Thanks [@leonacostaok](https://github.com/leonacostaok)! - Read explicit Nosskey account backups with their original PRF inputs and direct or NIP-44 wrapped-key format, verifying the recovered identity without guessing a credential's mode.
+
+  Add an independently implemented Nosskey iframe protocol signer with pinned origin/frame/account, signature verification, request timeouts and explicit teardown.
+
+- Updated dependencies [[`6ba2fc0`](https://github.com/nostr-wot/nostr-wot-sdk/commit/6ba2fc0a07a10d092f53ae5cb01592fdcf23932f)]:
+  - nostr-wot-sdk@3.0.1-next.0
+
 ## 1.1.0-next.1
 
 ### Patch Changes

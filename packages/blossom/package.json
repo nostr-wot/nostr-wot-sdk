@@ -1,6 +1,6 @@
 {
   "name": "@nostr-wot/blossom",
-  "version": "1.0.1",
+  "version": "1.0.2-next.0",
   "description": "Deprecated compatibility wrapper for nostr-wot-sdk/blossom.",
   "author": "Leon Acosta <leon@nostr-wot.com>",
   "license": "GPL-3.0-only",
@@ -50,7 +50,7 @@
     "check:dist": "node ../../scripts/dist-stamp.mjs check"
   },
   "dependencies": {
-    "nostr-wot-sdk": "^3.0.0"
+    "nostr-wot-sdk": "^3.0.1-next.0"
   },
   "sideEffects": false,
   "deprecated": "Use nostr-wot-sdk/blossom instead. The implementation moved to nostr-wot-sdk; this package only forwards the existing API. See https://github.com/nostr-wot/nostr-wot-sdk/blob/main/docs/package-migration.md"

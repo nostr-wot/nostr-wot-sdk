@@ -1,5 +1,12 @@
 # @nostr-wot/relay
 
+## 1.0.2-next.0
+
+### Patch Changes
+
+- Updated dependencies [[`6ba2fc0`](https://github.com/nostr-wot/nostr-wot-sdk/commit/6ba2fc0a07a10d092f53ae5cb01592fdcf23932f)]:
+  - nostr-wot-sdk@3.0.1-next.0
+
 ## 1.0.1
 
 ### Patch changes
