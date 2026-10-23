@@ -48,6 +48,19 @@ describe('vector', () => {
   });
 });
 
+describe('local development RP', () => {
+  test('localhost records round trip and remain bound to localhost', () => {
+    const local = { ...VECTOR_CONTEXT, rpId: 'localhost' };
+    const payload: StoredPayload = { type: 'key', key: PRIVATE_ONE };
+    const record = encryptStoredRecord(payload, PRF, local);
+    expect(openStoredRecord(record, PRF, local)).toEqual(payload);
+    expect(() => openStoredRecord(record, PRF, VECTOR_CONTEXT)).toThrow();
+  });
+  test.each(['', 'http://localhost', 'localhost:3000', 'LOCALHOST', 'machine'])('rejects non-RP value %s', rpId => {
+    expect(() => encryptStoredRecord({ type: 'key', key: PRIVATE_ONE }, PRF, { ...VECTOR_CONTEXT, rpId })).toThrow();
+  });
+});
+
 describe('AAD binding', () => {
   const record = hexToBytes(vector.record);
   test.each([
