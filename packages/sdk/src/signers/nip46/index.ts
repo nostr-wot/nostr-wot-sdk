@@ -1,3 +1,4 @@
+import { waitForPairing } from "./pairing";
 import { generateSecretKey, getPublicKey, nip19, SimplePool, type Event, type EventTemplate } from "nostr-tools";
 import {
   BunkerSigner,
@@ -161,7 +162,9 @@ export class Nip46Signer implements NostrSigner {
 
     const ready = (async (): Promise<Nip46Signer> => {
       try {
-        const inner = connection.attach(await BunkerSigner.fromURI(clientSk, uri, bunkerParams, abort.signal));
+        const inner = connection.attach(await waitForPairing(
+          () => BunkerSigner.fromURI(clientSk, uri, bunkerParams, abort.signal), abort.signal,
+        ));
         // fromURI performs the handshake; attach rejects and closes late results
         // if the transport was disposed while pairing was pending.
         paired = new Nip46Signer(inner, clientSk, opts.relays, connection);

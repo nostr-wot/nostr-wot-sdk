@@ -153,6 +153,7 @@ export class BunkerServer {
   readonly #relayPool: RelayPool;
   readonly #ownsPool: boolean;
   readonly #subs = new Map<string, RelaySubscription>();
+  readonly #pairingRetries = new Map<string, AbortController>();
   readonly #clients = new Map<string, ClientState>();
   readonly #secrets = new Map<string, SecretState>();
   /** Dedup windows for senders that have not connected; bounded in both dimensions. */
@@ -325,6 +326,7 @@ export class BunkerServer {
   disconnectClient(clientPubkey: string): void {
     const client = this.#clients.get(clientPubkey);
     if (!client) return;
+    this.#cancelPairingRetry(clientPubkey);
     this.#clients.delete(clientPubkey);
     for (const url of client.relays) this.#release(url, clientPubkey);
     this.#emit();
@@ -705,8 +707,27 @@ export class BunkerServer {
     record.relays = parsed.relays;
     delete record.expiresAt;
     await this.#admit(parsed.clientPubkey, parsed.secret, parsed.relays);
-    this.#log.info?.("nostrconnect: client paired", { clientPubkey: parsed.clientPubkey, relays: parsed.relays });
-    await this.#send(parsed.clientPubkey, { id: request.id, result: parsed.secret }, parsed.relays);
+    const peer = parsed.clientPubkey;
+    this.#cancelPairingRetry(peer);
+    const pending = new AbortController();
+    this.#pairingRetries.set(peer, pending);
+    const payload = { id: request.id, result: parsed.secret };
+    const delivered = await this.#send(peer, payload, parsed.relays);
+    if (!delivered) {
+      if (this.#pairingRetries.get(peer) === pending) this.#cancelPairingRetry(peer);
+      throw new Error("No relay acknowledged the Nostr Connect response");
+    }
+    // Kind 24133 is ephemeral. A relay can accept the response while the
+    // browser is asleep. Repeat only this approval until a client RPC arrives.
+    if (!pending.signal.aborted) {
+      const expires = Date.now() + 60_000;
+      const timers = [1500, 4500, 10_000, 20_000, 40_000].map((delay, index) => setTimeout(() => {
+        if (!pending.signal.aborted && Date.now() < expires) void this.#send(peer, payload, parsed.relays);
+        if (index === timers.length - 1 || Date.now() >= expires) this.#cancelPairingRetry(peer);
+      }, delay));
+      pending.signal.addEventListener("abort", () => timers.forEach(clearTimeout), { once: true });
+    }
+    this.#log.info?.("nostrconnect: pairing response accepted by relay", { clientPubkey: parsed.clientPubkey });
     return { ...parsed, requestId: request.id };
   }
 
@@ -735,6 +756,7 @@ export class BunkerServer {
   async stop(): Promise<void> {
     if (this.#stopped) return;
     this.#stopped = true;
+    for (const peer of this.#pairingRetries.keys()) this.#cancelPairingRetry(peer);
     const urls = normalizeRelays([...this.#subs.keys(), ...this.#opened]);
     for (const [url, sub] of this.#subs) {
       if (sub.timer) clearTimeout(sub.timer);
@@ -1008,6 +1030,7 @@ export class BunkerServer {
   }
 
   async #dispatch(clientPubkey: string, parsed: ParsedRequest, sourceRelay: string): Promise<void> {
+    this.#cancelPairingRetry(clientPubkey);
     const request: BunkerRequest = { ...parsed, clientPubkey };
     this.#log.debug?.("request", { clientPubkey, id: request.id, method: request.method });
     const wasConnected = this.#clients.has(clientPubkey);
@@ -1193,14 +1216,20 @@ export class BunkerServer {
     };
   }
 
+  #cancelPairingRetry(peer: string): void {
+    this.#pairingRetries.get(peer)?.abort();
+    this.#pairingRetries.delete(peer);
+  }
+
   // ── Outbound ──
 
-  async #send(clientPubkey: string, payload: ResponsePayload, relays: string[]): Promise<void> {
-    if (this.#stopped) return;
+  async #send(clientPubkey: string, payload: ResponsePayload, relays: string[]): Promise<boolean> {
+    if (this.#stopped) return false;
     const event = buildResponseEvent(this.#sk, clientPubkey, this.#conversationKey(clientPubkey), payload);
     for (const url of relays) this.#opened.add(url);
     try {
       await publishAny(this.#relayPool.getPool(), relays, event);
+      return true;
     } catch (err) {
       this.#log.error?.("response could not be published to any relay", {
         clientPubkey,
@@ -1208,6 +1237,7 @@ export class BunkerServer {
         relays,
         error: errorText(err),
       });
+      return false;
     }
   }
 
