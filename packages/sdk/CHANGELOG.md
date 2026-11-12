@@ -1,5 +1,11 @@
 # nostr-wot-sdk
 
+## 3.0.2
+
+### Patch Changes
+
+- [#30](https://github.com/nostr-wot/nostr-wot-sdk/pull/30) [`9774f64`](https://github.com/nostr-wot/nostr-wot-sdk/commit/9774f64a01e5b1c8b43b53d17f06d9eab37614c9) Thanks [@leonacostaok](https://github.com/leonacostaok)! - Keep listening on the same Nostr Connect pairing after a subscription closes, and report when every relay rejects the signer's pairing response.
+
 ## 3.0.1
 
 ### Patch Changes
