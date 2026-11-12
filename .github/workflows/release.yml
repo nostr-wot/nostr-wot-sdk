@@ -13,7 +13,7 @@ concurrency: ${{ github.workflow }}-${{ github.ref }}
 
 permissions:
   contents: write   # version commits + tags pushed straight to main
-  id-token: write   # npm provenance attestation
+  id-token: write   # npm trusted publishing and provenance
 
 jobs:
   release:
@@ -114,10 +114,7 @@ jobs:
       - name: Publish to npm
         run: npm run release
         env:
-          # setup-node writes .npmrc from NODE_AUTH_TOKEN, not NPM_TOKEN.
-          # The old workflow only set NPM_TOKEN, so publish was unauthenticated.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # npm exchanges the GitHub Actions OIDC identity for publish access.
           NPM_CONFIG_PROVENANCE: "true"
 
       - name: Apply compatibility-package migration notices
