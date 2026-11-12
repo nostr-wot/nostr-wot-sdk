@@ -104,3 +104,14 @@ it('closes connecting sockets, rejects pending relay waits and suppresses late o
   expect(() => new Socket('wss://relay.example')).toThrow('disposed');
   await expect(connection.pool.ensureRelay('wss://relay.example')).rejects.toThrow('disposed');
 });
+
+it('reopens a closed subscription with the same URI and client key', async () => {
+  vi.useFakeTimers();
+  mocks.fromURI.mockRejectedValueOnce(new Error('subscription closed before connection was established.'))
+    .mockResolvedValueOnce({ close: vi.fn().mockResolvedValue(undefined) });
+  const handle = Nip46Signer.startNostrConnect({ relays: ['wss://relay.example'] });
+  await vi.advanceTimersByTimeAsync(250);
+  const signer = await handle.ready;
+  expect(mocks.fromURI.mock.calls[1]).toEqual(mocks.fromURI.mock.calls[0]);
+  await signer.close();
+});
