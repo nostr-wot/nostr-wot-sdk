@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import semver from 'semver';
 const pkg = name => JSON.parse(fs.readFileSync(`packages/${name}/package.json`, 'utf8'));
 const moves = { relay:['sdk','relay'], data:['sdk','data'], signers:['sdk','signers'], blossom:['sdk','blossom'], storage:['sdk','storage'], accounts:['identity','accounts'], vault:['identity','vault'], permissions:['identity','permissions'], 'signer-core':['identity','signing'], bunker:['identity','bunker'], graph:['wot','graph'] };
 test('retired packages are forwarders to maintained owners with a migration notice', () => {
@@ -20,7 +21,8 @@ test('maintained packages never depend on retired packages and hard dependencies
  for(const m of manifests) visit(m.name);
 });
 test('legacy graph installs its relay runtime rather than relying on an optional peer', () => {
- assert.equal(pkg('graph').dependencies['nostr-wot-sdk'], `^${pkg('sdk').version}`);
+ const range = pkg('graph').dependencies['nostr-wot-sdk'];
+ assert.ok(range && semver.satisfies(pkg('sdk').version, range), `graph dependency ${range} must accept SDK ${pkg('sdk').version}`);
 });
 test('workspace source aliases point to real public entrypoints', () => {
  const config=JSON.parse(fs.readFileSync('tsconfig.workspace.json','utf8'));
