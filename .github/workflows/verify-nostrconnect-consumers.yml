@@ -27,3 +27,12 @@ jobs:
           npm install --package-lock-only --ignore-scripts --no-audit --no-fund --save-exact nostr-connect-sdk@npm:nostr-wot-sdk@3.0.2
           git diff -- package-lock.json > /tmp/lock.diff
           cat /tmp/lock.diff
+      - name: Build the static Nostr workshop
+        working-directory: workshops/nostr
+        run: |
+          npm install --save-exact --ignore-scripts --no-audit --no-fund nostr-wot-sdk@3.0.2
+          npm test
+          npm run build
+          echo "WORKSHOP_BEGIN"
+          base64 -w 2000 dist/app.js
+          echo "WORKSHOP_END"
