@@ -1,0 +1,29 @@
+name: Verify published Nostr Connect dependencies
+on: pull_request
+permissions:
+  contents: read
+jobs:
+  registry:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Inspect published package integrity
+        run: |
+          for i in $(seq 1 20); do
+            if npm view nostr-wot-sdk@3.0.2 dist.integrity && npm view @nostr-wot/identity@1.1.1 dist.integrity; then break; fi
+            sleep 20
+          done
+          for pkg in nostr-wot-sdk@3.0.2 @nostr-wot/identity@1.1.1; do
+            echo "REGISTRY $pkg $(npm view "$pkg" dist.integrity)"
+          done
+      - uses: actions/checkout@v6
+        with:
+          repository: nostr-wot/nostr-wot
+          persist-credentials: false
+      - name: Resolve website signer alongside existing playground dependencies
+        run: |
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund --save-exact nostr-connect-sdk@npm:nostr-wot-sdk@3.0.2
+          git diff -- package-lock.json > /tmp/lock.diff
+          cat /tmp/lock.diff
