@@ -1,5 +1,13 @@
 # @nostr-wot/identity
 
+## 1.2.0
+
+### Minor Changes
+
+- Share NIP-46 connections across server identities with BunkerRelayManager, a global relay limit, one reconnect schedule per relay and ownership-aware socket cleanup. Close failed handshakes before retry and require an actual relay acknowledgement when publishing responses.
+
+- Add monotonic advanceGeneration synchronization so a host can advance every live server to its shared revocation counter while preserving unrelated paired clients.
+
 ## 1.1.1
 
 ### Patch Changes
