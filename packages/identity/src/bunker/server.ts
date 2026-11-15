@@ -14,6 +14,7 @@ import {
 } from "./codec";
 import { createBunkerUri, normalizeRelays, parseNostrConnectUri } from "./uri";
 import { signBunkerState, verifyBunkerState } from "./state";
+import type { BunkerRelayManager } from "./relay-manager";
 import {
   BunkerError,
   type BunkerErrorMapper,
@@ -152,6 +153,7 @@ export class BunkerServer {
   readonly #opts: typeof DEFAULTS;
   readonly #relayPool: RelayPool;
   readonly #ownsPool: boolean;
+  readonly #relayManager: BunkerRelayManager | undefined;
   readonly #subs = new Map<string, RelaySubscription>();
   readonly #pairingRetries = new Map<string, AbortController>();
   readonly #clients = new Map<string, ClientState>();
@@ -214,12 +216,16 @@ export class BunkerServer {
       strangerCapacity: options.strangerCapacity ?? DEFAULTS.strangerCapacity,
     };
     if (options.relays.length === 0) throw new Error("BunkerServer needs at least one relay");
-    this.#ownsPool = !options.pool;
+    if (options.relayManager && (options.pool || options.websocketImplementation)) {
+      throw new Error("relayManager cannot be combined with pool or websocketImplementation");
+    }
+    this.#relayManager = options.relayManager;
+    this.#ownsPool = !options.pool && !options.relayManager;
     this.#relayPool = new RelayPool({
       urls: normalizeRelays(options.relays),
       ...(options.pool ? { pool: options.pool } : {}),
     });
-    this.#relayPool.ensurePool(() => {
+    if (!this.#relayManager) this.#relayPool.ensurePool(() => {
       // Same mechanism @nostr-wot/graph uses: nostr-tools takes the WebSocket
       // constructor process-wide, which is what a React Native host wants anyway.
       if (options.websocketImplementation) {
@@ -267,6 +273,17 @@ export class BunkerServer {
   /** The generation the host should hold beside the key. Advances on every revocation. */
   get generation(): number {
     return this.#generation;
+  }
+
+  /** Advance a shared host generation without revoking this identity's clients. Equal is a no-op; rollback throws. */
+  advanceGeneration(next: number): void {
+    if (!Number.isSafeInteger(next) || next < this.#generation) {
+      throw new Error("generation must be a safe integer at least as high as the current generation");
+    }
+    if (next === this.#generation) return;
+    this.#generation = next;
+    this.#emit();
+    this.#notifyGeneration();
   }
 
   #setGeneration(generation: number): void {
@@ -452,6 +469,7 @@ export class BunkerServer {
       setSecrets.push([secret, incoming]);
     }
     const admit = plan.clients.filter((c) => !this.#clients.has(c.clientPubkey));
+    this.#relayManager?.assertCapacity(admit.flatMap((c) => c.relays));
     const secretsAfter = this.#secrets.size + setSecrets.filter(([k]) => !this.#secrets.has(k)).length;
     if (secretsAfter > this.#opts.maxSecrets) throw new Error(`restore refused: too many secrets (limit ${this.#opts.maxSecrets})`);
     if (this.#clients.size + this.#pendingAdmissions.size + admit.length > this.#opts.maxClients) {
@@ -573,6 +591,7 @@ export class BunkerServer {
     this.#sweep();
     const secret = options.secret ?? randomHex(16);
     const relays = normalizeRelays(options.relays && options.relays.length > 0 ? options.relays : this.relays);
+    this.#relayManager?.assertCapacity(relays);
     for (const url of relays) this.addRelay(url);
     const ttl = options.ttlMs ?? this.#opts.secretTtlMs;
     const existing = this.#secrets.get(secret);
@@ -659,6 +678,7 @@ export class BunkerServer {
    */
   async acceptNostrConnect(uri: string): Promise<NostrConnectPairing> {
     const parsed = parseNostrConnectUri(uri, { maxRelays: this.#opts.maxRelaysPerClient });
+    this.#relayManager?.assertCapacity(parsed.relays);
     this.#liveSecret(parsed.secret);
     if (this.#overClientCeiling(parsed.clientPubkey)) {
       throw new Error(`too many clients (limit ${this.#opts.maxClients}): disconnect some first`);
@@ -702,6 +722,12 @@ export class BunkerServer {
       for (const url of parsed.relays) this.#closeSocket(url);
       throw new Error(`too many clients (limit ${this.#opts.maxClients}): disconnect some first`);
     }
+    try {
+      this.#relayManager?.assertCapacity(parsed.relays);
+    } catch (err) {
+      this.#unbind(record, parsed.secret);
+      throw err;
+    }
     record.pending -= 1;
     record.confirmed = true;
     record.relays = parsed.relays;
@@ -734,6 +760,7 @@ export class BunkerServer {
   /** Listen on a host-chosen relay that was not in the initial set. Safe to call repeatedly. */
   addRelay(rawUrl: string): void {
     const url = normalizeRelays([rawUrl])[0]!;
+    this.#relayManager?.assertCapacity([url]);
     this.#relayPool.addRelay(url);
     if (this.#started && !this.#stopped) void this.#subscribe(url, SERVER_OWNER);
     else this.#claim(url, SERVER_OWNER);
@@ -747,6 +774,7 @@ export class BunkerServer {
   async start(): Promise<void> {
     if (this.#started) return;
     if (this.#stopped) throw new Error("BunkerServer cannot be restarted after stop()");
+    this.#relayManager?.assertCapacity([...this.relays, ...this.#subs.keys()]);
     this.#started = true;
     for (const url of this.relays) this.#claim(url, SERVER_OWNER);
     await Promise.all([...this.#subs.keys()].map((url) => this.#subscribe(url)));
@@ -817,11 +845,17 @@ export class BunkerServer {
   }
 
   #subscribe(url: string, owner?: string): Promise<void> {
-    const pool = this.#relayPool.getPool();
-    if (!pool || this.#stopped) return Promise.resolve();
+    if (this.#stopped) return Promise.resolve();
     const state = owner ? this.#claim(url, owner) : this.#subs.get(url);
     if (!state) return Promise.resolve();
     if (state.closer || state.connecting) return Promise.resolve();
+    if (this.#relayManager) {
+      const subscription = this.#relayManager.subscribe(this, url, this.#pubkey, (event) => this.#onEvent(event, url));
+      state.closer = subscription;
+      return subscription.ready;
+    }
+    const pool = this.#relayPool.getPool();
+    if (!pool) return Promise.resolve();
     this.#opened.add(url);
     if (hasEnsureRelay(pool)) return this.#subscribeDirect(pool, url, state);
     // An injected pool without `ensureRelay` (something that is not nostr-tools) has to be
@@ -1160,6 +1194,7 @@ export class BunkerServer {
   async #admit(clientPubkey: string, secret: string | undefined, relays: string[], connectedAt = Date.now(), convKey?: Uint8Array): Promise<void> {
     const previous = this.#clients.get(clientPubkey);
     const relaySet = normalizeRelays(relays);
+    this.#relayManager?.assertCapacity(relaySet);
     const seen = previous?.seen ?? this.#strangers.get(clientPubkey) ?? new BoundedSet(this.#opts.seenCapacity);
     this.#strangers.delete(clientPubkey);
     this.#clients.set(clientPubkey, {
@@ -1228,7 +1263,8 @@ export class BunkerServer {
     const event = buildResponseEvent(this.#sk, clientPubkey, this.#conversationKey(clientPubkey), payload);
     for (const url of relays) this.#opened.add(url);
     try {
-      await publishAny(this.#relayPool.getPool(), relays, event);
+      if (this.#relayManager) await this.#relayManager.publish(relays, event);
+      else await publishAny(this.#relayPool.getPool(), relays, event);
       return true;
     } catch (err) {
       this.#log.error?.("response could not be published to any relay", {
