@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools/pure";
 import { NostrConnect } from "nostr-tools/kinds";
 import { v2 as nip44 } from "nostr-tools/nip44";
-import { SimplePool } from "nostr-tools/pool";
+import { SimplePool, useWebSocketImplementation } from "nostr-tools/pool";
+import { WebSocket as NodeWebSocket } from "ws";
 import { BunkerSigner, parseBunkerInput } from "nostr-tools/nip46";
 import * as bunker from "../../src/bunker";
 import { TestRelay } from "./relay";
@@ -148,6 +149,52 @@ describe("shared bunker relays", () => {
     await new Promise((resolve) => setTimeout(resolve, 120));
     expect(relay.connections).toBe(0);
     expect(relay.subscriptionCount).toBe(0);
+  });
+
+  it("bounds physical sockets across repeated handshake timeouts and closes every attempt", async () => {
+    const relay = await TestRelay.start(0, { acceptDelayMs: 180 });
+    cleanups.push(() => relay.close());
+    cleanups.push(() => useWebSocketImplementation(globalThis.WebSocket));
+    const sockets: NodeWebSocket[] = [];
+    cleanups.push(() => { for (const socket of sockets) socket.terminate(); });
+    let peakLive = 0;
+    class TrackedWebSocket extends NodeWebSocket {
+      constructor(url: string) {
+        super(url);
+        this.on("error", () => {});
+        sockets.push(this);
+        peakLive = Math.max(peakLive, sockets.filter((socket) => socket.readyState !== NodeWebSocket.CLOSED).length);
+      }
+    }
+    let retries = 0;
+    const manager = new bunker.BunkerRelayManager({
+      websocketImplementation: TrackedWebSocket, connectTimeoutMs: 25, reconnectDelayMs: 35,
+      maxReconnectDelayMs: 35, logger: { warn: () => { retries++; } },
+    });
+    cleanups.push(() => manager.close());
+    const subscription = manager.subscribe({}, relay.url, getPublicKey(generateSecretKey()), () => {});
+    await subscription.ready;
+    await expect.poll(() => retries).toBeGreaterThanOrEqual(4);
+    expect(peakLive).toBeLessThanOrEqual(1);
+    manager.close();
+    await expect.poll(() => sockets.filter((socket) => socket.readyState !== NodeWebSocket.CLOSED).length).toBe(0);
+    await expect.poll(() => relay.connections).toBe(0);
+    const attemptsAfterClose = sockets.length;
+    await new Promise((resolve) => setTimeout(resolve, 220));
+    expect(sockets).toHaveLength(attemptsAfterClose);
+  });
+
+  it("closes timed-out publish-only handshakes and refuses to report a relay acknowledgement", async () => {
+    const relay = await TestRelay.start(0, { acceptDelayMs: 180 });
+    cleanups.push(() => relay.close());
+    const manager = new bunker.BunkerRelayManager({ connectTimeoutMs: 25 });
+    cleanups.push(() => manager.close());
+    const event = finalizeEvent({ kind: NostrConnect, content: "reply", tags: [], created_at: Math.floor(Date.now() / 1000) }, generateSecretKey());
+    await expect(manager.publish([relay.url], event)).rejects.toThrow(/publish failed/);
+    manager.close();
+    await new Promise((resolve) => setTimeout(resolve, 220));
+    expect(relay.connections).toBe(0);
+    expect(relay.received).toHaveLength(0);
   });
 
   it("advances authenticated state monotonically while preserving admitted clients", async () => {

@@ -7,7 +7,7 @@ import type { BunkerLogger } from "./types";
 export interface BunkerRelayManagerOptions {
   /** Installed process-wide, as with BunkerServer's standalone option. */
   websocketImplementation?: unknown;
-  /** Default 3000 ms. See BunkerServerOptions.connectTimeoutMs for the upstream timeout caveat. */
+  /** Default 3000 ms. Failed handshakes are explicitly closed before retry. */
   connectTimeoutMs?: number;
   /** Default 3000 ms, doubling up to maxReconnectDelayMs. */
   reconnectDelayMs?: number;
@@ -25,6 +25,26 @@ export interface BunkerRelaySubscription {
 }
 
 type Relay = Awaited<ReturnType<SimplePool["ensureRelay"]>>;
+/**
+ * Retain the in-flight relay independently of the pool's map. nostr-tools'
+ * AbstractSimplePool.ensureRelay drops that entry on handshake failure, while
+ * AbstractRelay.connect's timeout detaches socket handlers without closing it.
+ * Its public close() still reaches that socket, so explicitly close the retained
+ * relay before returning failure to the manager's central reconnect scheduler.
+ */
+class OwnedBunkerPool extends SimplePool {
+  override async ensureRelay(url: string, params?: Parameters<SimplePool["ensureRelay"]>[1]): Promise<Relay> {
+    const attempt = super.ensureRelay(url, params);
+    const relay = this.relays.get(normalizeRelays([url])[0]!);
+    try {
+      return await attempt;
+    } catch (err) {
+      relay?.close();
+      throw err;
+    }
+  }
+}
+
 interface Owner {
   owner: object;
   pubkey: string;
@@ -66,7 +86,7 @@ export class BunkerRelayManager {
     }
     this.#log = options.logger ?? {};
     if (options.websocketImplementation) useWebSocketImplementation(options.websocketImplementation);
-    this.#pool = new SimplePool();
+    this.#pool = new OwnedBunkerPool();
   }
 
   /** Check a complete proposed relay set before the caller mutates pairing state. Opens nothing. */
@@ -110,7 +130,12 @@ export class BunkerRelayManager {
     try {
       // Wait for every attempt to settle before releasing temporary ownership. Promise.any
       // alone returns while slow publishes are still opening sockets that nobody owns.
-      const results = await Promise.allSettled(this.#pool.publish(urls, event));
+      const results = await Promise.allSettled(urls.map(async (url) => {
+        // AbstractSimplePool.publish fulfills with a connection-failure string.
+        // A fulfilled direct relay.publish is an actual OK acknowledgement.
+        const relay = await this.#pool.ensureRelay(url, { connectionTimeout: this.#opts.connectTimeoutMs });
+        return relay.publish(event);
+      }));
       if (this.#closed) throw new Error("BunkerRelayManager is closed");
       if (!results.some((result) => result.status === "fulfilled")) throw new Error("publish failed on every relay");
     } finally {
