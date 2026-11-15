@@ -18,3 +18,6 @@ export type {
   NostrConnectPairing,
   NostrConnectUri,
 } from "./types";
+
+export { BunkerRelayManager } from "./relay-manager";
+export type { BunkerRelayManagerOptions, BunkerRelaySubscription } from "./relay-manager";

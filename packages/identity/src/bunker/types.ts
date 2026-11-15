@@ -1,3 +1,4 @@
+import type { BunkerRelayManager } from "./relay-manager";
 import type { PoolLike } from "nostr-wot-sdk/relay";
 
 /** A decrypted NIP-46 request, exactly as the client sent it. */
@@ -69,6 +70,8 @@ export interface BunkerServerOptions {
   handler: BunkerHandler;
   /** Inject an existing pool (anything `SimplePool`-shaped). Its connections are left open on `stop()`. */
   pool?: PoolLike;
+  /** Shared NIP-46 connection owner. Its limits, connection timeout and reconnect options apply across servers. Mutually exclusive with pool and websocketImplementation. */
+  relayManager?: BunkerRelayManager;
   /**
    * WebSocket constructor for environments whose global differs (React Native).
    * Installed process-wide through nostr-tools' `useWebSocketImplementation`,
@@ -131,7 +134,7 @@ export interface BunkerServerOptions {
    */
   generation?: number;
   /**
-   * Called after every revocation, once the secret and its client are gone and
+   * Called after every revocation or advanceGeneration, once the change is applied and
    * `onStateChange` has fired, so `exportState()` inside it is consistent and
    * restorable. Write the value beside the key.
    */
